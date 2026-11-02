@@ -22,12 +22,18 @@
   - **Claude (Anthropic)**: Native message stream adapter and adaptive token budgeting.
   - **Codex (OpenAI)**: Direct client integration with dynamic model discovery.
   - **Custom / Local Endpoints**: Ollama, vLLM, LMStudio, Qwen, DeepSeek, and custom OpenAI-compatible proxies.
-- **AI Text Cleaner** (`ragasukma_core::llm::cleaner`):
-  - Sanitizes and normalizes raw model responses (removes trailing ellipses, thought tags, system noise, and formatting artifacts).
 - **SQLite Usage & Token Telemetry** (`ragasukma_core::llm::usage`):
   - Tracks prompt tokens, completion tokens, execution latency, cost approximations, and auto-reaps inactive database locks.
 
-### 2. Autonomous Agent Engine (`ragasukma_core::agent`)
+### 2. SQLite Database & Repositories (`ragasukma_core::repository`)
+- **Automated Database Migrations** (`repository::migrate_database`):
+  - Embeds and executes SQLx migrations automatically for schema initialization and version control.
+- **Data Repositories**:
+  - **Chat History** (`repository::chat_history`): Fast persistence and retrieval of historical conversation turns.
+  - **Skills** (`repository::skill`): Storage, execution status, and management of user-defined capabilities.
+  - **Todos** (`repository::todo`): Task management and lifecycle tracking.
+
+### 3. Autonomous Agent Engine (`ragasukma_core::agent`)
 - **Turn-Based Agent Execution** (`agent::executor::execute_session_turn`):
   - Autonomous reasoning loop, safety gates, dynamic iteration limits, and graceful fallback recovery.
   - Context-aware dynamic system prompt generation (`agent::executor::prompt`).
@@ -38,7 +44,7 @@
 - **Rollback & State Snapshot Store** (`agent::executor::snapshot`):
   - Automatic pre-modification file snapshots allowing complete rollback upon revert instructions.
 
-### 3. Built-in Tools & Extensibility (`ragasukma_core::agent::tools`)
+### 4. Built-in Tools & Extensibility (`ragasukma_core::agent::tools`)
 Standard workspace tools executable autonomously by the agent runtime:
 - **`workspace_run_command`**: Executes shell commands on the host OS with strict safety checks, sandboxing guards, and timeouts.
 - **`workspace_read_file`**: Reads files with line slicing (`start_line`, `end_line`) or structural symbol outline generation.
@@ -121,15 +127,25 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### 3. Sanitizing AI Output
+### 3. Database Migrations & Repositories
 
 ```rust
-use ragasukma_core::llm::cleaner::clean_ai_text;
+use sqlx::sqlite::SqlitePoolOptions;
+use ragasukma_core::repository::{migrate_database, get_skills};
 
-fn main() {
-    let raw_text = "Hello! Here is the solution... <thought>internal reasoning</thought>";
-    let cleaned = clean_ai_text(raw_text);
-    println!("{}", cleaned);
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let pool = SqlitePoolOptions::new()
+        .connect("sqlite::memory:")
+        .await?;
+
+    // Run embedded SQLx schema migrations automatically
+    migrate_database(&pool).await?;
+
+    // Query skills
+    let skills = get_skills(&pool).await?;
+    println!("Loaded {} skill(s)", skills.len());
+    Ok(())
 }
 ```
 
