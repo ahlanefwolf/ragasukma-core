@@ -155,8 +155,8 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
             }));
         }
 
-        if msg.role == "assistant" {
-            if let Some(tool_calls) = &msg.tool_calls {
+        if msg.role == "assistant"
+            && let Some(tool_calls) = &msg.tool_calls {
                 for tc in tool_calls {
                     let name = tc.function.name.trim();
                     if name.is_empty() {
@@ -173,7 +173,6 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                     }));
                 }
             }
-        }
 
         if content_blocks.is_empty() {
             continue;
@@ -224,11 +223,10 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                         "input_schema": params
                     }));
                 }
-            } else if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
-                if !name.trim().is_empty() {
+            } else if let Some(name) = tool.get("name").and_then(|v| v.as_str())
+                && !name.trim().is_empty() {
                     claude_tools.push(tool.clone());
                 }
-            }
         }
         if !claude_tools.is_empty() {
             payload["tools"] = json!(claude_tools);
@@ -312,19 +310,17 @@ impl ClaudeSseParserState {
                 if let Some(delta) = parsed.get("delta") {
                     let d_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if d_type == "text_delta" {
-                        if let Some(text) = delta.get("text").and_then(|v| v.as_str()) {
-                            if !text.is_empty() {
+                        if let Some(text) = delta.get("text").and_then(|v| v.as_str())
+                            && !text.is_empty() {
                                 events.push(V1StreamEvent::ContentDelta(text.to_string()));
                             }
-                        }
                     } else if d_type == "thinking_delta" {
-                        if let Some(th) = delta.get("thinking").and_then(|v| v.as_str()) {
-                            if !th.is_empty() {
+                        if let Some(th) = delta.get("thinking").and_then(|v| v.as_str())
+                            && !th.is_empty() {
                                 events.push(V1StreamEvent::ThoughtDelta(th.to_string()));
                             }
-                        }
-                    } else if d_type == "input_json_delta" {
-                        if let Some(pj) = delta.get("partial_json").and_then(|v| v.as_str()) {
+                    } else if d_type == "input_json_delta"
+                        && let Some(pj) = delta.get("partial_json").and_then(|v| v.as_str()) {
                             let tool_idx = self.block_index_to_tool_index.get(&block_idx).copied().unwrap_or(0);
                             events.push(V1StreamEvent::ToolCallDelta {
                                 index: tool_idx,
@@ -333,7 +329,6 @@ impl ClaudeSseParserState {
                                 arguments: pj.to_string(),
                             });
                         }
-                    }
                 }
             }
             "message_delta" => {

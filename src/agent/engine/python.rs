@@ -40,8 +40,8 @@ pub fn find_python_bin() -> Option<PathBuf> {
         // Check Windows standard installation directories
         if let Ok(local_data) = std::env::var("LOCALAPPDATA") {
             let programs_python = PathBuf::from(&local_data).join("Programs").join("Python");
-            if programs_python.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&programs_python) {
+            if programs_python.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&programs_python) {
                     for entry in entries.flatten() {
                         let candidate = entry.path().join("python.exe");
                         if candidate.is_file() {
@@ -49,12 +49,11 @@ pub fn find_python_bin() -> Option<PathBuf> {
                         }
                     }
                 }
-            }
         }
         if let Ok(prog_files) = std::env::var("ProgramFiles") {
             let pf_python = PathBuf::from(&prog_files).join("Python");
-            if pf_python.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&pf_python) {
+            if pf_python.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&pf_python) {
                     for entry in entries.flatten() {
                         let candidate = entry.path().join("python.exe");
                         if candidate.is_file() {
@@ -62,12 +61,11 @@ pub fn find_python_bin() -> Option<PathBuf> {
                         }
                     }
                 }
-            }
         }
 
         // Try finding via `where.exe python`
-        if let Ok(output) = hidden_command("where.exe").arg("python").output() {
-            if output.status.success() {
+        if let Ok(output) = hidden_command("where.exe").arg("python").output()
+            && output.status.success() {
                 let out_str = String::from_utf8_lossy(&output.stdout);
                 for line in out_str.lines() {
                     let trimmed = line.trim();
@@ -80,11 +78,10 @@ pub fn find_python_bin() -> Option<PathBuf> {
                     }
                 }
             }
-        }
 
         // Try Python launcher `py.exe`
-        if let Ok(output) = hidden_command("where.exe").arg("py").output() {
-            if output.status.success() {
+        if let Ok(output) = hidden_command("where.exe").arg("py").output()
+            && output.status.success() {
                 let out_str = String::from_utf8_lossy(&output.stdout);
                 if let Some(first_line) = out_str.lines().next() {
                     let trimmed = first_line.trim();
@@ -96,7 +93,6 @@ pub fn find_python_bin() -> Option<PathBuf> {
                     }
                 }
             }
-        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -238,14 +234,13 @@ pub fn run_python_installer() -> Result<String, String> {
             .args(["install", "-e", "--id", "Python.Python.3.12", "--accept-package-agreements", "--accept-source-agreements"])
             .output();
 
-        if let Ok(out) = output {
-            if out.status.success() {
+        if let Ok(out) = output
+            && out.status.success() {
                 let info = get_python_info();
                 if info.installed {
                     return Ok(info.version);
                 }
             }
-        }
         Err("Please install Python 3 using 'winget install Python.Python.3.12' or from python.org".to_string())
     }
 

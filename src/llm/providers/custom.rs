@@ -25,11 +25,10 @@ fn accounts_path() -> PathBuf {
 pub fn load_accounts() -> Vec<CustomLlmAccount> {
     let paths = crate::assets::find_all_file_candidates("api_llm_accounts.json");
     for path in paths {
-        if let Ok(bytes) = std::fs::read(path) {
-            if let Ok(accounts) = serde_json::from_slice(&bytes) {
+        if let Ok(bytes) = std::fs::read(path)
+            && let Ok(accounts) = serde_json::from_slice(&bytes) {
                 return accounts;
             }
-        }
     }
     std::fs::read(accounts_path())
         .ok()
@@ -44,11 +43,10 @@ pub fn save_accounts(accounts: &[CustomLlmAccount]) -> anyhow::Result<()> {
         .map(|incoming| {
             let mut acc = incoming.clone();
             let key = acc.api_key.trim();
-            if key.is_empty() || key.chars().all(|c| c == '*') {
-                if let Some(old) = existing.iter().find(|e| e.prefix.eq_ignore_ascii_case(&acc.prefix)) {
+            if (key.is_empty() || key.chars().all(|c| c == '*'))
+                && let Some(old) = existing.iter().find(|e| e.prefix.eq_ignore_ascii_case(&acc.prefix)) {
                     acc.api_key = old.api_key.clone();
                 }
-            }
             acc
         })
         .collect();
@@ -248,8 +246,8 @@ impl CustomProvider {
                     break;
                 }
 
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(delta) = val
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(data)
+                    && let Some(delta) = val
                         .pointer("/choices/0/delta/content")
                         .or_else(|| val.pointer("/choices/0/message/content"))
                         .and_then(|v| v.as_str())
@@ -260,7 +258,6 @@ impl CustomProvider {
                         full_reply.push_str(delta);
                         on_delta(delta)?;
                     }
-                }
             }
         }
 
@@ -370,19 +367,16 @@ impl CustomProvider {
                         .get("reasoning_content")
                         .or_else(|| delta.get("thought"))
                         .and_then(|t| t.as_str())
-                    {
-                        if !thought.is_empty() {
+                        && !thought.is_empty() {
                             final_thought.push_str(thought);
                             callback(V1StreamEvent::ThoughtDelta(thought.to_string()))?;
                         }
-                    }
 
-                    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                        if !content.is_empty() {
+                    if let Some(content) = delta.get("content").and_then(|c| c.as_str())
+                        && !content.is_empty() {
                             final_content.push_str(content);
                             callback(V1StreamEvent::ContentDelta(content.to_string()))?;
                         }
-                    }
 
                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tc_val in tcs {
@@ -406,20 +400,18 @@ impl CustomProvider {
                             let name = func.and_then(|f| f.get("name")).and_then(|s| s.as_str()).map(|s| s.to_string());
                             let args = func.and_then(|f| f.get("arguments")).and_then(|s| s.as_str()).unwrap_or("");
 
-                            if let Some(ref tc_id) = id {
-                                if !tc_id.trim().is_empty() {
+                            if let Some(ref tc_id) = id
+                                && !tc_id.trim().is_empty() {
                                     entry.id = tc_id.clone();
                                 }
-                            }
                             // DeepSeek (via 9Router) sends `"name": ""` on every delta
                             // after the first one. Only a non-blank name may overwrite,
                             // otherwise the tool call ends up unnamed and the agent
                             // fails with `Unknown tool ''`.
-                            if let Some(ref tc_name) = name {
-                                if !tc_name.trim().is_empty() {
+                            if let Some(ref tc_name) = name
+                                && !tc_name.trim().is_empty() {
                                     entry.function.name = tc_name.clone();
                                 }
-                            }
                             // Arguments are streamed in fragments; the empty-string
                             // re-sends carry no information, so skip them.
                             if !args.is_empty() {

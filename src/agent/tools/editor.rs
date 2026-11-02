@@ -140,11 +140,10 @@ pub fn apply_resilient_edit(
     // Extracts common prefix context and suffix context between old_text and new_text.
     // Replaces only the intermediate modified hunk between matched context boundaries.
     let raw_new_lines: Vec<&str> = normalized_new.lines().collect();
-    if let Some(hunk) = decompose_3way_hunk(&old_lines, &raw_new_lines) {
-        if let Some(result) = apply_git_3way_hunk(&content_lines, &hunk) {
+    if let Some(hunk) = decompose_3way_hunk(&old_lines, &raw_new_lines)
+        && let Some(result) = apply_git_3way_hunk(&content_lines, &hunk) {
             return Ok(result);
         }
-    }
 
     // Tier 6: Git Unified Diff / Patch Parser
     // If the input was formatted as a unified diff with @@ hunk headers
@@ -186,8 +185,8 @@ pub fn apply_resilient_edit(
             })
             .map(|(idx, l)| (idx, l.trim()));
 
-        if let (Some((first_idx_in_old, first_anchor)), Some((last_idx_in_old, last_anchor))) = (first_meaningful, last_meaningful) {
-            if first_idx_in_old < last_idx_in_old {
+        if let (Some((first_idx_in_old, first_anchor)), Some((last_idx_in_old, last_anchor))) = (first_meaningful, last_meaningful)
+            && first_idx_in_old < last_idx_in_old {
                 let mut anchor_matches = Vec::new();
                 for i in 0..content_lines.len() {
                     if content_lines[i].trim() == first_anchor {
@@ -237,7 +236,6 @@ pub fn apply_resilient_edit(
                     }
                 }
             }
-        }
     }
 
     // Tier 9: Diagnostics reporting exact file lines
@@ -285,8 +283,8 @@ pub fn apply_resilient_edit(
 
 pub fn strip_line_prefix(line: &str) -> String {
     let trimmed = line.trim_start();
-    if let Some(idx) = trimmed.find(|c: char| !c.is_ascii_digit()) {
-        if idx > 0 {
+    if let Some(idx) = trimmed.find(|c: char| !c.is_ascii_digit())
+        && idx > 0 {
             let rem = &trimmed[idx..];
             if let Some(after_tab) = rem.strip_prefix('\t') {
                 return after_tab.to_string();
@@ -296,7 +294,6 @@ pub fn strip_line_prefix(line: &str) -> String {
                 return after_colon.to_string();
             }
         }
-    }
     line.to_string()
 }
 
@@ -673,8 +670,8 @@ fn apply_git_lcs_alignment(
     }
 
     // Require high LCS alignment (>= 0.75) and confidence margin
-    if best_score >= 0.75 && (best_score - second_best_score >= 0.05 || second_best_score == 0.0) {
-        if let Some((start_idx, end_idx)) = best_window {
+    if best_score >= 0.75 && (best_score - second_best_score >= 0.05 || second_best_score == 0.0)
+        && let Some((start_idx, end_idx)) = best_window {
             let adapted_new = adapt_indentation(
                 &content_lines[start_idx..end_idx],
                 old_lines,
@@ -686,7 +683,6 @@ fn apply_git_lcs_alignment(
             result.extend_from_slice(&content_lines[end_idx..]);
             return Some(result.join("\n"));
         }
-    }
 
     None
 }

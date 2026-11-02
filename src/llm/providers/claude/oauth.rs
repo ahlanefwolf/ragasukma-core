@@ -126,9 +126,9 @@ pub fn fetch_claude_profile(
         .header("User-Agent", format!("claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"))
         .send();
 
-    if let Ok(resp) = res {
-        if resp.status().is_success() {
-            if let Ok(json) = resp.json::<serde_json::Value>() {
+    if let Ok(resp) = res
+        && resp.status().is_success()
+            && let Ok(json) = resp.json::<serde_json::Value>() {
                 let email = json
                     .get("account")
                     .and_then(|a| a.get("email_address").or_else(|| a.get("email")))
@@ -145,8 +145,6 @@ pub fn fetch_claude_profile(
 
                 return Ok((email, org_id));
             }
-        }
-    }
 
     Ok((None, None))
 }
@@ -215,14 +213,13 @@ pub fn refresh_account_token(
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(120);
 
-    if let Some(ref new_refresh) = token_data.refresh_token {
-        if !new_refresh.trim().is_empty() {
+    if let Some(ref new_refresh) = token_data.refresh_token
+        && !new_refresh.trim().is_empty() {
             account.refresh_token = new_refresh.trim().to_string();
         }
-    }
 
-    if account.email.is_none() || account.org_id.is_none() {
-        if let Ok((em, org)) = fetch_claude_profile(client, &token_data.access_token) {
+    if (account.email.is_none() || account.org_id.is_none())
+        && let Ok((em, org)) = fetch_claude_profile(client, &token_data.access_token) {
             if account.email.is_none() && em.is_some() {
                 account.email = em;
             }
@@ -230,7 +227,6 @@ pub fn refresh_account_token(
                 account.org_id = org;
             }
         }
-    }
 
     Ok(token_data.access_token)
 }

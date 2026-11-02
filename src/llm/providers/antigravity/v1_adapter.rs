@@ -134,13 +134,11 @@ pub fn get_thought_signature_scoped(call_id: &str, target_family: Option<&str>) 
     if clean_id.is_empty() {
         return None;
     }
-    if let Ok(store) = THOUGHT_SIGNATURE_STORE.lock() {
-        if let Some((sig, entry_fam, exp)) = store.get(clean_id) {
-            if *exp > Instant::now() && is_signature_compatible(entry_fam.as_deref(), target_family) {
+    if let Ok(store) = THOUGHT_SIGNATURE_STORE.lock()
+        && let Some((sig, entry_fam, exp)) = store.get(clean_id)
+            && *exp > Instant::now() && is_signature_compatible(entry_fam.as_deref(), target_family) {
                 return sanitize_thought_signature(sig);
             }
-        }
-    }
     None
 }
 
@@ -179,14 +177,13 @@ pub fn resolve_model_alias(input: &str) -> String {
         return "gemini-3.8-flash-high".to_string();
     }
     // Strip trailing parenthesized suffix e.g. "model(low)" -> "model"
-    if let Some(idx) = clean.rfind('(') {
-        if clean.ends_with(')') {
+    if let Some(idx) = clean.rfind('(')
+        && clean.ends_with(')') {
             let base = clean[..idx].trim();
             if !base.is_empty() {
                 return base.to_string();
             }
         }
-    }
     clean.to_string()
 }
 
@@ -233,11 +230,10 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
     };
 
     // 1. Convert const to enum
-    if let Some(c) = map.remove("const") {
-        if !map.contains_key("enum") {
+    if let Some(c) = map.remove("const")
+        && !map.contains_key("enum") {
             map.insert("enum".to_string(), serde_json::json!([c]));
         }
-    }
 
     // 2. Convert enum values to strings & ensure type is string
     if let Some(enm) = map.get_mut("enum").and_then(|e| e.as_array_mut()) {
@@ -256,8 +252,8 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
     }
 
     // 3. Flatten allOf
-    if let Some(all_of) = map.remove("allOf") {
-        if let Some(items) = all_of.as_array() {
+    if let Some(all_of) = map.remove("allOf")
+        && let Some(items) = all_of.as_array() {
             let mut merged_props = serde_json::Map::new();
             let mut merged_req = Vec::new();
             for item in items {
@@ -299,12 +295,11 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
                 }
             }
         }
-    }
 
     // 4. Flatten anyOf / oneOf
     let any_of_candidate = map.remove("anyOf").or_else(|| map.remove("oneOf"));
-    if let Some(union_val) = any_of_candidate {
-        if let Some(variants) = union_val.as_array() {
+    if let Some(union_val) = any_of_candidate
+        && let Some(variants) = union_val.as_array() {
             let mut has_null = false;
             let mut best_variant: Option<serde_json::Value> = None;
             let mut best_score = -1;
@@ -338,21 +333,19 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
                 map.insert("nullable".to_string(), serde_json::Value::Bool(true));
             }
 
-            if let Some(selected) = best_variant {
-                if let Some(sel_map) = selected.as_object() {
+            if let Some(selected) = best_variant
+                && let Some(sel_map) = selected.as_object() {
                     for (k, v) in sel_map {
                         if !map.contains_key(k) {
                             map.insert(k.clone(), v.clone());
                         }
                     }
                 }
-            }
         }
-    }
 
     // 5. Flatten type array: e.g. ["string", "null"] -> "string" + nullable: true
-    if let Some(type_val) = map.get("type").cloned() {
-        if let Some(type_arr) = type_val.as_array() {
+    if let Some(type_val) = map.get("type").cloned()
+        && let Some(type_arr) = type_val.as_array() {
             let mut has_null = false;
             let mut chosen_type = None;
             for t in type_arr {
@@ -370,7 +363,6 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
             let final_type = chosen_type.unwrap_or_else(|| "string".to_string());
             map.insert("type".to_string(), serde_json::Value::String(final_type));
         }
-    }
 
     // Normalize type string aliases if any (e.g. "int" -> "integer", "bool" -> "boolean")
     if let Some(t_str) = map.get("type").and_then(|t| t.as_str()) {
@@ -472,14 +464,13 @@ fn sanitize_schema_recursive(val: &mut serde_json::Value) {
 
     if let Some(valid_keys) = valid_keys {
         let mut remove_required = false;
-        if let Some(req_val) = map.get_mut("required") {
-            if let Some(req_arr) = req_val.as_array_mut() {
+        if let Some(req_val) = map.get_mut("required")
+            && let Some(req_arr) = req_val.as_array_mut() {
                 req_arr.retain(|r| r.as_str().map(|k| valid_keys.contains(k)).unwrap_or(false));
                 if req_arr.is_empty() {
                     remove_required = true;
                 }
             }
-        }
         if remove_required {
             map.remove("required");
         }
@@ -752,8 +743,8 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
     // Ensure all model turns adhere to Gemini 3+ thoughtSignature rules (ported from 9router)
     for item in &mut normalized_contents {
         let is_model = item.get("role").and_then(|r| r.as_str()) == Some("model");
-        if is_model {
-            if let Some(parts) = item.get_mut("parts").and_then(|p| p.as_array_mut()) {
+        if is_model
+            && let Some(parts) = item.get_mut("parts").and_then(|p| p.as_array_mut()) {
                 // Strip thought-only parts, keep thoughtSignature on functionCall parts
                 parts.retain(|p| {
                     let is_thought = p.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
@@ -821,7 +812,6 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
                     }
                 }
             }
-        }
     }
 
     // Ensure the first turn is user
@@ -841,14 +831,13 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
     }
 
     // Ensure the last turn is NOT a model turn (Gemini API returns 400 "Requests ending with a model turn are not supported")
-    if let Some(last) = normalized_contents.last() {
-        if last.get("role").and_then(|r| r.as_str()) == Some("model") {
+    if let Some(last) = normalized_contents.last()
+        && last.get("role").and_then(|r| r.as_str()) == Some("model") {
             normalized_contents.push(serde_json::json!({
                 "role": "user",
                 "parts": [{ "text": "Please continue and complete the remaining requested actions." }]
             }));
         }
-    }
 
     // Tools conversion
     let mut tools_payload = None;
@@ -1011,11 +1000,10 @@ where
 
                 if let Some(cands) = candidates {
                     for cand in cands {
-                        if let Some(f_reason) = cand.get("finishReason").and_then(|r| r.as_str()) {
-                            if f_reason == "MAX_TOKENS" {
+                        if let Some(f_reason) = cand.get("finishReason").and_then(|r| r.as_str())
+                            && f_reason == "MAX_TOKENS" {
                                 finish_reason = "length".to_string();
                             }
-                        }
 
                         if let Some(parts) =
                             cand.pointer("/content/parts").and_then(|p| p.as_array())
@@ -1049,22 +1037,20 @@ where
                                 }
 
                                 if is_thought {
-                                    if let Some(txt) = part.get("text").and_then(|t| t.as_str()) {
-                                        if !txt.is_empty() {
+                                    if let Some(txt) = part.get("text").and_then(|t| t.as_str())
+                                        && !txt.is_empty() {
                                             on_event(V1StreamEvent::ThoughtDelta(txt.to_string()))?;
                                         }
-                                    }
                                     // Keep client connection active during thinking phase
                                     on_event(V1StreamEvent::KeepAlive)?;
                                     continue;
                                 }
 
-                                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                                    if !text.is_empty() {
+                                if let Some(text) = part.get("text").and_then(|t| t.as_str())
+                                    && !text.is_empty() {
                                         full_content.push_str(text);
                                         on_event(V1StreamEvent::ContentDelta(text.to_string()))?;
                                     }
-                                }
 
                                 if let Some(fc) = part.get("functionCall") {
                                     let fc_thought_sig = fc

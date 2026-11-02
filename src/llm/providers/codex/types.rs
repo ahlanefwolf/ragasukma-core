@@ -56,11 +56,10 @@ impl CodexAccount {
         }
         if let Some(m) = model {
             let clean_m = m.trim().trim_start_matches("cx/");
-            if let Some(&until) = self.model_rate_limits.get(clean_m) {
-                if until > now {
+            if let Some(&until) = self.model_rate_limits.get(clean_m)
+                && until > now {
                     return true;
                 }
-            }
         }
         false
     }
@@ -84,11 +83,10 @@ impl CodexAccount {
         }
         if let Some(m) = model {
             let clean_m = m.trim().trim_start_matches("cx/");
-            if let Some(&until) = self.model_rate_limits.get(clean_m) {
-                if until > now {
+            if let Some(&until) = self.model_rate_limits.get(clean_m)
+                && until > now {
                     waits.push(until - now);
                 }
-            }
         }
         waits.into_iter().min()
     }

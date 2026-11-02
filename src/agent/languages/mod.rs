@@ -60,11 +60,10 @@ pub fn detect_all_languages(allowed_folders: &[String]) -> Vec<ProjectLanguageIn
 
         // 1. First, check root directory directly
         for detector in &detectors {
-            if let Some(info) = detector.detect(root) {
-                if !results.iter().any(|r: &ProjectLanguageInfo| r.primary_verifier == info.primary_verifier) {
+            if let Some(info) = detector.detect(root)
+                && !results.iter().any(|r: &ProjectLanguageInfo| r.primary_verifier == info.primary_verifier) {
                     results.push(info);
                 }
-            }
         }
 
         // 2. Scan immediate 1-level subdirectories (e.g. backend/, frontend/, client/, server/, web/, etc.)

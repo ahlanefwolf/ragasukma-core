@@ -79,11 +79,10 @@ pub fn prepare_turn_messages(
                 pruned.push(m);
             }
         }
-        if let Some(last_user_msg) = db_messages.iter().rev().find(|m| m.role == "user") {
-            if !pruned.iter().any(|existing| existing.id == last_user_msg.id) {
+        if let Some(last_user_msg) = db_messages.iter().rev().find(|m| m.role == "user")
+            && !pruned.iter().any(|existing| existing.id == last_user_msg.id) {
                 pruned.push(last_user_msg);
             }
-        }
         // Strict sequence sort so user prompt is NEVER before older assistant/tool messages
         pruned.sort_by_key(|m| m.sequence_num);
         pruned
@@ -113,36 +112,30 @@ pub fn prepare_turn_messages(
     let mut tool_id_to_name: HashMap<String, String> = HashMap::new();
     let mut files_modified_in_window: HashSet<String> = HashSet::new();
     for msg in &messages_to_send {
-        if msg.role == "assistant" {
-            if let Some(ref tc_raw) = msg.tool_calls {
-                if let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
+        if msg.role == "assistant"
+            && let Some(ref tc_raw) = msg.tool_calls
+                && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
                     for c in calls {
                         known_tool_call_ids.insert(c.id.clone());
-                        if c.function.name == "workspace_edit_file" || c.function.name == "workspace_write_file" {
-                            if let Ok(args_obj) = serde_json::from_str::<serde_json::Value>(&c.function.arguments) {
-                                if let Some(path) = args_obj.get("file_path").or_else(|| args_obj.get("path")).and_then(|p| p.as_str()) {
+                        if (c.function.name == "workspace_edit_file" || c.function.name == "workspace_write_file")
+                            && let Ok(args_obj) = serde_json::from_str::<serde_json::Value>(&c.function.arguments)
+                                && let Some(path) = args_obj.get("file_path").or_else(|| args_obj.get("path")).and_then(|p| p.as_str()) {
                                     let clean = path.trim_start_matches("./").to_string();
                                     files_modified_in_window.insert(clean);
                                 }
-                            }
-                        }
                         tool_id_to_name.insert(c.id, c.function.name);
                     }
                 }
-            }
-        }
     }
 
     // 2. Identify all tool messages that actually have valid parent assistant calls in this window
     let mut retained_tool_ids = HashSet::new();
     for msg in &messages_to_send {
-        if msg.role == "tool" {
-            if let Some(ref tcid) = msg.tool_call_id {
-                if known_tool_call_ids.contains(tcid) {
+        if msg.role == "tool"
+            && let Some(ref tcid) = msg.tool_call_id
+                && known_tool_call_ids.contains(tcid) {
                     retained_tool_ids.insert(tcid.clone());
                 }
-            }
-        }
     }
 
     let total_tool_msgs = messages_to_send.iter().filter(|m| m.role == "tool").count();
@@ -152,13 +145,11 @@ pub fn prepare_turn_messages(
 
     for msg in messages_to_send {
         // Drop orphaned tool messages whose parent assistant tool_call was pruned out
-        if msg.role == "tool" {
-            if let Some(ref tcid) = msg.tool_call_id {
-                if !retained_tool_ids.contains(tcid) {
+        if msg.role == "tool"
+            && let Some(ref tcid) = msg.tool_call_id
+                && !retained_tool_ids.contains(tcid) {
                     continue;
                 }
-            }
-        }
 
         let mut tc_parsed: Option<Vec<V1ToolCall>> = msg
             .tool_calls
@@ -185,9 +176,9 @@ pub fn prepare_turn_messages(
         // (e.g. previous turn was interrupted or aborted before assistant replied),
         // insert an intermediate assistant acknowledgement so that API providers (Gemini, Claude, OpenAI)
         // do not see an unacknowledged tool response directly followed by a new user turn.
-        if msg.role == "user" {
-            if let Some(last_v1) = v1_messages.last() {
-                if last_v1.role == "tool" {
+        if msg.role == "user"
+            && let Some(last_v1) = v1_messages.last()
+                && last_v1.role == "tool" {
                     v1_messages.push(V1Message {
                         role: "assistant".to_string(),
                         content: Some(json!("I have executed the requested tool operations and inspected the workspace.")),
@@ -197,8 +188,6 @@ pub fn prepare_turn_messages(
                         thought_signature: None,
                     });
                 }
-            }
-        }
 
         let content_val = if msg.role == "user" {
             msg.content.as_ref().map(|c| {

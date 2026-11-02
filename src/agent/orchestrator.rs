@@ -115,13 +115,12 @@ impl GoalOrchestrator {
         // context matters most. Scoring already decides how strongly each file is carried over, and a
         // wordless continuation has a defined result (`CONTINUATION_ONLY_SCORE`), so the guard no longer
         // protects against anything. Keywords remain optional input that sharpens the score.
-        if let Some(parent_id) = parent_goal_id {
-            if let Err(e) = reuse_evidence_from_parent(goal_id, parent_id, reuse_keywords).await {
+        if let Some(parent_id) = parent_goal_id
+            && let Err(e) = reuse_evidence_from_parent(goal_id, parent_id, reuse_keywords).await {
                 let err_str = e.to_string();
                 eprintln!("[Agent Context Warning] Failed to reuse evidence from parent goal {} for {}: {}", parent_id, goal_id, err_str);
                 let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
             }
-        }
 
         // 3. Move state to discovery
         repository::update_goal_status(goal_id, GoalState::Discovery.as_str()).await?;

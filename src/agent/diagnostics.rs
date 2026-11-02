@@ -41,8 +41,8 @@ pub fn get_session_diagnostic_queue(session_id: &str) -> Option<SessionDiagnosti
 
 /// Marks all items associated with `file_path` as resolved (e.g. after editing the file).
 pub fn mark_diagnostic_file_resolved(session_id: &str, file_path: &str) -> (usize, usize) {
-    if let Ok(mut lock) = get_diagnostic_store().write() {
-        if let Some(queue) = lock.get_mut(session_id) {
+    if let Ok(mut lock) = get_diagnostic_store().write()
+        && let Some(queue) = lock.get_mut(session_id) {
             let norm_target = file_path.replace('\\', "/").trim_start_matches("./").to_string();
             for item in &mut queue.items {
                 let norm_item = item.file_path.replace('\\', "/").trim_start_matches("./").to_string();
@@ -53,7 +53,6 @@ pub fn mark_diagnostic_file_resolved(session_id: &str, file_path: &str) -> (usiz
             let remaining = queue.items.iter().filter(|i| !i.resolved).count();
             return (remaining, queue.items.len());
         }
-    }
     (0, 0)
 }
 
@@ -93,11 +92,10 @@ pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskIte
                     warning_order.push(fpath.clone());
                     (Vec::new(), Vec::new())
                 });
-                if let Some(ln) = line_no {
-                    if !entry.0.contains(&ln) {
+                if let Some(ln) = line_no
+                    && !entry.0.contains(&ln) {
                         entry.0.push(ln);
                     }
-                }
                 if entry.1.len() < 5 && !entry.1.contains(&msg) {
                     entry.1.push(msg);
                 }
@@ -106,11 +104,10 @@ pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskIte
                     file_order.push(fpath.clone());
                     (Vec::new(), Vec::new())
                 });
-                if let Some(ln) = line_no {
-                    if !entry.0.contains(&ln) {
+                if let Some(ln) = line_no
+                    && !entry.0.contains(&ln) {
                         entry.0.push(ln);
                     }
-                }
                 if entry.1.len() < 5 && !entry.1.contains(&msg) {
                     entry.1.push(msg);
                 }
@@ -202,9 +199,9 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
 
     let re_to_use = re_strict.as_ref().or(re_opt.as_ref());
 
-    if let Some(re) = re_to_use {
-        if let Some(cap) = re.captures(trimmed) {
-            if let Some(file_match) = cap.get(1) {
+    if let Some(re) = re_to_use
+        && let Some(cap) = re.captures(trimmed)
+            && let Some(file_match) = cap.get(1) {
                 let raw_path = file_match.as_str().trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == '[' || c == ']');
                 let clean_path = raw_path.trim_start_matches("./");
 
@@ -213,8 +210,7 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
                     && !clean_path.starts_with("//")
                     && !clean_path.starts_with("http:")
                     && !clean_path.starts_with("https:")
-                {
-                    if let Some(dot_idx) = clean_path.rfind('.') {
+                    && let Some(dot_idx) = clean_path.rfind('.') {
                         let ext = &clean_path[dot_idx + 1..];
                         // Extension must have 1-8 alphanumeric chars and contain at least one letter (prevents IPs like 192.168.1.1)
                         if !ext.is_empty() && ext.len() <= 8 && ext.chars().any(|c| c.is_ascii_alphabetic()) {
@@ -225,10 +221,7 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
                             return Some((clean_path.to_string(), line_no));
                         }
                     }
-                }
             }
-        }
-    }
 
     None
 }
@@ -252,11 +245,10 @@ pub fn group_diagnostics_by_file(output: &str) -> (Vec<GroupedFileDiagnostic>, V
             }
             let entry = file_map.entry(fpath).or_insert_with(|| (Vec::new(), 0, Vec::new()));
             entry.1 += 1;
-            if let Some(ln) = line_no {
-                if !entry.0.contains(&ln) {
+            if let Some(ln) = line_no
+                && !entry.0.contains(&ln) {
                     entry.0.push(ln);
                 }
-            }
             let lower = trimmed.to_lowercase();
             if entry.2.len() < 3 && (lower.contains("error") || lower.contains("fail") || trimmed.contains("error[") || lower.contains("warning") || lower.contains("exception")) {
                 let sample = if trimmed.len() > 120 { format!("{}...", &trimmed[..117]) } else { trimmed.to_string() };

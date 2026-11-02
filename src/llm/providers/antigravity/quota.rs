@@ -46,8 +46,8 @@ pub fn fetch_account_quota(
         Ok(resp) => {
             let status = resp.status();
             if status.is_success() {
-                if let Ok(val) = resp.json::<serde_json::Value>() {
-                    if let Some(models_obj) = val.get("models").and_then(|v| v.as_object()) {
+                if let Ok(val) = resp.json::<serde_json::Value>()
+                    && let Some(models_obj) = val.get("models").and_then(|v| v.as_object()) {
                         for (model_key, model_val) in models_obj {
                             let is_internal = model_val
                                 .get("isInternal")
@@ -83,7 +83,6 @@ pub fn fetch_account_quota(
                             }
                         }
                     }
-                }
             } else {
                 let err_txt = resp.text().unwrap_or_default();
                 fetch_err = Some(format!("HTTP {status}: {err_txt}"));
@@ -109,9 +108,9 @@ pub fn fetch_account_quota(
         .json(&body)
         .send();
 
-    if let Ok(w_res) = weekly_resp {
-        if w_res.status().is_success() {
-            if let Ok(w_val) = w_res.json::<serde_json::Value>() {
+    if let Ok(w_res) = weekly_resp
+        && w_res.status().is_success()
+            && let Ok(w_val) = w_res.json::<serde_json::Value>() {
                 let groups = w_val
                     .get("groups")
                     .or_else(|| w_val.pointer("/quotaSummary/groups"))
@@ -163,8 +162,6 @@ pub fn fetch_account_quota(
                     }
                 }
             }
-        }
-    }
 
     // Tier / Plan name
     let plan = tier_id.as_deref().map(|t| match t {

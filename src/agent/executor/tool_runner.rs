@@ -155,12 +155,11 @@ pub async fn execute_turn_tool_calls(
             .and_then(|p| p.as_str())
             .map(|s| s.to_string());
 
-        if is_edit_op {
-            if let Some(ref path) = target_arg_file {
+        if is_edit_op
+            && let Some(ref path) = target_arg_file {
                 let clean = path.trim_start_matches("./").to_string();
                 crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &clean);
             }
-        }
 
         let is_target_in_error_list = target_arg_file.as_ref().map(|p| {
             let clean = p.trim_start_matches("./");
@@ -329,8 +328,8 @@ pub async fn execute_turn_tool_calls(
                     duration_ms: Some(dur),
                 }).await;
 
-                    if tool_name == "workspace_read_file" {
-                        if let Some(ref p) = target_arg_file {
+                    if tool_name == "workspace_read_file"
+                        && let Some(ref p) = target_arg_file {
                             let clean = p.trim_start_matches("./").to_string();
                             let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
                             let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
@@ -340,7 +339,6 @@ pub async fn execute_turn_tool_calls(
                             }
                             state.recent_read_slices.insert((p.clone(), start_line, end_line));
                         }
-                    }
                     out
                 }
                 Err(e) => {
@@ -398,8 +396,8 @@ pub async fn execute_turn_tool_calls(
 
         if is_inspection {
             state.global_inspection_streak += 1;
-            if state.current_phase == "discovery" {
-                if let Some(ref path) = target_arg_file {
+            if state.current_phase == "discovery"
+                && let Some(ref path) = target_arg_file {
                     let is_dir_inspection = tool_name == "workspace_list_dir"
                         || path.ends_with('/')
                         || !path.contains('.');
@@ -407,7 +405,6 @@ pub async fn execute_turn_tool_calls(
                         state.locked_targets.push(path.clone());
                     }
                 }
-            }
         }
 
         // Auto-invalidation and tracking on file modification
@@ -668,8 +665,8 @@ pub async fn execute_turn_tool_calls(
         }
 
         let is_file_inspection = tool_name == "workspace_read_file" || tool_name == "workspace_grep";
-        if is_file_inspection {
-            if let Some(path) = target_arg_file.as_deref() {
+        if is_file_inspection
+            && let Some(path) = target_arg_file.as_deref() {
                 let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
                 let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
                 let is_exact_dup = state.recent_read_slices.contains(&(path.to_string(), start_line, end_line));
@@ -683,7 +680,6 @@ pub async fn execute_turn_tool_calls(
                     }
                 }
             }
-        }
 
         // Auto-cache discovered file contents into Evidence Cache with true SHA-256 version
         if tool_name == "workspace_read_file" && !tool_output.starts_with("Tool execution error") {
@@ -716,8 +712,8 @@ pub async fn execute_turn_tool_calls(
                     crate::term_err!("[Evidence] Failed to cache read of {}: {}", file_path, e);
                 }
             }
-        } else if is_edit_op && !tool_output.starts_with("Tool execution error") {
-            if let Some(file_path) = target_arg_file.as_deref() {
+        } else if is_edit_op && !tool_output.starts_with("Tool execution error")
+            && let Some(file_path) = target_arg_file.as_deref() {
                 let preview_summary = format!("Modified/Created file {}", file_path);
                 let file_ver = crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
                     .ok()
@@ -742,7 +738,6 @@ pub async fn execute_turn_tool_calls(
                     crate::term_err!("[Evidence] Failed to cache edit of {}: {}", file_path, e);
                 }
             }
-        }
 
         // Sanitize large command/terminal output before DB persistence (avoid truncating source code reads)
         let is_cmd_run = tool_name == "workspace_run_command";
@@ -826,22 +821,20 @@ fn extract_modified_paths_from_command(cmd: &str) -> Vec<String> {
     if cmd.contains("open(") {
         for part in cmd.split("open(") {
             let trimmed = part.trim_start();
-            if trimmed.starts_with('\'') || trimmed.starts_with('"') {
-                if let Some(quote) = trimmed.chars().next() {
+            if (trimmed.starts_with('\'') || trimmed.starts_with('"'))
+                && let Some(quote) = trimmed.chars().next() {
                     let rest = &trimmed[1..];
-                    if let Some((p, post)) = rest.split_once(quote) {
-                        if post.contains("'w'") || post.contains("\"w\"")
+                    if let Some((p, post)) = rest.split_once(quote)
+                        && (post.contains("'w'") || post.contains("\"w\"")
                             || post.contains("'a'") || post.contains("\"a\"")
-                            || post.contains("'wb'") || post.contains("\"wb\"")
+                            || post.contains("'wb'") || post.contains("\"wb\""))
                         {
                             let clean = p.trim_start_matches("./").trim();
                             if !clean.is_empty() && !paths.contains(&clean.to_string()) {
                                 paths.push(clean.to_string());
                             }
                         }
-                    }
                 }
-            }
         }
     }
 

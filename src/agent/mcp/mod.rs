@@ -72,11 +72,10 @@ fn resolve_executable(command_str: &str, args: &[String]) -> (String, Vec<String
     let lower = command_str.trim().to_lowercase();
     let py_bin = crate::agent::engine::python::find_python_bin();
 
-    if lower == "python" || lower == "python3" || lower == "py" {
-        if let Some(ref bin) = py_bin {
+    if (lower == "python" || lower == "python3" || lower == "py")
+        && let Some(ref bin) = py_bin {
             return (bin.to_string_lossy().to_string(), args.to_vec(), bin.parent().map(|p| p.to_path_buf()));
         }
-    }
 
     (command_str.to_string(), args.to_vec(), py_bin.and_then(|b| b.parent().map(|p| p.to_path_buf())))
 }
@@ -194,8 +193,8 @@ async fn call_http_rpc(
         }
         Ok(r) if r.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED && url.ends_with("/sse") => {
             // Server might require standard SSE handshake via GET first
-            if let Ok(mut sse_resp) = client.get(url).header("Accept", "text/event-stream").send().await {
-                if sse_resp.status().is_success() {
+            if let Ok(mut sse_resp) = client.get(url).header("Accept", "text/event-stream").send().await
+                && sse_resp.status().is_success() {
                     while let Ok(Some(chunk)) = sse_resp.chunk().await {
                         let text = String::from_utf8_lossy(&chunk);
                         for line in text.lines() {
@@ -226,7 +225,6 @@ async fn call_http_rpc(
                         }
                     }
                 }
-            }
             Err(format!("MCP HTTP server responded with status: {}", r.status()))
         }
         Ok(r) => Err(format!("MCP HTTP server responded with status: {}", r.status())),

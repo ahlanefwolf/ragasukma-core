@@ -129,18 +129,16 @@ fn accumulate_tool_call_delta(
         progress.saw_arguments = false;
     }
 
-    if let Some(tc_id) = id {
-        if !tc_id.trim().is_empty() {
+    if let Some(tc_id) = id
+        && !tc_id.trim().is_empty() {
             collected[index].id = tc_id.clone();
             progress.id = Some(tc_id);
         }
-    }
-    if let Some(tc_name) = name {
-        if !tc_name.trim().is_empty() {
+    if let Some(tc_name) = name
+        && !tc_name.trim().is_empty() {
             collected[index].function.name = tc_name.clone();
             progress.name = Some(tc_name);
         }
-    }
 
     if arguments.is_empty() {
         return;
@@ -277,8 +275,8 @@ pub async fn execute_model_stream(
                                 name,
                                 &arguments,
                             );
-                            if let Some(tc_name) = announced_name {
-                                if announced_tool_indices.insert(index) {
+                            if let Some(tc_name) = announced_name
+                                && announced_tool_indices.insert(index) {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -288,7 +286,6 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
-                            }
                         }
                         _ => {}
                     }
@@ -343,8 +340,8 @@ pub async fn execute_model_stream(
                                 name,
                                 &arguments,
                             );
-                            if let Some(tc_name) = announced_name {
-                                if announced_tool_indices.insert(index) {
+                            if let Some(tc_name) = announced_name
+                                && announced_tool_indices.insert(index) {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -354,7 +351,6 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
-                            }
                         }
                         _ => {}
                     }
@@ -409,8 +405,8 @@ pub async fn execute_model_stream(
                                 name,
                                 &arguments,
                             );
-                            if let Some(tc_name) = announced_name {
-                                if announced_tool_indices.insert(index) {
+                            if let Some(tc_name) = announced_name
+                                && announced_tool_indices.insert(index) {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -420,7 +416,6 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
-                            }
                         }
                         _ => {}
                     }
@@ -475,8 +470,8 @@ pub async fn execute_model_stream(
                                 name,
                                 &arguments,
                             );
-                            if let Some(tc_name) = announced_name {
-                                if announced_tool_indices.insert(index) {
+                            if let Some(tc_name) = announced_name
+                                && announced_tool_indices.insert(index) {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -486,7 +481,6 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
-                            }
                         }
                         _ => {}
                     }

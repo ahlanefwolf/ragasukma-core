@@ -254,11 +254,10 @@ pub fn normalize_workspace_command(command: &str, work_dir: &Path, allowed_roots
     }
     for root in allowed_roots {
         let p = Path::new(root);
-        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-            if !root_folder_names.contains(&name.to_string()) {
+        if let Some(name) = p.file_name().and_then(|n| n.to_str())
+            && !root_folder_names.contains(&name.to_string()) {
                 root_folder_names.push(name.to_string());
             }
-        }
     }
 
     for folder_name in root_folder_names {

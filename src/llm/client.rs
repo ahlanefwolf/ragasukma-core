@@ -16,6 +16,12 @@ pub struct LlmClient {
     pub custom: CustomProvider,
 }
 
+impl Default for LlmClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LlmClient {
     pub fn new() -> Self {
         let config = crate::config::load_user_config();
@@ -52,12 +58,11 @@ impl LlmClient {
 
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.default_system_prompt = prompt.clone();
-        if let Some(first) = self.history.first_mut() {
-            if first.role == "system" {
+        if let Some(first) = self.history.first_mut()
+            && first.role == "system" {
                 first.content = prompt;
                 return;
             }
-        }
         self.history.insert(0, ChatMessage {
             role: "system".to_string(),
             content: prompt,
@@ -114,13 +119,11 @@ impl LlmClient {
             return Ok(String::new());
         }
 
-        if let Some(sys_prompt) = custom_system_prompt {
-            if let Some(first_msg) = self.history.first_mut() {
-                if first_msg.role == "system" {
+        if let Some(sys_prompt) = custom_system_prompt
+            && let Some(first_msg) = self.history.first_mut()
+                && first_msg.role == "system" {
                     first_msg.content = sys_prompt.to_string();
                 }
-            }
-        }
 
         self.history.push(ChatMessage {
             role: role.to_string(),

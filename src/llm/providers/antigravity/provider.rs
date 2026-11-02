@@ -21,6 +21,12 @@ pub struct AntigravityProvider {
     pub config_file: PathBuf,
 }
 
+impl Default for AntigravityProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AntigravityProvider {
     pub fn get_accounts_file_path() -> PathBuf {
         let candidate = crate::assets::find_file_in_candidates("antigravity_accounts.json");
@@ -420,8 +426,8 @@ impl AntigravityProvider {
                 acc.access_token.is_none() || acc.expires_at <= now
             };
 
-            if need_token {
-                if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+            if need_token
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
                     self.accounts[acc_idx].consecutive_errors += 1;
                     crate::term_err!(
                         "[Antigravity] Failed to refresh token for account {}: {}",
@@ -430,7 +436,6 @@ impl AntigravityProvider {
                     );
                     continue;
                 }
-            }
 
             let project_id = match ensure_project_id(&self.client, &mut self.accounts[acc_idx]) {
                 Ok(pid) => pid,
@@ -668,8 +673,8 @@ impl AntigravityProvider {
                 acc.access_token.is_none() || acc.expires_at <= now
             };
 
-            if need_token {
-                if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+            if need_token
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
                     self.accounts[acc_idx].consecutive_errors += 1;
                     crate::term_err!(
                         "[Antigravity] Failed to refresh token for account {}: {}",
@@ -678,7 +683,6 @@ impl AntigravityProvider {
                     );
                     continue;
                 }
-            }
 
             let project_id = match ensure_project_id(&self.client, &mut self.accounts[acc_idx]) {
                 Ok(pid) => pid,

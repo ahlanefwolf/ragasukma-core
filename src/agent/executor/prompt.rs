@@ -120,13 +120,12 @@ fn build_static_prompt(
 - In `workspace_run_command`, specify `cwd` to target a folder alias or run commands in that subproject.\n\n");
     }
 
-    if let Some(ref custom) = project.custom_instructions {
-        if !custom.trim().is_empty() {
+    if let Some(ref custom) = project.custom_instructions
+        && !custom.trim().is_empty() {
             prompt.push_str("### Project Instructions:\n");
             prompt.push_str(custom.trim());
             prompt.push_str("\n\n");
         }
-    }
 
     if !prompt_skills.is_empty() {
         prompt.push_str("### Active Prompt Skills & Persona Guidelines:\n");
@@ -181,11 +180,10 @@ When you need to interact with these services, craft and run appropriate Python 
 
         for (idx, server) in active_mcp_servers.iter().enumerate() {
             let mut cfg_val = server.config_value();
-            if let Some(obj) = cfg_val.as_object_mut() {
-                if !obj.contains_key("name") {
+            if let Some(obj) = cfg_val.as_object_mut()
+                && !obj.contains_key("name") {
                     obj.insert("name".to_string(), serde_json::json!(server.name));
                 }
-            }
             let pretty_json = serde_json::to_string_pretty(&cfg_val).unwrap_or_else(|_| server.config.clone());
             prompt.push_str(&format!("#### {}. MCP Server: \"{}\" ({})\n```json\n{}\n```\n\n", idx + 1, server.name, server.transport(), pretty_json));
         }
@@ -266,11 +264,10 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
     // A poisoned lock only means another thread panicked while holding it; the cache holds no
     // invariants that a panic could corrupt, so recover instead of propagating.
     let mut guard = STATIC_PROMPT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((cached_key, value)) = guard.as_ref() {
-        if cached_key == &key {
+    if let Some((cached_key, value)) = guard.as_ref()
+        && cached_key == &key {
             return value.clone();
         }
-    }
     let rendered: std::sync::Arc<str> = std::sync::Arc::from(build_static_prompt(
         ctx.project,
         ctx.allowed_folders,
@@ -296,11 +293,10 @@ pub async fn build_system_prompt(ctx: AgentPromptContext<'_>) -> Result<String> 
     let mut system_prompt = cached_static_prompt(&ctx).to_string();
 
     // 1. Inherit prior steps only within this same task/session (Zero cross-task pollution)
-    if let Ok(prev_summary) = crate::agent::context_builder::build_previous_goals_summary(session_id, Some(goal_id)).await {
-        if !prev_summary.is_empty() {
+    if let Ok(prev_summary) = crate::agent::context_builder::build_previous_goals_summary(session_id, Some(goal_id)).await
+        && !prev_summary.is_empty() {
             system_prompt.push_str(&prev_summary);
         }
-    }
 
     // 2. Goal objective, success criteria, constraints and active evidence.
     //    This block used to be reachable only from tests, so criteria/constraints

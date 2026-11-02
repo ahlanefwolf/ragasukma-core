@@ -129,11 +129,10 @@ pub fn sanitize_function_name(name: &str) -> String {
         })
         .collect();
 
-    if let Some(first) = s.chars().next() {
-        if !first.is_ascii_alphabetic() && first != '_' {
+    if let Some(first) = s.chars().next()
+        && !first.is_ascii_alphabetic() && first != '_' {
             s.insert(0, '_');
         }
-    }
 
     if s.len() > 64 {
         s.truncate(64);

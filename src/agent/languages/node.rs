@@ -41,9 +41,9 @@ impl LanguageDetector for NodeDetector {
         let mut primary = format!("{} test", pkg_runner);
         let mut secondaries = Vec::new();
 
-        if let Ok(content) = fs::read_to_string(&pkg_json) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
+        if let Ok(content) = fs::read_to_string(&pkg_json)
+            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+                && let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
                     let has_test_script = scripts.contains_key("test");
                     let test_is_dummy = scripts
                         .get("test")
@@ -81,8 +81,6 @@ impl LanguageDetector for NodeDetector {
                         secondaries.push(format!("{} run lint", pkg_runner));
                     }
                 }
-            }
-        }
 
         if root.join("tsconfig.json").exists() && !primary.contains("tsc") && !secondaries.iter().any(|s| s.contains("tsc")) {
             secondaries.push("npx tsc --noEmit".to_string());

@@ -409,10 +409,8 @@ pub fn record_usage(
     let model = model.to_string();
     let status = status.to_string();
 
-    let handle = tokio::runtime::Handle::try_current().ok();
-
-    if let Some(h) = handle {
-        h.spawn(async move {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
             let _ = record_usage_async(
                 &provider,
                 &model,
@@ -423,6 +421,26 @@ pub fn record_usage(
                 &status,
             )
             .await;
+        });
+    } else {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            if let Ok(rt) = rt {
+                rt.block_on(async {
+                    let _ = record_usage_async(
+                        &provider,
+                        &model,
+                        input_tokens,
+                        cached_tokens,
+                        output_tokens,
+                        duration_ms,
+                        &status,
+                    )
+                    .await;
+                });
+            }
         });
     }
 }

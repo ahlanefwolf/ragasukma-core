@@ -22,6 +22,12 @@ pub struct CodexProvider {
     pub config_file: PathBuf,
 }
 
+impl Default for CodexProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodexProvider {
     pub fn get_accounts_file_path() -> PathBuf {
         let candidate = crate::assets::find_file_in_candidates("codex_accounts.json");
@@ -493,8 +499,8 @@ impl CodexProvider {
                 acc.access_token.is_none() || acc.expires_at <= now
             };
 
-            if need_token {
-                if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+            if need_token
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
                     self.accounts[acc_idx].consecutive_errors += 1;
                     crate::term_err!(
                         "[Codex] Failed to refresh token for account {}: {}",
@@ -503,7 +509,6 @@ impl CodexProvider {
                     );
                     continue;
                 }
-            }
 
             let access_token = self.accounts[acc_idx]
                 .access_token
@@ -594,8 +599,8 @@ impl CodexProvider {
                 acc.access_token.is_none() || acc.expires_at <= now
             };
 
-            if need_token {
-                if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+            if need_token
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
                     crate::term_err!(
                         "[Codex] Failed to refresh token for account {}: {}",
                         self.accounts[acc_idx].id,
@@ -605,7 +610,6 @@ impl CodexProvider {
                     last_err = Some(format!("Account {} token refresh failed: {e}", self.accounts[acc_idx].id));
                     continue;
                 }
-            }
 
             let access_token = self.accounts[acc_idx]
                 .access_token
@@ -722,11 +726,10 @@ impl CodexProvider {
                         if let Some(tc_id) = id {
                             collected_tool_calls[idx].id = tc_id.clone();
                         }
-                        if let Some(tc_name) = name {
-                            if !tc_name.is_empty() {
+                        if let Some(tc_name) = name
+                            && !tc_name.is_empty() {
                                 collected_tool_calls[idx].function.name = tc_name.clone();
                             }
-                        }
                         collected_tool_calls[idx].function.arguments.push_str(arguments);
                     }
                     _ => {}
@@ -781,12 +784,11 @@ impl CodexProvider {
 
         for line_result in reader.lines() {
             let line = line_result?;
-            if let Some(delta) = parse_codex_sse_line(&line) {
-                if !delta.is_empty() {
+            if let Some(delta) = parse_codex_sse_line(&line)
+                && !delta.is_empty() {
                     full_content.push_str(&delta);
                     on_raw_delta(&delta)?;
                 }
-            }
         }
 
         Ok(full_content)

@@ -76,11 +76,10 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
     // 4. For new files or directories that do not exist yet (e.g. write_file)
     let candidate = if let Some(matched_alias_path) = allowed_roots.iter().find_map(|root| {
         let root_p = Path::new(root);
-        if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str()) {
-            if let Ok(rel) = input_path.strip_prefix(folder_name) {
+        if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str())
+            && let Ok(rel) = input_path.strip_prefix(folder_name) {
                 return Some(root_p.join(rel));
             }
-        }
         None
     }) {
         matched_alias_path

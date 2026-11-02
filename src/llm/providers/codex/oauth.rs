@@ -118,8 +118,8 @@ pub fn extract_codex_account_info(
     let mut chatgpt_account_id = None;
     let mut plan_type = None;
 
-    if let Some(id_tok) = id_token {
-        if let Some(claims) = extract_jwt_claims(id_tok) {
+    if let Some(id_tok) = id_token
+        && let Some(claims) = extract_jwt_claims(id_tok) {
             email = claims.get("email").and_then(|v| v.as_str()).map(String::from);
 
             // Check top-level or nested claims
@@ -134,24 +134,20 @@ pub fn extract_codex_account_info(
                 }
             }
 
-            if plan_type.is_none() {
-                if let Some(plan) = claims.get("chatgpt_plan_type").and_then(|v| v.as_str()) {
+            if plan_type.is_none()
+                && let Some(plan) = claims.get("chatgpt_plan_type").and_then(|v| v.as_str()) {
                     plan_type = Some(plan.to_string());
                 }
-            }
         }
-    }
 
-    if email.is_none() {
-        if let Some(claims) = extract_jwt_claims(access_token) {
+    if email.is_none()
+        && let Some(claims) = extract_jwt_claims(access_token) {
             email = claims.get("email").and_then(|v| v.as_str()).map(String::from);
-            if chatgpt_account_id.is_none() {
-                if let Some(act_id) = claims.get("chatgpt_account_id").and_then(|v| v.as_str()) {
+            if chatgpt_account_id.is_none()
+                && let Some(act_id) = claims.get("chatgpt_account_id").and_then(|v| v.as_str()) {
                     chatgpt_account_id = Some(act_id.to_string());
                 }
-            }
         }
-    }
 
     (email, chatgpt_account_id, plan_type)
 }
@@ -221,11 +217,10 @@ pub fn refresh_account_token(
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(120);
 
-    if let Some(new_ref) = token_data.refresh_token {
-        if !new_ref.trim().is_empty() {
+    if let Some(new_ref) = token_data.refresh_token
+        && !new_ref.trim().is_empty() {
             account.refresh_token = new_ref;
         }
-    }
     if let Some(new_id) = token_data.id_token {
         let (email, act_id, plan) = extract_codex_account_info(Some(&new_id), &token_data.access_token);
         if email.is_some() {

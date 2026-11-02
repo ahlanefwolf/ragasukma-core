@@ -66,16 +66,15 @@ pub fn summarize_evicted_messages(evicted: &[&Message]) -> String {
                     }
                 }
             }
-            if let Some(ref tc_raw) = msg.tool_calls {
-                if let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
+            if let Some(ref tc_raw) = msg.tool_calls
+                && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
                     for call in calls {
                         if let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments) {
                             if call.function.name == "workspace_edit_file" || call.function.name == "workspace_write_file" {
-                                if let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str()) {
-                                    if !modified_files.contains(&p.to_string()) {
+                                if let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str())
+                                    && !modified_files.contains(&p.to_string()) {
                                         modified_files.push(p.to_string());
                                     }
-                                }
                             } else if call.function.name == "workspace_run_command" {
                                 if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
                                     let clean_cmd = cmd.trim().to_string();
@@ -83,17 +82,14 @@ pub fn summarize_evicted_messages(evicted: &[&Message]) -> String {
                                         executed_cmds.push(clean_cmd);
                                     }
                                 }
-                            } else if call.function.name == "workspace_read_file" {
-                                if let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str()) {
-                                    if !key_read_files.contains(&p.to_string()) {
+                            } else if call.function.name == "workspace_read_file"
+                                && let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str())
+                                    && !key_read_files.contains(&p.to_string()) {
                                         key_read_files.push(p.to_string());
                                     }
-                                }
-                            }
                         }
                     }
                 }
-            }
         }
     }
 
@@ -191,8 +187,8 @@ pub fn compact_assistant_tool_calls_smart(calls: &mut [crate::llm::v1_engine::V1
                     }
                 }
             }
-        } else if name == "workspace_edit_file" {
-            if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+        } else if name == "workspace_edit_file"
+            && let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
                 let file_path = val.get("file_path").and_then(|p| p.as_str()).unwrap_or("file").to_string();
                 let (should_compact, edits_count, total_chars) = if let Some(edits) = val.get("edits").and_then(|e| e.as_array()) {
                     let total_chars: usize = edits.iter().map(|e| {
@@ -216,7 +212,6 @@ pub fn compact_assistant_tool_calls_smart(calls: &mut [crate::llm::v1_engine::V1
                     }
                 }
             }
-        }
     }
 }
 

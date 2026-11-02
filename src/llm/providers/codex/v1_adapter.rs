@@ -184,11 +184,10 @@ pub fn build_codex_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                         "parameters": params
                     }));
                 }
-            } else if let Some(name) = tool.get("name").and_then(|v| v.as_str()) {
-                if !name.trim().is_empty() {
+            } else if let Some(name) = tool.get("name").and_then(|v| v.as_str())
+                && !name.trim().is_empty() {
                     translated_tools.push(tool.clone());
                 }
-            }
         }
         if !translated_tools.is_empty() {
             payload["tools"] = json!(translated_tools);
@@ -294,11 +293,10 @@ impl CodexSseParserState {
 
         // 3. Reasoning / Thought Deltas
         if event_type == "response.reasoning_summary_text.delta" {
-            if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str()) {
-                if !delta.is_empty() {
+            if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str())
+                && !delta.is_empty() {
                     events.push(V1StreamEvent::ThoughtDelta(delta.to_string()));
                 }
-            }
             return events;
         }
 
@@ -316,11 +314,10 @@ impl CodexSseParserState {
         }
 
         if event_type.ends_with(".delta") {
-            if let Some(text) = parsed.get("text").and_then(|v| v.as_str()) {
-                if !text.is_empty() {
+            if let Some(text) = parsed.get("text").and_then(|v| v.as_str())
+                && !text.is_empty() {
                     events.push(V1StreamEvent::ContentDelta(text.to_string()));
                 }
-            }
             return events;
         }
 

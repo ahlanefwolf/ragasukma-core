@@ -47,24 +47,21 @@ pub fn find_agent_dirs_in_path(base: &Path) -> Vec<PathBuf> {
     }
 
     // Check if base itself is already a skill folder
-    if let Some(name) = base.file_name().and_then(|n| n.to_str()) {
-        if is_skill_dir_name(name) {
+    if let Some(name) = base.file_name().and_then(|n| n.to_str())
+        && is_skill_dir_name(name) {
             results.push(base.to_path_buf());
             return results;
         }
-    }
 
     // Check immediate subdirectories of base
     if let Ok(entries) = fs::read_dir(base) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if is_skill_dir_name(name) {
+            if path.is_dir()
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && is_skill_dir_name(name) {
                         results.push(path);
                     }
-                }
-            }
         }
     }
 
@@ -78,13 +75,11 @@ fn walk_md_files<F: FnMut(&Path)>(dir: &Path, cb: &mut F) {
             let path = entry.path();
             if path.is_dir() {
                 walk_md_files(&path, cb);
-            } else if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext.eq_ignore_ascii_case("md") {
+            } else if path.is_file()
+                && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                    && ext.eq_ignore_ascii_case("md") {
                         cb(&path);
                     }
-                }
-            }
         }
     }
 }
@@ -244,14 +239,13 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
 fn extract_first_h1(body: &str) -> Option<String> {
     for line in body.lines() {
         let trimmed = line.trim();
-        if let Some(stripped) = trimmed.strip_prefix('#') {
-            if !stripped.starts_with('#') {
+        if let Some(stripped) = trimmed.strip_prefix('#')
+            && !stripped.starts_with('#') {
                 let title = stripped.trim().to_string();
                 if !title.is_empty() {
                     return Some(title);
                 }
             }
-        }
     }
     None
 }
@@ -312,11 +306,10 @@ pub fn scan_project_skills(
     }
 
     // 3. Current working directory
-    if let Ok(cwd) = std::env::current_dir() {
-        if !candidate_bases.contains(&cwd) {
+    if let Ok(cwd) = std::env::current_dir()
+        && !candidate_bases.contains(&cwd) {
             candidate_bases.push(cwd);
         }
-    }
 
     // Find agent directories across all candidates
     let mut agent_dirs = Vec::new();

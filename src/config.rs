@@ -277,9 +277,9 @@ pub fn get_config_file_path() -> PathBuf {
 pub fn load_user_config() -> UserConfig {
     for filename in &["config-ai.json", "config.json"] {
         let candidate = crate::assets::find_file_in_candidates(filename);
-        if candidate.exists() {
-            if let Ok(content) = fs::read_to_string(&candidate) {
-                if let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
+        if candidate.exists()
+            && let Ok(content) = fs::read_to_string(&candidate)
+                && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
                     if cfg.lang.trim().is_empty() {
                         cfg.lang = "id".to_string();
                     }
@@ -288,16 +288,14 @@ pub fn load_user_config() -> UserConfig {
                     }
                     return cfg;
                 }
-            }
-        }
     }
 
     let config_dir = get_app_config_dir();
     for filename in &["config-ai.json", "config.json"] {
         let config_path = config_dir.join(filename);
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
+        if config_path.exists()
+            && let Ok(content) = fs::read_to_string(&config_path)
+                && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
                     if cfg.lang.trim().is_empty() {
                         cfg.lang = "id".to_string();
                     }
@@ -306,8 +304,6 @@ pub fn load_user_config() -> UserConfig {
                     }
                     return cfg;
                 }
-            }
-        }
     }
 
     UserConfig::default()

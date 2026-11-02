@@ -192,8 +192,8 @@ pub async fn resolve_or_create_goal(
 
     // Only reuse prior evidence if this goal is explicitly a continuation child of a parent goal
     let active_goal_opt = repository::get_goal(&goal_id).await.unwrap_or(None);
-    if let Some(ref g) = active_goal_opt {
-        if let Some(ref parent_gid) = g.parent_goal_id {
+    if let Some(ref g) = active_goal_opt
+        && let Some(ref parent_gid) = g.parent_goal_id {
             // Passed whole; see the note on the call above. Scoring decides what matters.
             let prompt_keywords: Vec<&str> = last_user_prompt.split_whitespace().collect();
             if let Err(e) = crate::agent::context_builder::reuse_evidence_from_parent(&goal_id, parent_gid, &prompt_keywords).await {
@@ -202,7 +202,6 @@ pub async fn resolve_or_create_goal(
                 let _ = repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
             }
         }
-    }
 
     // A fresh user turn MUST ALWAYS start with active execution phase ("discovery" or "action").
     let current_phase = active_goal_opt

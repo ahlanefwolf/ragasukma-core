@@ -17,6 +17,12 @@ pub struct ClaudeProvider {
     pub config_file: PathBuf,
 }
 
+impl Default for ClaudeProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeProvider {
     pub fn get_accounts_file_path() -> PathBuf {
         let candidate = crate::assets::find_file_in_candidates("claude_accounts.json");
@@ -82,21 +88,19 @@ impl ClaudeProvider {
             if !acc.is_active {
                 continue;
             }
-            if acc.access_token.is_none() || acc.expires_at <= now {
-                if refresh_account_token(&self.client, acc).is_ok() {
+            if (acc.access_token.is_none() || acc.expires_at <= now)
+                && refresh_account_token(&self.client, acc).is_ok() {
                     dirty = true;
                 }
-            }
         }
 
         self.accounts = loaded;
-        if dirty {
-            if let Ok(json) = serde_json::to_string_pretty(&self.accounts) {
+        if dirty
+            && let Ok(json) = serde_json::to_string_pretty(&self.accounts) {
                 for path in crate::assets::find_all_file_candidates("claude_accounts.json") {
                     let _ = std::fs::write(path, &json);
                 }
             }
-        }
 
         Ok(())
     }
@@ -573,11 +577,10 @@ impl ClaudeProvider {
                         if let Some(tc_id) = id {
                             collected_tool_calls[idx].id = tc_id.clone();
                         }
-                        if let Some(tc_name) = name {
-                            if !tc_name.is_empty() {
+                        if let Some(tc_name) = name
+                            && !tc_name.is_empty() {
                                 collected_tool_calls[idx].function.name = tc_name.clone();
                             }
-                        }
                         collected_tool_calls[idx].function.arguments.push_str(arguments);
                     }
                     _ => {}

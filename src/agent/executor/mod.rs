@@ -138,12 +138,11 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         state.iteration += 1;
 
         // Check if session was stopped or aborted externally
-        if let Ok(Some(status)) = repository::get_session_status(session_id).await {
-            if status != "running" {
+        if let Ok(Some(status)) = repository::get_session_status(session_id).await
+            && status != "running" {
                 println!("[Agent] Session {} status changed to '{}', breaking iteration loop.", session_id, status);
                 break;
             }
-        }
 
         broadcast_session_event(
             session_id,

@@ -37,14 +37,13 @@ pub async fn revalidate_evidence_cache(
         let mut matched = false;
         let mut current_version = None;
 
-        if let Ok(full_path) = crate::agent::tools::fs::resolve_allowed_path(&ev.file_path, workspace_roots) {
-            if full_path.exists() {
+        if let Ok(full_path) = crate::agent::tools::fs::resolve_allowed_path(&ev.file_path, workspace_roots)
+            && full_path.exists() {
                 matched = true;
                 if let Ok(hash) = compute_file_version(&full_path) {
                     current_version = Some(hash);
                 }
             }
-        }
 
         // If file disappeared or hash does not match stored file_version
         if !matched || current_version.as_deref() != Some(&ev.file_version) {
@@ -160,12 +159,11 @@ pub async fn build_previous_goals_summary(
             out.push_str(&format!("  * Outcome: {}\n", conc_preview));
         }
 
-        if let Ok(verifs) = repository::list_goal_verifications(&g.id).await {
-            if let Some(last_v) = verifs.last() {
+        if let Ok(verifs) = repository::list_goal_verifications(&g.id).await
+            && let Some(last_v) = verifs.last() {
                 let status_str = if last_v.is_passed == 1 { "PASSED" } else { "FAILED" };
                 out.push_str(&format!("  * Last Verification: `{}` ({})\n", last_v.test_command, status_str));
             }
-        }
 
         let evidences = repository::get_active_evidences_for_goal(&g.id).await.unwrap_or_default();
         if !evidences.is_empty() {
@@ -219,15 +217,14 @@ pub async fn build_goal_context_prompt(goal: &Goal, evidence_limit: usize) -> Re
     }
 
     // Constraints
-    if let Ok(constraints) = serde_json::from_str::<Vec<String>>(&goal.constraints) {
-        if !constraints.is_empty() {
+    if let Ok(constraints) = serde_json::from_str::<Vec<String>>(&goal.constraints)
+        && !constraints.is_empty() {
             prompt.push_str("Constraints & Guardrails:\n");
             for c in &constraints {
                 prompt.push_str(&format!("  - {}\n", c));
             }
             prompt.push('\n');
         }
-    }
 
     // Active Evidence Cache (only fresh & active evidence)
     let active_evidences = repository::get_active_evidences_for_goal(&goal.id).await?;
@@ -258,14 +255,13 @@ pub async fn build_goal_context_prompt(goal: &Goal, evidence_limit: usize) -> Re
                 ev.file_path, line_range, symbol, ev.file_version, ev.summary
             ));
 
-            if let Some(ref snippet) = ev.raw_snippet {
-                if !snippet.trim().is_empty() {
+            if let Some(ref snippet) = ev.raw_snippet
+                && !snippet.trim().is_empty() {
                     prompt.push_str("  Snippet:\n```\n");
                     let short_snippet: String = snippet.lines().take(12).collect::<Vec<_>>().join("\n");
                     prompt.push_str(short_snippet.trim());
                     prompt.push_str("\n```\n");
                 }
-            }
             prompt.push('\n');
         }
     } else {

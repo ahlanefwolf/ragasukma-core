@@ -142,11 +142,10 @@ pub fn refresh_account_token(
     let now = current_timestamp_secs();
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(300);
-    if let Some(new_refresh) = token_data.refresh_token {
-        if !new_refresh.is_empty() {
+    if let Some(new_refresh) = token_data.refresh_token
+        && !new_refresh.is_empty() {
             account.refresh_token = new_refresh;
         }
-    }
     account.consecutive_errors = 0;
     Ok(token_data.access_token)
 }
@@ -155,11 +154,10 @@ pub fn ensure_project_id(
     client: &reqwest::blocking::Client,
     account: &mut AntigravityAccount,
 ) -> Result<String> {
-    if let Some(ref pid) = account.project_id {
-        if !pid.trim().is_empty() {
+    if let Some(ref pid) = account.project_id
+        && !pid.trim().is_empty() {
             return Ok(pid.clone());
         }
-    }
 
     let access_token = match account.access_token.as_deref() {
         Some(tok) => tok.to_string(),
@@ -185,9 +183,9 @@ pub fn ensure_project_id(
         .json(&body)
         .send();
 
-    if let Ok(response) = res {
-        if response.status().is_success() {
-            if let Ok(val) = response.json::<serde_json::Value>() {
+    if let Ok(response) = res
+        && response.status().is_success()
+            && let Ok(val) = response.json::<serde_json::Value>() {
                 let project_id = val
                     .pointer("/cloudaicompanionProject/id")
                     .or_else(|| val.pointer("/cloudaicompanionProject"))
@@ -201,12 +199,10 @@ pub fn ensure_project_id(
                         if t.get("isDefault")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false)
-                        {
-                            if let Some(tid) = t.get("id").and_then(|v| v.as_str()) {
+                            && let Some(tid) = t.get("id").and_then(|v| v.as_str()) {
                                 default_tier = tid.to_string();
                                 break;
                             }
-                        }
                     }
                 }
 
@@ -228,8 +224,6 @@ pub fn ensure_project_id(
 
                 return Ok(project_id);
             }
-        }
-    }
 
     let fallback_pid = format!("project-{}", &generate_pseudo_uuid("p")[..16]);
     account.project_id = Some(fallback_pid.clone());
