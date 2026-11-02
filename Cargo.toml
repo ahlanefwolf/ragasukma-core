@@ -2,9 +2,11 @@
 name = "ragasukma-core"
 version = "0.2.0"
 edition = "2021"
-authors = ["Ahlan <ahlan@ragasukma.ai>"]
-description = "Core autonomous agent, tools, and multi-provider LLM engine for Ragasukma"
-license = "MIT OR Apache-2.0"
+authors = ["Ahlan Saputra <hlnsptr@gmail.com>"]
+description = "Headless autonomous agent runtime, tool registry, and multi-provider LLM engine for Ragasukma"
+license = "MIT"
+repository = "https://github.com/ahlanefwolf/ragasukma-core"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
