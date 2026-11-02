@@ -269,7 +269,8 @@ pub fn log_conversation_turn(
     let _ = CHAT_EVENT_SENDER.send(user_turn);
     let _ = CHAT_EVENT_SENDER.send(assistant_turn);
 
-    tokio::spawn(async move {
+    let handle = tokio::runtime::Handle::try_current().ok();
+    let save_fut = async move {
         let pool = crate::llm::usage::get_pool().await;
         let _ = sqlx::query(
             r#"
@@ -289,7 +290,20 @@ pub fn log_conversation_turn(
         .bind(&rec.assistant_msg)
         .execute(pool)
         .await;
-    });
+    };
+
+    if let Some(h) = handle {
+        h.spawn(save_fut);
+    } else {
+        std::thread::spawn(move || {
+            if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                rt.block_on(save_fut);
+            }
+        });
+    }
     crate::term_log!("[History] Saved chat turn ({date_str} {time_str}) to SQLite");
 }
 

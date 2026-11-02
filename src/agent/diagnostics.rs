@@ -43,16 +43,15 @@ pub fn get_session_diagnostic_queue(session_id: &str) -> Option<SessionDiagnosti
 pub fn mark_diagnostic_file_resolved(session_id: &str, file_path: &str) -> (usize, usize) {
     if let Ok(mut lock) = get_diagnostic_store().write() {
         if let Some(queue) = lock.get_mut(session_id) {
-            let norm_target = file_path.trim_start_matches("./");
+            let norm_target = file_path.replace('\\', "/").trim_start_matches("./").to_string();
             for item in &mut queue.items {
-                let norm_item = item.file_path.trim_start_matches("./");
-                if norm_item == norm_target || norm_target.ends_with(norm_item) || norm_item.ends_with(norm_target) {
+                let norm_item = item.file_path.replace('\\', "/").trim_start_matches("./").to_string();
+                if norm_item == norm_target || norm_target.ends_with(&norm_item) || norm_item.ends_with(&norm_target) {
                     item.resolved = true;
                 }
             }
             let remaining = queue.items.iter().filter(|i| !i.resolved).count();
-            let total = queue.items.len();
-            return (remaining, total);
+            return (remaining, queue.items.len());
         }
     }
     (0, 0)

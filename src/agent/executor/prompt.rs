@@ -50,6 +50,12 @@ fn build_static_prompt(
     let shell_desc = "Linux POSIX Shell (login shell with enriched PATH). Use standard Unix/Linux shell syntax.";
 
     #[cfg(target_os = "windows")]
+    let python_desc = "Python: `python` (preferred on Windows) or `python3` / `py -3`";
+
+    #[cfg(not(target_os = "windows"))]
+    let python_desc = "Python: `python3`";
+
+    #[cfg(target_os = "windows")]
     let multiple_cmd_hint = "When running sequential terminal commands, combine them into a single execution to save turn latency: use ';' (e.g. `cmd1 ; cmd2`) on Windows PowerShell instead of '&&'.";
 
     #[cfg(not(target_os = "windows"))]
@@ -65,7 +71,7 @@ fn build_static_prompt(
          You understand, write, refactor, inspect, test, and analyze any software project, regardless of programming language, framework, or architecture.\n\
          </role>\n\n\
          <environment>\n\
-         OS: {} ({}) | Shell: {}\n\
+         OS: {} ({}) | Shell: {} | {}\n\
          Default workspace verification: `{}`\n\
          Turn budget: at most {} tool executions per request; you are warned before it runs out, so do not stop early out of caution.\n\
          Tools available: `workspace_read_file`, `workspace_write_file`, `workspace_edit_file`, `workspace_grep`, `workspace_list_dir`, `workspace_run_command`.\n\
@@ -78,7 +84,7 @@ fn build_static_prompt(
             - Apply complete and cohesive updates. Avoid incomplete placeholders, fake mocks, or non-functional stubs.\n\
             - For surgical or targeted modifications of existing files, use `workspace_edit_file`. Provide matching `old_text` with 1-2 lines of context and `new_text`.\n\
             - For creating new files or full rewrites of small-to-medium files, use `workspace_write_file`.\n\
-            - Python 3 inline scripts via `workspace_run_command` can also be used if dynamic transformations or complex migrations are needed.\n\
+            - Python inline scripts (using python on Windows or python3 on Unix) via `workspace_run_command` can also be used if dynamic transformations or complex migrations are needed.\n\
          3. EFFICIENCY & PRAGMATISM (On-Demand & Targeted Slices):\n\
             - When inspecting large files, use `workspace_read_file` with `start_line` and `end_line` around the target function/area rather than reading the entire file. For big files (>250 lines), a structural outline is provided automatically.\n\
             - Directory listing via `workspace_list_dir` is shallow (depth 1) by default and shows subfolder item counts so you can navigate targeted subfolders without recursive dumps.\n\
@@ -98,7 +104,7 @@ fn build_static_prompt(
             - Never mark a checklist item as completed `[x]` or claim a feature is implemented without physically verifying that every requested file was actually created and non-empty (via `workspace_list_dir` or `workspace_read_file`) and that required exports/logic exist.\n\
             - Never edit a task or checklist file to check off `[x]` items before all underlying code files, services, and tests have been written and verified on disk.\n\
          </core-guidelines>\n\n",
-        os_name, arch_name, shell_desc, verifier_hint, max_iterations, multiple_cmd_hint
+        os_name, arch_name, shell_desc, python_desc, verifier_hint, max_iterations, multiple_cmd_hint
     );
 
     if !allowed_folders.is_empty() {
@@ -148,7 +154,7 @@ fn build_static_prompt(
         "2. DEDICATED STRUCTURED TOOLS: Use `workspace_edit_file`, `workspace_write_file`, `workspace_read_file` and `workspace_grep` for workspace code changes and inspections. Do not rewrite source files via shell heredocs or Python one-liners.\n\
          3. VENDOR/DEPENDENCY INTEGRITY: NEVER edit vendor dependencies inside `node_modules/`, `.git/`, or library internals. Apply all fixes to your own project source files.\n\
          4. DISCOVERY DISCIPLINE: Investigate only what the task needs. Read the relevant file, understand it, then act. Do not wander across unrelated files; if an investigation is getting large, say what you found so far and what you still need.\n\
-         5. PYTHON 3 DATA AUTOMATION: Python 3 is available for non-file operations (API requests, regex parsing, sqlite queries, data conversion) when no dedicated tool covers the need.\n\
+         5. PYTHON DATA AUTOMATION: Python (`python` on Windows, `python3` on Unix/macOS) is available for non-file operations (API requests, regex parsing, sqlite queries, data conversion) when no dedicated tool covers the need.\n\
          6. WORKSPACE EXECUTION: Use `workspace_run_command` for builds, tests, package managers and git operations.\n",
     );
 
