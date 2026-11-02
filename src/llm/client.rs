@@ -1,4 +1,3 @@
-use super::cleaner::clean_ai_text;
 use super::providers::antigravity::AntigravityProvider;
 use super::providers::claude::ClaudeProvider;
 use super::providers::codex::CodexProvider;
@@ -148,8 +147,7 @@ impl LlmClient {
             ) {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let clean = clean_ai_text(&reply);
-                    let out_tokens = (clean.len() / 4).max(1);
+                    let out_tokens = (reply.len() / 4).max(1);
                     crate::llm::usage::record_usage(
                         "claude",
                         &self.model,
@@ -162,7 +160,7 @@ impl LlmClient {
 
                     self.history.push(ChatMessage {
                         role: "assistant".to_string(),
-                        content: clean.clone(),
+                        content: reply.clone(),
                     });
                     self.prune_history();
 
@@ -172,7 +170,7 @@ impl LlmClient {
                         &u.assistant_name,
                         &u.personality_role,
                         input_text,
-                        &clean,
+                        &reply,
                     );
                     return Ok(reply);
                 }
@@ -206,8 +204,7 @@ impl LlmClient {
             ) {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
-                    let clean = clean_ai_text(&reply);
-                    let out_tokens = (clean.len() / 4).max(1);
+                    let out_tokens = (reply.len() / 4).max(1);
                     crate::llm::usage::record_usage(
                         "codex",
                         &self.model,
@@ -220,7 +217,7 @@ impl LlmClient {
 
                     self.history.push(ChatMessage {
                         role: "assistant".to_string(),
-                        content: clean.clone(),
+                        content: reply.clone(),
                     });
                     self.prune_history();
 
@@ -230,7 +227,7 @@ impl LlmClient {
                         &u.assistant_name,
                         &u.personality_role,
                         input_text,
-                        &clean,
+                        &reply,
                     );
                     return Ok(reply);
                 }
@@ -268,8 +265,7 @@ impl LlmClient {
                 ) {
                     Ok(reply) => {
                         let duration_ms = start_time.elapsed().as_millis() as u64;
-                        let clean = clean_ai_text(&reply);
-                        let out_tokens = (clean.len() / 4).max(1);
+                        let out_tokens = (reply.len() / 4).max(1);
                         crate::llm::usage::record_usage(
                             "antigravity",
                             &ag_model,
@@ -282,7 +278,7 @@ impl LlmClient {
 
                         self.history.push(ChatMessage {
                             role: "assistant".to_string(),
-                            content: clean.clone(),
+                            content: reply.clone(),
                         });
                         self.prune_history();
 
@@ -292,9 +288,8 @@ impl LlmClient {
                             &u.assistant_name,
                             &u.personality_role,
                             input_text,
-                            &clean,
+                            &reply,
                         );
-
                         return Ok(reply);
                     }
                     Err(e) => {
@@ -330,8 +325,7 @@ impl LlmClient {
         ) {
             Ok(reply) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
-                let clean = clean_ai_text(&reply);
-                let out_tokens = (clean.len() / 4).max(1);
+                let out_tokens = (reply.len() / 4).max(1);
                 crate::llm::usage::record_usage(
                     "custom",
                     &self.model,
@@ -344,7 +338,7 @@ impl LlmClient {
 
                 self.history.push(ChatMessage {
                     role: "assistant".to_string(),
-                    content: clean.clone(),
+                    content: reply.clone(),
                 });
                 self.prune_history();
 
@@ -354,9 +348,8 @@ impl LlmClient {
                     &u.assistant_name,
                     &u.personality_role,
                     input_text,
-                    &clean,
+                    &reply,
                 );
-
                 Ok(reply)
             }
             Err(e) => {

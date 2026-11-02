@@ -299,7 +299,7 @@ impl CustomProvider {
                                 let sentence = current_sentence[..=end_pos].to_string();
                                 current_sentence = current_sentence[end_pos + 1..].to_string();
 
-                                let clean = crate::llm::cleaner::clean_ai_text(&sentence);
+                                let clean = sentence.trim().to_string();
                                 if !clean.is_empty() {
                                     on_sentence(&clean, active_emotion)?;
                                 }
@@ -310,7 +310,7 @@ impl CustomProvider {
             }
         }
 
-        let clean_rest = crate::llm::cleaner::clean_ai_text(&current_sentence);
+        let clean_rest = current_sentence.trim().to_string();
         if !clean_rest.is_empty() {
             on_sentence(&clean_rest, active_emotion)?;
         }
