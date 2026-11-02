@@ -168,12 +168,15 @@ pub fn get_app_cache_dir() -> PathBuf {
 
 pub fn load_user_config() -> UserConfig {
     let config_dir = get_app_config_dir();
-    let config_path = config_dir.join("config.json");
-
-    if config_path.exists() {
-        if let Ok(content) = fs::read_to_string(&config_path) {
-            if let Ok(cfg) = serde_json::from_str::<UserConfig>(&content) {
-                return cfg;
+    
+    // Check config-ai.json first (used by voice assistant/web UI), then config.json
+    for filename in &["config-ai.json", "config.json"] {
+        let config_path = config_dir.join(filename);
+        if config_path.exists() {
+            if let Ok(content) = fs::read_to_string(&config_path) {
+                if let Ok(cfg) = serde_json::from_str::<UserConfig>(&content) {
+                    return cfg;
+                }
             }
         }
     }
