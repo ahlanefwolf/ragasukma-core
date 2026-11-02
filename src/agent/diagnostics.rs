@@ -20,9 +20,25 @@ fn get_diagnostic_store() -> &'static std::sync::RwLock<std::collections::HashMa
     SESSION_DIAGNOSTIC_STORE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
 }
 
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    let mut chars = s.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        s.to_string()
+    }
+}
+
 /// Stores or replaces the diagnostic queue for a specific task session in RAM.
 pub fn set_session_diagnostic_queue(session_id: &str, items: Vec<DiagnosticTaskItem>, compile_cmd: Option<String>) {
     if let Ok(mut lock) = get_diagnostic_store().write() {
+        // Prevent unbounded memory growth if sessions disconnect abruptly without clean reset
+        if lock.len() >= 64 && !lock.contains_key(session_id) {
+            if let Some(oldest_key) = lock.keys().next().cloned() {
+                lock.remove(&oldest_key);
+            }
+        }
         lock.insert(session_id.to_string(), SessionDiagnosticQueue {
             items,
             pending_compile_cmd: compile_cmd,
@@ -81,11 +97,7 @@ pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskIte
         if let Some((fpath, line_no)) = parse_compiler_diagnostic_line(trimmed) {
             let lower = trimmed.to_lowercase();
             let is_warning = lower.contains("warning:") && !lower.contains("error");
-            let msg = if trimmed.len() > 160 {
-                format!("{}...", &trimmed[..157])
-            } else {
-                trimmed.to_string()
-            };
+            let msg = truncate_with_ellipsis(trimmed, 157);
 
             if is_warning {
                 let entry = file_warnings.entry(fpath.clone()).or_insert_with(|| {
@@ -251,7 +263,7 @@ pub fn group_diagnostics_by_file(output: &str) -> (Vec<GroupedFileDiagnostic>, V
                 }
             let lower = trimmed.to_lowercase();
             if entry.2.len() < 3 && (lower.contains("error") || lower.contains("fail") || trimmed.contains("error[") || lower.contains("warning") || lower.contains("exception")) {
-                let sample = if trimmed.len() > 120 { format!("{}...", &trimmed[..117]) } else { trimmed.to_string() };
+                let sample = truncate_with_ellipsis(trimmed, 117);
                 entry.2.push(sample);
             }
         } else {
@@ -333,11 +345,7 @@ pub fn extract_command_diagnostics(output: &str) -> Vec<String> {
 
         if is_diag_line || is_generic_error {
             // Normalize and deduplicate
-            let diag_entry = if trimmed.len() > 160 {
-                format!("{}...", &trimmed[..157])
-            } else {
-                trimmed.to_string()
-            };
+            let diag_entry = truncate_with_ellipsis(trimmed, 157);
 
             if seen.insert(diag_entry.clone()) {
                 diagnostics.push(diag_entry);
@@ -596,5 +604,17 @@ Random console log line with no errors
         assert!(diags.iter().any(|d| d.contains("lib/auth.dart:22:9")));
         assert!(diags.iter().any(|d| d.contains("Panic: runtime error")));
         assert!(!diags.iter().any(|d| d.contains("Random console log line")));
+    }
+
+    #[test]
+    fn test_multibyte_emoji_truncation_does_not_panic() {
+        // String where 117th byte boundary falls inside a 4-byte emoji (like ❌)
+        let prefix = "a".repeat(115);
+        let error_line = format!("src/main.rs:10:5: error: {}❌ extra long error line exceeding max truncation limits", prefix);
+        let (grouped, _general) = group_diagnostics_by_file(&error_line);
+        assert!(!grouped.is_empty());
+
+        let diags = extract_command_diagnostics(&error_line);
+        assert!(!diags.is_empty());
     }
 }

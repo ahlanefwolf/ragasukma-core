@@ -275,8 +275,10 @@ fn extract_first_paragraph(body: &str) -> String {
             }
         }
     }
-    if paragraph.len() > 160 {
-        format!("{}...", &paragraph[..157])
+    let mut chars = paragraph.chars();
+    let truncated: String = chars.by_ref().take(157).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
     } else {
         paragraph
     }

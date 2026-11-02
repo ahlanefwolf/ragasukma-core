@@ -148,11 +148,13 @@ pub fn find_python_bin() -> Option<PathBuf> {
 
 /// Query Python status and installed version if available.
 pub fn get_python_info() -> PythonInfo {
-    let state_lock = PYTHON_STATE.lock().unwrap_or_else(|e| e.into_inner());
-    let (is_installing, last_error) = if let Some(ref st) = *state_lock {
-        (st.is_installing, st.last_error.clone())
-    } else {
-        (false, None)
+    let (is_installing, last_error) = {
+        let state_lock = PYTHON_STATE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref st) = *state_lock {
+            (st.is_installing, st.last_error.clone())
+        } else {
+            (false, None)
+        }
     };
 
     let py_path = find_python_bin();
