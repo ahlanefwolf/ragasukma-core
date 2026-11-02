@@ -1,0 +1,27 @@
+[package]
+name = "ragasukma-core"
+version = "0.2.0"
+edition = "2021"
+authors = ["Ahlan <ahlan@ragasukma.ai>"]
+description = "Core autonomous agent, tools, and multi-provider LLM engine for Ragasukma"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "blocking", "multipart"] }
+anyhow = "1.0"
+async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+async-stream = "0.3"
+form_urlencoded = "1.0"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
+libc = "0.2"
+regex = "1.10"
+sha2 = "0.10"
+base64 = "0.22"
+ignore = "0.4"
+
+[dev-dependencies]
+tempfile = "3.10"
