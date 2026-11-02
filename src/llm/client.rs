@@ -3,7 +3,7 @@ use super::providers::claude::ClaudeProvider;
 use super::providers::codex::CodexProvider;
 use super::providers::custom::CustomProvider;
 use super::types::{ChatMessage, ChatRequest};
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 pub struct LlmClient {
     pub model: String,
@@ -81,23 +81,23 @@ impl LlmClient {
         }
     }
 
-    pub fn chat_stream<F>(&mut self, user_input: &str, on_sentence: F) -> Result<String>
+    pub fn chat_stream<F>(&mut self, user_input: &str, on_delta: F) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
-        self.chat_stream_with_role("user", user_input, on_sentence)
+        self.chat_stream_with_role("user", user_input, on_delta)
     }
 
     pub fn chat_stream_with_role<F>(
         &mut self,
         role: &str,
         input_text: &str,
-        on_sentence: F,
+        on_delta: F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
-        self.chat_stream_with_role_and_prompt(role, input_text, None, on_sentence)
+        self.chat_stream_with_role_and_prompt(role, input_text, None, on_delta)
     }
 
     pub fn chat_stream_with_role_and_prompt<F>(
@@ -105,10 +105,10 @@ impl LlmClient {
         role: &str,
         input_text: &str,
         custom_system_prompt: Option<&str>,
-        mut on_sentence: F,
+        mut on_delta: F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         if input_text.trim().is_empty() {
             return Ok(String::new());
@@ -143,7 +143,7 @@ impl LlmClient {
                 &self.history,
                 0.7,
                 8192,
-                &mut on_sentence,
+                &mut on_delta,
             ) {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -200,7 +200,7 @@ impl LlmClient {
                 &self.history,
                 0.7,
                 8192,
-                &mut on_sentence,
+                &mut on_delta,
             ) {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -261,7 +261,7 @@ impl LlmClient {
                     &self.history,
                     0.7,
                     8192,
-                    &mut on_sentence,
+                    &mut on_delta,
                 ) {
                     Ok(reply) => {
                         let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -321,7 +321,7 @@ impl LlmClient {
             &self.history,
             0.7,
             8192,
-            &mut on_sentence,
+            &mut on_delta,
         ) {
             Ok(reply) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -350,7 +350,7 @@ impl LlmClient {
                     input_text,
                     &reply,
                 );
-                Ok(reply)
+                return Ok(reply);
             }
             Err(e) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
@@ -363,10 +363,11 @@ impl LlmClient {
                     duration_ms,
                     "error",
                 );
-                crate::term_err!("[Custom LLM Error]: {}", e);
-                Err(e)
+                crate::term_err!("[LLM Client] Custom provider error: {e}");
             }
         }
+
+        bail!("Selected model '{}' is not supported or misconfigured.", self.model);
     }
 
     /// Complete a prompt or message sequence silently without triggering audio playback or modifying chat history.
@@ -377,7 +378,7 @@ impl LlmClient {
 
         let is_claude_engine = self.model.starts_with("cc/");
         if is_claude_engine && !self.claude.accounts.is_empty() {
-            let mut dummy_cb = |_text: &str, _emo: &str| -> Result<()> { Ok(()) };
+            let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
             if let Ok(reply) = self.claude.chat_stream(
                 &self.model,
                 messages,
@@ -391,7 +392,7 @@ impl LlmClient {
 
         let is_codex_engine = self.model.starts_with("cx/");
         if is_codex_engine && !self.codex.accounts.is_empty() {
-            let mut dummy_cb = |_text: &str, _emo: &str| -> Result<()> { Ok(()) };
+            let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
             if let Ok(reply) = self.codex.chat_stream(
                 &self.model,
                 messages,
@@ -407,7 +408,7 @@ impl LlmClient {
         if is_antigravity_model && !self.antigravity.accounts.is_empty() {
             let raw_model = self.model.strip_prefix("ag/").unwrap_or(&self.model);
             let ag_model = crate::llm::providers::antigravity::v1_adapter::resolve_model_alias(raw_model);
-            let mut dummy_cb = |_text: &str, _emo: &str| -> Result<()> { Ok(()) };
+            let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
             if let Ok(reply) = self.antigravity.chat_stream(
                 &ag_model,
                 messages,

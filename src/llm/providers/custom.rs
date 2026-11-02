@@ -175,10 +175,10 @@ impl CustomProvider {
         messages: &[crate::llm::types::ChatMessage],
         temperature: f32,
         max_tokens: u32,
-        mut on_sentence: F,
+        mut on_delta: F,
     ) -> anyhow::Result<String>
     where
-        F: FnMut(&str, &str) -> anyhow::Result<()>,
+        F: FnMut(&str) -> anyhow::Result<()>,
     {
         use std::io::BufRead;
 
@@ -198,52 +198,42 @@ impl CustomProvider {
                 }
             })
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No enabled custom LLM account found matching prefix for model '{}'",
-                    model
-                )
+                anyhow::anyhow!("No enabled custom provider found matching model prefix for '{model}'")
             })?;
 
-        let base = account.base_url.trim().trim_end_matches('/');
-        let url = if base.ends_with("/chat/completions") {
-            base.to_string()
-        } else if base.ends_with("/v1") {
-            format!("{base}/chat/completions")
-        } else {
-            format!("{base}/v1/chat/completions")
-        };
+        let endpoint = format!("{}/chat/completions", account.base_url.trim_end_matches('/'));
+        let payload = serde_json::json!({
+            "model": stripped_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": true,
+        });
 
-        let req_body = crate::llm::types::ChatRequest {
-            model: stripped_model,
-            messages: messages.to_vec(),
-            temperature,
-            max_tokens,
-            stream: true,
-            response_format: None,
-        };
-
-        let mut request = self
+        let mut req = self
             .client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&req_body);
+            .post(&endpoint)
+            .header("Content-Type", "application/json");
 
-        let api_key = account.api_key.trim();
-        if !api_key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", api_key));
+        if !account.api_key.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", account.api_key.trim()));
         }
 
-        let resp = request.send()?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_text = resp.text().unwrap_or_default();
-            anyhow::bail!("Custom LLM HTTP error {}: {}", status, err_text);
+        let resp = req
+            .json(&payload)
+            .send()
+            .map_err(|e| anyhow::anyhow!("Custom provider request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Custom provider returned error {status}: {body}"
+            ));
         }
 
         let reader = std::io::BufReader::new(resp);
         let mut full_reply = String::new();
-        let mut current_sentence = String::new();
-        let active_emotion = "neutral";
 
         for line in reader.lines() {
             let line = line?;
@@ -268,51 +258,10 @@ impl CustomProvider {
                             continue;
                         }
                         full_reply.push_str(delta);
-                        current_sentence.push_str(delta);
-
-                        let has_skill_tag = current_sentence.contains("[SKILL:")
-                            || current_sentence.contains("[CMD:");
-                        let has_skill_closed =
-                            has_skill_tag && current_sentence.contains(']');
-
-                        if !has_skill_tag || has_skill_closed {
-                            while let Some(pos) = current_sentence.find(['.', '?', '!', '\n']) {
-                                if let Some(tag_idx) = current_sentence
-                                    .find("[SKILL:")
-                                    .or_else(|| current_sentence.find("[CMD:"))
-                                {
-                                    if pos > tag_idx {
-                                        break;
-                                    }
-                                }
-
-                                // Do not break in the middle of ellipses (... or ..)
-                                let mut end_pos = pos;
-                                if current_sentence.as_bytes().get(pos) == Some(&b'.') {
-                                    while end_pos + 1 < current_sentence.len()
-                                        && current_sentence.as_bytes().get(end_pos + 1) == Some(&b'.')
-                                    {
-                                        end_pos += 1;
-                                    }
-                                }
-
-                                let sentence = current_sentence[..=end_pos].to_string();
-                                current_sentence = current_sentence[end_pos + 1..].to_string();
-
-                                let clean = sentence.trim().to_string();
-                                if !clean.is_empty() {
-                                    on_sentence(&clean, active_emotion)?;
-                                }
-                            }
-                        }
+                        on_delta(delta)?;
                     }
                 }
             }
-        }
-
-        let clean_rest = current_sentence.trim().to_string();
-        if !clean_rest.is_empty() {
-            on_sentence(&clean_rest, active_emotion)?;
         }
 
         Ok(full_reply)

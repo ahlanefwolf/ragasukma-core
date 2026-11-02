@@ -390,10 +390,10 @@ impl AntigravityProvider {
         messages: &[ChatMessage],
         temperature: f32,
         max_tokens: u32,
-        mut on_sentence: F,
+        mut on_delta: F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         if self.accounts.is_empty() {
             bail!("Antigravity has no configured accounts. Please add an account first.");
@@ -404,28 +404,17 @@ impl AntigravityProvider {
         let now = current_timestamp_secs();
 
         while attempts < total_accounts {
+            attempts += 1;
             let acc_idx = match self.select_available_account_index(Some(model)) {
                 Some(idx) => idx,
                 None => {
-                    let min_wait = self
-                        .accounts
-                        .iter()
-                        .filter(|a| a.is_active)
-                        .filter_map(|a| a.min_rate_limit_wait(Some(model), now))
-                        .min()
-                        .unwrap_or(60);
                     bail!(
-                        "All Antigravity accounts are rate-limited or inactive for model '{}'. Please wait {} seconds.",
-                        model,
-                        min_wait
+                        "Antigravity: All accounts are rate-limited or unavailable for model '{}'.",
+                        model
                     );
                 }
             };
 
-            self.current_index = (acc_idx + 1) % total_accounts;
-            attempts += 1;
-
-            let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[acc_idx];
                 acc.access_token.is_none() || acc.expires_at <= now
@@ -460,7 +449,7 @@ impl AntigravityProvider {
                 messages,
                 temperature,
                 max_tokens,
-                &mut on_sentence,
+                &mut on_delta,
             );
 
             match result {
@@ -515,10 +504,10 @@ impl AntigravityProvider {
         messages: &[ChatMessage],
         temperature: f32,
         max_tokens: u32,
-        on_sentence: &mut F,
+        on_delta: &mut F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         let endpoint = format!(
             "{}/v1internal:streamGenerateContent?alt=sse",
@@ -592,8 +581,6 @@ impl AntigravityProvider {
 
         let reader = std::io::BufReader::new(response);
         let mut full_reply = String::new();
-        let mut current_sentence = String::new();
-        let active_emotion = "neutral";
 
         for line in reader.lines() {
             let line = line?;
@@ -624,46 +611,7 @@ impl AntigravityProvider {
 
                                     if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                         full_reply.push_str(text);
-                                        current_sentence.push_str(text);
-
-                                        let has_skill_tag = current_sentence.contains("[SKILL:")
-                                            || current_sentence.contains("[CMD:");
-                                        let has_skill_closed =
-                                            has_skill_tag && current_sentence.contains(']');
-
-                                        if !has_skill_tag || has_skill_closed {
-                                            while let Some(pos) =
-                                                current_sentence.find(['.', '?', '!', '\n'])
-                                            {
-                                                if let Some(tag_idx) = current_sentence
-                                                    .find("[SKILL:")
-                                                    .or_else(|| current_sentence.find("[CMD:"))
-                                                {
-                                                    if pos > tag_idx {
-                                                        break;
-                                                    }
-                                                }
-
-                                                // Do not break in the middle of ellipses (... or ..)
-                                                let mut end_pos = pos;
-                                                if current_sentence.as_bytes().get(pos) == Some(&b'.') {
-                                                    while end_pos + 1 < current_sentence.len()
-                                                        && current_sentence.as_bytes().get(end_pos + 1) == Some(&b'.')
-                                                    {
-                                                        end_pos += 1;
-                                                    }
-                                                }
-
-                                                let sentence = current_sentence[..=end_pos].to_string();
-                                                current_sentence =
-                                                    current_sentence[end_pos + 1..].to_string();
-
-                                                let clean = sentence.trim().to_string();
-                                                if !clean.is_empty() {
-                                                    on_sentence(&clean, active_emotion)?;
-                                                }
-                                            }
-                                        }
+                                        on_delta(text)?;
                                     }
                                 }
                             }
@@ -671,11 +619,6 @@ impl AntigravityProvider {
                     }
                 }
             }
-        }
-
-        let clean_rest = current_sentence.trim().to_string();
-        if !clean_rest.is_empty() {
-            on_sentence(&clean_rest, active_emotion)?;
         }
 
         Ok(full_reply)

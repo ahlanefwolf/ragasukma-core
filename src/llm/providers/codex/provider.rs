@@ -452,10 +452,10 @@ impl CodexProvider {
         messages: &[ChatMessage],
         temperature: f32,
         max_tokens: u32,
-        mut on_sentence: F,
+        mut on_delta: F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         if self.accounts.is_empty() {
             bail!("Codex has no configured accounts. Please add an OpenAI Codex account first.");
@@ -513,7 +513,7 @@ impl CodexProvider {
 
             let payload = build_codex_payload_from_messages(model, messages, temperature, max_tokens);
 
-            match self.execute_codex_stream(&access_token, chatgpt_account_id.as_deref(), &payload, &mut on_sentence) {
+            match self.execute_codex_stream(&access_token, chatgpt_account_id.as_deref(), &payload, &mut on_delta) {
                 Ok(full_reply) => {
                     self.accounts[acc_idx].consecutive_errors = 0;
                     let _ = self.save_accounts();
@@ -797,47 +797,18 @@ impl CodexProvider {
         access_token: &str,
         chatgpt_account_id: Option<&str>,
         payload: &serde_json::Value,
-        on_sentence: &mut F,
+        on_delta: &mut F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
-        let mut current_sentence = String::new();
-        let active_emotion = "neutral";
-
         let mut full_reply = String::new();
 
         self.execute_codex_stream_internal(access_token, chatgpt_account_id, payload, |delta| {
             full_reply.push_str(delta);
-            current_sentence.push_str(delta);
-
-            let has_cmd_tag = current_sentence.contains("[CMD:") || current_sentence.contains("[SKILL:");
-            let has_cmd_closed = has_cmd_tag && current_sentence.contains(']');
-
-            if !has_cmd_tag || has_cmd_closed {
-                while let Some(pos) = current_sentence.find(['.', '?', '!', '\n']) {
-                    if let Some(cmd_idx) = current_sentence.find("[CMD:").or_else(|| current_sentence.find("[SKILL:")) {
-                        if pos > cmd_idx {
-                            break;
-                        }
-                    }
-
-                    let sentence = current_sentence[..=pos].to_string();
-                    current_sentence = current_sentence[pos + 1..].to_string();
-
-                    let clean = sentence.trim().to_string();
-                    if !clean.is_empty() {
-                        on_sentence(&clean, active_emotion)?;
-                    }
-                }
-            }
+            on_delta(delta)?;
             Ok(())
         })?;
-
-        let clean_rest = current_sentence.trim().to_string();
-        if !clean_rest.is_empty() {
-            on_sentence(&clean_rest, active_emotion)?;
-        }
 
         Ok(full_reply)
     }

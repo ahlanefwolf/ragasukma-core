@@ -369,7 +369,7 @@ impl ClaudeProvider {
         mut on_delta: F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         let total = self.accounts.len();
         if total == 0 {
@@ -602,13 +602,13 @@ impl ClaudeProvider {
         on_delta: &mut F,
     ) -> Result<String>
     where
-        F: FnMut(&str, &str) -> Result<()>,
+        F: FnMut(&str) -> Result<()>,
     {
         let mut full_text = String::new();
         let mut v1_handler = |event| -> Result<()> {
             if let crate::llm::v1_engine::V1StreamEvent::ContentDelta(delta) = event {
                 full_text.push_str(&delta);
-                on_delta(&delta, "")?;
+                on_delta(&delta)?;
             }
             Ok(())
         };
