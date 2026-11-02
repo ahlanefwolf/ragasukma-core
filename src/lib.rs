@@ -22,6 +22,7 @@ pub mod agent;
 pub mod assets;
 pub mod config;
 pub mod llm;
+pub mod repository;
 
 #[cfg(test)]
 mod tests {
