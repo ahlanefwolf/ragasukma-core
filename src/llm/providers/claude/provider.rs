@@ -45,10 +45,15 @@ impl ClaudeProvider {
     }
 
     pub fn new() -> Self {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .unwrap_or_default();
+        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+        let client = SHARED_CLIENT
+            .get_or_init(|| {
+                reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(60))
+                    .build()
+                    .unwrap_or_default()
+            })
+            .clone();
         Self::new_with_client(client)
     }
 
