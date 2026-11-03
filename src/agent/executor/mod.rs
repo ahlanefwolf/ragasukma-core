@@ -140,7 +140,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         // Check if session was stopped or aborted externally
         if let Ok(Some(status)) = repository::get_session_status(session_id).await
             && status != "running" {
-                println!("[Agent] Session {} status changed to '{}', breaking iteration loop.", session_id, status);
+                tracing::info!("[Agent] Session {} status changed to '{}', breaking iteration loop.", session_id, status);
                 break;
             }
 
@@ -196,7 +196,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
 
                     if is_transient_glitch && retry_count < max_stream_retries {
                         retry_count += 1;
-                        eprintln!(
+                        tracing::warn!(
                             "[Agent Stream Retry] Transient error on iteration {}: {}. Retrying attempt {}/{}...",
                             state.iteration, err_str, retry_count, max_stream_retries
                         );
@@ -266,7 +266,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
             if !tool_calls.is_empty() {
                 // Enforce strictly 1 tool call per turn to guarantee stability and prevent empty argument errors
                 if tool_calls.len() > 1 {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Turn] Model returned {} parallel tool calls; enforcing single tool invocation",
                         tool_calls.len()
                     );
@@ -296,7 +296,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                 // the conversation history and makes the model repeat the same mistake.
                 let blank_calls = tool_calls.iter().filter(|tc| tc.function.name.trim().is_empty()).count();
                 if blank_calls > 0 {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Turn] Dropped {} tool call(s) with an empty name on iteration {}",
                         blank_calls, state.iteration
                     );
@@ -348,7 +348,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                 // Circuit breaker: if the tool surface keeps failing in exactly the same
                 // way, stop burning the iteration budget and force a final answer.
                 if state.repeated_tool_error_count >= 5 {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Circuit Breaker] Repeated tool failure x{} on iteration {}: {:?}",
                         state.repeated_tool_error_count,
                         state.iteration,
@@ -358,7 +358,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                         "CIRCUIT BREAKER: the same tool failure repeated 5 times. Tools are now closed for this turn. Explain to the user what facts you already established, what blocked you, and what they should check.",
                     );
                 } else if state.consecutive_tool_errors >= 8 {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Circuit Breaker] {} consecutive tool errors on iteration {}",
                         state.consecutive_tool_errors, state.iteration
                     );
@@ -419,7 +419,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
             // Real work happened. `conclude_after_work` prefers a verified completion and only
             // labels the goal unverified when no passing verification exists.
             if let Err(e) = orch.conclude_after_work(content_to_save).await {
-                eprintln!("[Agent Conclusion Warning] Goal {} could not be concluded: {}", goal_id, e);
+                tracing::warn!("[Agent Conclusion Warning] Goal {} could not be concluded: {}", goal_id, e);
             }
         } else {
             // The turn only produced conversation: an answer, a clarifying question, or nothing at

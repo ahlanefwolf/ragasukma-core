@@ -186,7 +186,7 @@ pub async fn resolve_or_create_goal(
     // Revalidate evidence cache on disk with degradation recording
     if let Err(e) = crate::agent::context_builder::revalidate_evidence_cache(&project.id, allowed_folders).await {
         let err_str = e.to_string();
-        eprintln!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Operating in degraded mode.", goal_id, err_str);
+        tracing::warn!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Operating in degraded mode.", goal_id, err_str);
         let _ = repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
     }
 
@@ -198,7 +198,7 @@ pub async fn resolve_or_create_goal(
             let prompt_keywords: Vec<&str> = last_user_prompt.split_whitespace().collect();
             if let Err(e) = crate::agent::context_builder::reuse_evidence_from_parent(&goal_id, parent_gid, &prompt_keywords).await {
                 let err_str = e.to_string();
-                eprintln!("[Agent Context Warning] Parent evidence reuse failed for goal {} from {}: {}", goal_id, parent_gid, err_str);
+                tracing::warn!("[Agent Context Warning] Parent evidence reuse failed for goal {} from {}: {}", goal_id, parent_gid, err_str);
                 let _ = repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
             }
         }

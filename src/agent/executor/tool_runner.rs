@@ -87,7 +87,7 @@ pub async fn execute_turn_tool_calls(
         let tool_name = match resolved_name {
             Some(name) => {
                 if name != raw_name {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Tool Guard] Recovered empty tool name as '{}' for call {}",
                         name, tc.id
                     );

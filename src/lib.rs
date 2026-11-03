@@ -5,14 +5,14 @@
 #[macro_export]
 macro_rules! term_log {
     ($($arg:tt)*) => {
-        println!($($arg)*);
+        tracing::info!($($arg)*);
     };
 }
 
 #[macro_export]
 macro_rules! term_err {
     ($($arg:tt)*) => {
-        eprintln!($($arg)*);
+        tracing::error!($($arg)*);
     };
 }
 

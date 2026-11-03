@@ -1,4 +1,5 @@
 pub const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const CODEX_REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
 pub const CODEX_AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
 pub const CODEX_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";

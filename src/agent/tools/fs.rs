@@ -294,9 +294,9 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
         match cmd.output() {
             Ok(out) => {
                 if out.status.success() {
-                    println!("[Agent Workspace] Initialized git repo at: {:?}", root_path);
+                    tracing::info!("[Agent Workspace] Initialized git repo at: {:?}", root_path);
                 } else {
-                    eprintln!(
+                    tracing::warn!(
                         "[Agent Workspace] Failed to run 'git init' at {:?}: {}",
                         root_path,
                         String::from_utf8_lossy(&out.stderr)
@@ -304,11 +304,11 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
                 }
             }
             Err(e) => {
-                eprintln!("[Agent Workspace] Could not execute 'git init' at {:?}: {}", root_path, e);
+                tracing::warn!("[Agent Workspace] Could not execute 'git init' at {:?}: {}", root_path, e);
             }
         }
     } else if !git_dir.exists() && !auto_git_init {
-        println!("[Agent Workspace] Git auto-init skipped (opt-in disabled) for {:?}", root_path);
+        tracing::info!("[Agent Workspace] Git auto-init skipped (opt-in disabled) for {:?}", root_path);
     }
 
     // 2. Check & create smart .gitignore if missing
@@ -316,9 +316,9 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
     if !gitignore_path.exists() {
         let gitignore_content = generate_smart_gitignore(root_path);
         if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
-            eprintln!("[Agent Workspace] Failed to write smart .gitignore at {:?}: {}", gitignore_path, e);
+            tracing::warn!("[Agent Workspace] Failed to write smart .gitignore at {:?}: {}", gitignore_path, e);
         } else {
-            println!("[Agent Workspace] Created smart .gitignore at: {:?}", gitignore_path);
+            tracing::info!("[Agent Workspace] Created smart .gitignore at: {:?}", gitignore_path);
         }
     }
 

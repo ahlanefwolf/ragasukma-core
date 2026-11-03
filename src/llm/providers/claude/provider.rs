@@ -397,7 +397,7 @@ impl ClaudeProvider {
             let now = current_timestamp_secs();
             if self.accounts[acc_idx].access_token.is_none() || self.accounts[acc_idx].expires_at <= now {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    eprintln!("[Claude] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
+                    tracing::warn!("[Claude] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
                     continue;
                 }
                 let _ = self.save_accounts();
@@ -418,7 +418,7 @@ impl ClaudeProvider {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    eprintln!("[Claude] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
+                    tracing::error!("[Claude] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
 
                     let now = current_timestamp_secs();
                     if err_str.contains("429") || err_str.to_lowercase().contains("rate_limit") {
@@ -466,7 +466,7 @@ impl ClaudeProvider {
             let now = current_timestamp_secs();
             if self.accounts[acc_idx].access_token.is_none() || self.accounts[acc_idx].expires_at <= now {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    eprintln!("[Claude V1] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
+                    tracing::warn!("[Claude V1] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
                     continue;
                 }
                 let _ = self.save_accounts();
@@ -496,7 +496,7 @@ impl ClaudeProvider {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    eprintln!("[Claude V1] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
+                    tracing::error!("[Claude V1] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
 
                     let now = current_timestamp_secs();
                     if err_str.contains("429") || err_str.to_lowercase().contains("rate_limit") {

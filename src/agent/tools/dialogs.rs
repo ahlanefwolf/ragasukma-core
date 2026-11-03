@@ -38,7 +38,7 @@ pub fn pick_folder_dialog(initial_path: Option<&str>) -> Result<Option<String>> 
                 return Ok(None);
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                eprintln!("[pick_folder_dialog] Zenity non-zero exit ({:?}): {}", output.status.code(), stderr);
+                tracing::warn!("[pick_folder_dialog] Zenity non-zero exit ({:?}): {}", output.status.code(), stderr);
             }
         }
 

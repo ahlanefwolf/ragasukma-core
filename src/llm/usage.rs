@@ -234,7 +234,7 @@ pub fn get_db_path() -> PathBuf {
 pub async fn get_pool() -> &'static SqlitePool {
     POOL.get_or_init(|| async {
         let db_path = get_db_path();
-        println!("[Database] Initializing SQLite pool at: {}", db_path.display());
+        tracing::info!("[Database] Initializing SQLite pool at: {}", db_path.display());
         if let Some(parent) = db_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -253,12 +253,12 @@ pub async fn get_pool() -> &'static SqlitePool {
 
         // Run embedded migrations at startup with automatic checksum auto-healing on development changes
         if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
-            eprintln!("[Migration Warning] Migration issue encountered: {}. Attempting checksum auto-heal...", e);
+            tracing::warn!("[Migration Warning] Migration issue encountered: {}. Attempting checksum auto-heal...", e);
             // If VersionMismatch occurred because migration files were edited during development,
             // clear mismatched checksums from _sqlx_migrations and re-run cleanly
             let _ = sqlx::query("DELETE FROM _sqlx_migrations WHERE version >= 4").execute(&pool).await;
             if let Err(e2) = sqlx::migrate!("./migrations").run(&pool).await {
-                eprintln!("[Migration Warning] Secondary migration error: {}. Continuing.", e2);
+                tracing::warn!("[Migration Warning] Secondary migration error: {}. Continuing.", e2);
             }
         }
 
