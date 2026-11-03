@@ -133,12 +133,12 @@ pub fn get_app_config_dir() -> PathBuf {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            if !xdg.trim().is_empty() {
-                let p = PathBuf::from(xdg).join("ragasukma");
-                let _ = fs::create_dir_all(&p);
-                return p;
-            }
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME")
+            && !xdg.trim().is_empty()
+        {
+            let p = PathBuf::from(xdg).join("ragasukma");
+            let _ = fs::create_dir_all(&p);
+            return p;
         }
         if let Ok(home) = std::env::var("HOME") {
             let p = PathBuf::from(home).join(".config").join("ragasukma");
@@ -176,12 +176,12 @@ pub fn get_app_data_dir() -> PathBuf {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
-            if !xdg.trim().is_empty() {
-                let p = PathBuf::from(xdg).join("ragasukma");
-                let _ = fs::create_dir_all(&p);
-                return p;
-            }
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME")
+            && !xdg.trim().is_empty()
+        {
+            let p = PathBuf::from(xdg).join("ragasukma");
+            let _ = fs::create_dir_all(&p);
+            return p;
         }
         if let Ok(home) = std::env::var("HOME") {
             let p = PathBuf::from(home).join(".local").join("share").join("ragasukma");
@@ -214,12 +214,12 @@ pub fn get_app_cache_dir() -> PathBuf {
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-            if !xdg.trim().is_empty() {
-                let p = PathBuf::from(xdg).join("ragasukma");
-                let _ = fs::create_dir_all(&p);
-                return p;
-            }
+        if let Ok(xdg) = std::env::var("XDG_CACHE_HOME")
+            && !xdg.trim().is_empty()
+        {
+            let p = PathBuf::from(xdg).join("ragasukma");
+            let _ = fs::create_dir_all(&p);
+            return p;
         }
         if let Ok(home) = std::env::var("HOME") {
             let p = PathBuf::from(home).join(".cache").join("ragasukma");

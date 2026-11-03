@@ -101,6 +101,7 @@ fn default_true() -> bool {
 pub struct AntigravityAccountInfo {
     pub id: String,
     pub email: Option<String>,
+    pub tier_id: Option<String>,
     pub project_id: Option<String>,
     pub is_active: bool,
     pub is_rate_limited: bool,

@@ -401,19 +401,19 @@ pub fn create_workspace_command(command_str: &str) -> std::process::Command {
             }
 
             let nvm_node_dir = home_path.join(".nvm/versions/node");
-            if nvm_node_dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(&nvm_node_dir) {
-                    let mut versions: Vec<PathBuf> = entries
-                        .filter_map(|e| e.ok())
-                        .map(|e| e.path().join("bin"))
-                        .filter(|p| p.is_dir())
-                        .collect();
-                    versions.sort();
-                    if let Some(latest) = versions.pop() {
-                        if !path_entries.contains(&latest) {
-                            path_entries.insert(0, latest);
-                        }
-                    }
+            if nvm_node_dir.is_dir()
+                && let Ok(entries) = fs::read_dir(&nvm_node_dir)
+            {
+                let mut versions: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path().join("bin"))
+                    .filter(|p| p.is_dir())
+                    .collect();
+                versions.sort();
+                if let Some(latest) = versions.pop()
+                    && !path_entries.contains(&latest)
+                {
+                    path_entries.insert(0, latest);
                 }
             }
         }

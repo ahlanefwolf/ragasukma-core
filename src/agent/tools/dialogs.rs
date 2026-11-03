@@ -88,14 +88,14 @@ except Exception:
         if let Some(init) = initial_path {
             py_cmd.arg(init.trim());
         }
-        if let Ok(output) = py_cmd.output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !stdout.is_empty() {
-                    return Ok(Some(stdout));
-                }
-                return Ok(None);
+        if let Ok(output) = py_cmd.output()
+            && output.status.success()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !stdout.is_empty() {
+                return Ok(Some(stdout));
             }
+            return Ok(None);
         }
 
         bail!("Unable to open file manager dialog (zenity, kdialog, or tkinter). Ensure GUI is available or enter the folder path manually.")

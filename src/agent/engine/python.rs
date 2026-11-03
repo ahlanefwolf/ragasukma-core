@@ -112,31 +112,31 @@ pub fn find_python_bin() -> Option<PathBuf> {
         }
 
         // Try finding via `which python3` or `which python`
-        if let Ok(output) = hidden_command("which").arg("python3").output() {
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = out_str.lines().next() {
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() {
-                        let p = PathBuf::from(trimmed);
-                        if p.is_file() {
-                            return Some(p);
-                        }
+        if let Ok(output) = hidden_command("which").arg("python3").output()
+            && output.status.success()
+        {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = out_str.lines().next() {
+                let trimmed = first_line.trim();
+                if !trimmed.is_empty() {
+                    let p = PathBuf::from(trimmed);
+                    if p.is_file() {
+                        return Some(p);
                     }
                 }
             }
         }
 
-        if let Ok(output) = hidden_command("which").arg("python").output() {
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = out_str.lines().next() {
-                    let trimmed = first_line.trim();
-                    if !trimmed.is_empty() {
-                        let p = PathBuf::from(trimmed);
-                        if p.is_file() {
-                            return Some(p);
-                        }
+        if let Ok(output) = hidden_command("which").arg("python").output()
+            && output.status.success()
+        {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(first_line) = out_str.lines().next() {
+                let trimmed = first_line.trim();
+                if !trimmed.is_empty() {
+                    let p = PathBuf::from(trimmed);
+                    if p.is_file() {
+                        return Some(p);
                     }
                 }
             }

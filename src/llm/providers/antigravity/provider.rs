@@ -298,6 +298,7 @@ impl AntigravityProvider {
                 AntigravityAccountInfo {
                     id: a.id.clone(),
                     email: a.email.clone(),
+                    tier_id: a.tier_id.clone(),
                     project_id: a.project_id.clone(),
                     is_active: a.is_active,
                     is_rate_limited,

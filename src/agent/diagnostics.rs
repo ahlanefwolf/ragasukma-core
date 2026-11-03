@@ -34,10 +34,10 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 pub fn set_session_diagnostic_queue(session_id: &str, items: Vec<DiagnosticTaskItem>, compile_cmd: Option<String>) {
     if let Ok(mut lock) = get_diagnostic_store().write() {
         // Prevent unbounded memory growth if sessions disconnect abruptly without clean reset
-        if lock.len() >= 64 && !lock.contains_key(session_id) {
-            if let Some(oldest_key) = lock.keys().next().cloned() {
-                lock.remove(&oldest_key);
-            }
+        if lock.len() >= 64 && !lock.contains_key(session_id)
+            && let Some(oldest_key) = lock.keys().next().cloned()
+        {
+            lock.remove(&oldest_key);
         }
         lock.insert(session_id.to_string(), SessionDiagnosticQueue {
             items,
