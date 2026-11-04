@@ -67,17 +67,9 @@ use tokio::process::Command;
 
 pub use types::*;
 
-/// Resolves executable command and arguments, resolving python runtime when applicable.
+/// Resolves executable command and arguments directly via system PATH.
 fn resolve_executable(command_str: &str, args: &[String]) -> (String, Vec<String>, Option<std::path::PathBuf>) {
-    let lower = command_str.trim().to_lowercase();
-    let py_bin = crate::agent::engine::python::find_python_bin();
-
-    if (lower == "python" || lower == "python3" || lower == "py")
-        && let Some(ref bin) = py_bin {
-            return (bin.to_string_lossy().to_string(), args.to_vec(), bin.parent().map(|p| p.to_path_buf()));
-        }
-
-    (command_str.to_string(), args.to_vec(), py_bin.and_then(|b| b.parent().map(|p| p.to_path_buf())))
+    (command_str.to_string(), args.to_vec(), None)
 }
 
 /// Execute JSON-RPC 2.0 request over stdio transport

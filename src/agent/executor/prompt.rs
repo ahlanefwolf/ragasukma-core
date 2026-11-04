@@ -50,10 +50,10 @@ fn build_static_prompt(
     let shell_desc = "Linux POSIX Shell (login shell with enriched PATH). Use standard Unix/Linux shell syntax.";
 
     #[cfg(target_os = "windows")]
-    let python_desc = "Python: `python` (preferred on Windows) or `python3` / `py -3`";
+    let script_runner_desc = "Scripts: Node.js (`node`) or Python (`python` / `py -3`)";
 
     #[cfg(not(target_os = "windows"))]
-    let python_desc = "Python: `python3`";
+    let script_runner_desc = "Scripts: Node.js (`node`) or Python (`python3`)";
 
     #[cfg(target_os = "windows")]
     let multiple_cmd_hint = "When running sequential terminal commands, combine them into a single execution to save turn latency: use ';' (e.g. `cmd1 ; cmd2`) on Windows PowerShell instead of '&&'.";
@@ -84,7 +84,7 @@ fn build_static_prompt(
             - Apply complete and cohesive updates. Avoid incomplete placeholders, fake mocks, or non-functional stubs.\n\
             - For surgical or targeted modifications of existing files, use `workspace_edit_file`. Provide matching `old_text` with 1-2 lines of context and `new_text`.\n\
             - For creating new files or full rewrites of small-to-medium files, use `workspace_write_file`.\n\
-            - Python inline scripts (using python on Windows or python3 on Unix) via `workspace_run_command` can also be used if dynamic transformations or complex migrations are needed.\n\
+            - Inline scripts (using Node.js `node -e '...'` or Python `python3 -c '...'` / `python -c '...'`) via `workspace_run_command` can also be used if dynamic transformations, API checks, or complex migrations are needed.\n\
          3. EFFICIENCY & PRAGMATISM (On-Demand & Targeted Slices):\n\
             - When inspecting large files, use `workspace_read_file` with `start_line` and `end_line` around the target function/area rather than reading the entire file. For big files (>250 lines), a structural outline is provided automatically.\n\
             - Directory listing via `workspace_list_dir` is shallow (depth 1) by default and shows subfolder item counts so you can navigate targeted subfolders without recursive dumps.\n\
@@ -104,7 +104,7 @@ fn build_static_prompt(
             - Never mark a checklist item as completed `[x]` or claim a feature is implemented without physically verifying that every requested file was actually created and non-empty (via `workspace_list_dir` or `workspace_read_file`) and that required exports/logic exist.\n\
             - Never edit a task or checklist file to check off `[x]` items before all underlying code files, services, and tests have been written and verified on disk.\n\
          </core-guidelines>\n\n",
-        os_name, arch_name, shell_desc, python_desc, verifier_hint, max_iterations, multiple_cmd_hint
+        os_name, arch_name, shell_desc, script_runner_desc, verifier_hint, max_iterations, multiple_cmd_hint
     );
 
     if !allowed_folders.is_empty() {
@@ -153,7 +153,7 @@ fn build_static_prompt(
         "2. DEDICATED STRUCTURED TOOLS: Use `workspace_edit_file`, `workspace_write_file`, `workspace_read_file` and `workspace_grep` for workspace code changes and inspections. Do not rewrite source files via shell heredocs or Python one-liners.\n\
          3. VENDOR/DEPENDENCY INTEGRITY: NEVER edit vendor dependencies inside `node_modules/`, `.git/`, or library internals. Apply all fixes to your own project source files.\n\
          4. DISCOVERY DISCIPLINE: Investigate only what the task needs. Read the relevant file, understand it, then act. Do not wander across unrelated files; if an investigation is getting large, say what you found so far and what you still need.\n\
-         5. PYTHON DATA AUTOMATION: Python (`python` on Windows, `python3` on Unix/macOS) is available for non-file operations (API requests, regex parsing, sqlite queries, data conversion) when no dedicated tool covers the need.\n\
+         5. SCRIPT & DATA AUTOMATION: Node.js (`node -e '...'`) or Python (`python3` / `python`) is available for non-file operations (API requests, regex/JSON parsing, sqlite queries, data conversion) when no dedicated tool covers the need. Pick the most suitable, reliable runtime present in the environment.\n\
          6. WORKSPACE EXECUTION: Use `workspace_run_command` for builds, tests, package managers and git operations.\n",
     );
 
@@ -174,9 +174,9 @@ fn build_static_prompt(
     if !active_mcp_servers.is_empty() {
         prompt.push_str("### ⚡ Active Project External MCP Servers & Services (Raw Configuration):\n\
 The following external MCP services / tools are configured for this workspace project. You can inspect their endpoints, commands, headers, and schemas below.\n\
-When you need to interact with these services, craft and run appropriate Python 3 scripts or terminal commands via `workspace_run_command`:\n\
-- **HTTP / SSE MCP Services**: Write concise Python 3 scripts (e.g. using `urllib.request`, `urllib.parse`, and `json`) to connect to the URL, send JSON-RPC 2.0 requests (e.g. method `tools/call`, `tools/list`), and parse the response.\n\
-- **CLI / Stdio MCP Tools**: Execute the command directly or wrap it with Python via subprocess.\n\n");
+When you need to interact with these services, craft and run appropriate scripts (using Node.js with native `fetch` or Python) or terminal commands via `workspace_run_command`:\n\
+- **HTTP / SSE MCP Services**: Write concise Node.js or Python scripts to connect to the URL, send JSON-RPC 2.0 requests (e.g. `initialize`, `tools/call`, `tools/list`), and parse the response.\n\
+- **CLI / Stdio MCP Tools**: Execute the command directly (e.g. via `npx`, `uvx`, or binary) or wrap it with a script.\n\n");
 
         for (idx, server) in active_mcp_servers.iter().enumerate() {
             let mut cfg_val = server.config_value();
