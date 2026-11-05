@@ -108,7 +108,8 @@ pub async fn list_sessions(project_id: &str) -> Result<Vec<Session>> {
     let sessions = sqlx::query_as::<_, Session>(
         "SELECT s.id, s.project_id, s.title, s.status, s.model, s.temperature, s.source_chat_id, s.metadata, s.created_at, s.updated_at, \
          COALESCE(SUM(m.token_usage_input), 0) AS total_tokens_input, \
-         COALESCE(SUM(m.token_usage_output), 0) AS total_tokens_output \
+         COALESCE(SUM(m.token_usage_output), 0) AS total_tokens_output, \
+         COALESCE(SUM(CASE WHEN m.role IN ('assistant', 'tool') THEN 1 ELSE 0 END), 0) AS total_requests \
          FROM sessions s \
          LEFT JOIN messages m ON m.session_id = s.id \
          WHERE s.project_id = ?1 \
@@ -126,7 +127,8 @@ pub async fn get_session(id: &str) -> Result<Option<Session>> {
     let session = sqlx::query_as::<_, Session>(
         "SELECT s.id, s.project_id, s.title, s.status, s.model, s.temperature, s.source_chat_id, s.metadata, s.created_at, s.updated_at, \
          COALESCE(SUM(m.token_usage_input), 0) AS total_tokens_input, \
-         COALESCE(SUM(m.token_usage_output), 0) AS total_tokens_output \
+         COALESCE(SUM(m.token_usage_output), 0) AS total_tokens_output, \
+         COALESCE(SUM(CASE WHEN m.role IN ('assistant', 'tool') THEN 1 ELSE 0 END), 0) AS total_requests \
          FROM sessions s \
          LEFT JOIN messages m ON m.session_id = s.id \
          WHERE s.id = ?1 \
@@ -178,6 +180,7 @@ pub async fn create_session(
         updated_at: now,
         total_tokens_input: Some(0),
         total_tokens_output: Some(0),
+        total_requests: Some(0),
     })
 }
 

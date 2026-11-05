@@ -112,6 +112,9 @@ pub struct Session {
     #[sqlx(default)]
     #[serde(default)]
     pub total_tokens_output: Option<i64>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub total_requests: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
