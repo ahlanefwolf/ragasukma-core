@@ -1,10 +1,21 @@
-# ragasukma-core ⚡
+<div align="center">
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-F2B5D4?style=flat-square)](LICENSE)
-[![Rust Edition: 2024](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Donate](https://img.shields.io/badge/Donate-SociaBuzz-FF7043?style=flat-square&logo=coffeescript&logoColor=white)](https://sociabuzz.com/ahlanefwolf)
+  <img src="icons/128x128@2x.png" alt="Ragasukma Logo" width="120" height="120" />
 
-> **Headless Autonomous Agent Runtime, Tool Engine & Multi-Provider LLM Suite in Rust.**
+  # Ragasukma Core
+  **Headless Autonomous Agent Runtime, Tool Engine & Multi-Provider LLM Suite in Rust**
+
+  [![Rust Edition: 2024](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-F2B5D4?style=flat-square)](LICENSE)
+  [![Donate](https://img.shields.io/badge/Donate-SociaBuzz-FF7043?style=flat-square&logo=coffeescript&logoColor=white)](https://sociabuzz.com/ahlanefwolf)
+
+  <p align="center">
+    A standalone, headless Rust engine powering autonomous AI agent workflows, multi-provider LLM routing (Claude, Codex, Antigravity, Custom API endpoints), schema migrations, and tool orchestration without GUI or audio dependencies.
+  </p>
+
+</div>
+
+---
 
 `ragasukma-core` is a standalone, headless Rust library that powers the **Multi-Provider LLM Engine**, **Tool Registry**, and **Autonomous Agent Orchestrator** for Ragasukma. Built strictly without graphical (`wgpu`/`winit`) or audio driver (`rodio`/`cpal`) dependencies, it is lightweight, highly portable, and ready to be embedded into any runtime environment—such as TUIs (terminal interfaces), CLI utilities, daemon services, background workers, or voice assistant backends.
 
