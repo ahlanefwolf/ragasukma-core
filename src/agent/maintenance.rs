@@ -65,8 +65,8 @@ pub async fn run_retention_sweep() {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_messages(cutoff).await {
             Ok(0) => {}
-            Ok(n) => eprintln!("[Retention] Pruned {} message row(s) older than {}d", n, days),
-            Err(e) => eprintln!("[Retention] Message sweep failed: {e}"),
+            Ok(n) => tracing::info!("[Retention] Pruned {} message row(s) older than {}d", n, days),
+            Err(e) => tracing::error!("[Retention] Message sweep failed: {e}"),
         }
     }
 
@@ -74,8 +74,8 @@ pub async fn run_retention_sweep() {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_audit_logs(cutoff).await {
             Ok(0) => {}
-            Ok(n) => eprintln!("[Retention] Pruned {} audit row(s) older than {}d", n, days),
-            Err(e) => eprintln!("[Retention] Audit sweep failed: {e}"),
+            Ok(n) => tracing::info!("[Retention] Pruned {} audit row(s) older than {}d", n, days),
+            Err(e) => tracing::error!("[Retention] Audit sweep failed: {e}"),
         }
     }
 
@@ -85,13 +85,13 @@ pub async fn run_retention_sweep() {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_sessions(cutoff).await {
             Ok(0) => {}
-            Ok(n) => eprintln!("[Retention] Pruned {} session(s) idle for over {}d", n, days),
-            Err(e) => eprintln!("[Retention] Session sweep failed: {e}"),
+            Ok(n) => tracing::info!("[Retention] Pruned {} session(s) idle for over {}d", n, days),
+            Err(e) => tracing::error!("[Retention] Session sweep failed: {e}"),
         }
         match repository::delete_orphan_projects().await {
             Ok(0) => {}
-            Ok(n) => eprintln!("[Retention] Pruned {} project(s) with no sessions", n),
-            Err(e) => eprintln!("[Retention] Orphan project sweep failed: {e}"),
+            Ok(n) => tracing::info!("[Retention] Pruned {} project(s) with no sessions", n),
+            Err(e) => tracing::error!("[Retention] Orphan project sweep failed: {e}"),
         }
     }
 }

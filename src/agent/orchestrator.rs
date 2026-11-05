@@ -103,7 +103,7 @@ impl GoalOrchestrator {
             Ok(_stale_count) => {}
             Err(e) => {
                 let err_str = e.to_string();
-                eprintln!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Continuing in degraded mode.", goal_id, err_str);
+                tracing::warn!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Continuing in degraded mode.", goal_id, err_str);
                 let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
             }
         }
@@ -118,7 +118,7 @@ impl GoalOrchestrator {
         if let Some(parent_id) = parent_goal_id
             && let Err(e) = reuse_evidence_from_parent(goal_id, parent_id, reuse_keywords).await {
                 let err_str = e.to_string();
-                eprintln!("[Agent Context Warning] Failed to reuse evidence from parent goal {} for {}: {}", parent_id, goal_id, err_str);
+                tracing::warn!("[Agent Context Warning] Failed to reuse evidence from parent goal {} for {}: {}", parent_id, goal_id, err_str);
                 let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
             }
 
