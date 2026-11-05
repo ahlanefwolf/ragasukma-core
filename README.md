@@ -1,8 +1,8 @@
 # ragasukma-core ⚡
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-F2B5D4?style=flat-square)](LICENSE)
 [![Rust Edition: 2024](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
-[![Status](https://img.shields.io/badge/Status-Active-brightgreen.svg)]()
+[![Donate](https://img.shields.io/badge/Donate-SociaBuzz-FF7043?style=flat-square&logo=coffeescript&logoColor=white)](https://sociabuzz.com/ahlanefwolf)
 
 > **Headless Autonomous Agent Runtime, Tool Engine & Multi-Provider LLM Suite in Rust.**
 
@@ -163,4 +163,7 @@ cargo test
 
 ## 📄 License
 
-Distributed under the **MIT License**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the [MIT License](LICENSE) — see the [LICENSE](LICENSE) file for details.
+
+Created by **Ahlan Saputra** ([@ahlanefwolf](https://github.com/ahlanefwolf)).  
+Copyright © 2026 Ahlan Saputra.
