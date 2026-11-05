@@ -59,10 +59,14 @@ pub fn get_session_diagnostic_queue(session_id: &str) -> Option<SessionDiagnosti
 pub fn mark_diagnostic_file_resolved(session_id: &str, file_path: &str) -> (usize, usize) {
     if let Ok(mut lock) = get_diagnostic_store().write()
         && let Some(queue) = lock.get_mut(session_id) {
-            let norm_target = file_path.replace('\\', "/").trim_start_matches("./").to_string();
+            let norm_target = file_path.replace('\\', "/").trim_start_matches("./").to_lowercase();
             for item in &mut queue.items {
-                let norm_item = item.file_path.replace('\\', "/").trim_start_matches("./").to_string();
-                if norm_item == norm_target || norm_target.ends_with(&norm_item) || norm_item.ends_with(&norm_target) {
+                let norm_item = item.file_path.replace('\\', "/").trim_start_matches("./").to_lowercase();
+                if norm_item == norm_target
+                    || norm_target.ends_with(&norm_item)
+                    || norm_item.ends_with(&norm_target)
+                    || (norm_target.contains('/') && norm_item.contains('/') && norm_target.rsplit('/').next() == norm_item.rsplit('/').next())
+                {
                     item.resolved = true;
                 }
             }

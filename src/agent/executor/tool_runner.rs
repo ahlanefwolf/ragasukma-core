@@ -538,6 +538,7 @@ pub async fn execute_turn_tool_calls(
                     let touched = extract_modified_paths_from_command(trimmed_cmd);
                     for path in touched {
                         state.on_successful_edit(&path);
+                        crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &path);
                         let _ = repository::mark_evidence_stale_by_file(project_id, &path).await;
                     }
                 }
@@ -546,6 +547,11 @@ pub async fn execute_turn_tool_calls(
                     let was_rejected = is_breaker_trip || tool_output.starts_with("Tool execution rejected");
                     let is_passed = !is_err && !was_rejected;
                     state.verification_attempts += 1;
+
+                    if is_passed {
+                        // Successful verification clears the session diagnostic queue
+                        crate::agent::diagnostics::clear_session_diagnostic_queue(session_id);
+                    }
                     // Persist the verification and, when it passes, the goal conclusion in a
                     // single transaction. Recording a passing verification while silently
                     // failing to move the goal would leave it stuck in "action" forever, and
