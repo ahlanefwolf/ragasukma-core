@@ -153,13 +153,13 @@ fn process_is_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         // `kill -0` performs an existence/permission probe without delivering a signal.
-        return std::process::Command::new("kill")
+        std::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
     #[cfg(windows)]
     {

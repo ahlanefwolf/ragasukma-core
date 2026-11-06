@@ -29,38 +29,6 @@ fn release_turn_snapshots() {
     crate::agent::executor::snapshot::WorkspaceSnapshot::global().clear();
 }
 
-#[cfg(test)]
-mod turn_boundary_tests {
-    use super::release_turn_snapshots;
-    use crate::agent::executor::snapshot::WorkspaceSnapshot;
-
-    /// Guards the behaviour, not the helper: a turn boundary must leave the global
-    /// snapshot store empty. Testing `WorkspaceSnapshot::clear()` directly proves the
-    /// method works but says nothing about whether anything ever calls it, which is how
-    /// this store ended up growing for the lifetime of the process unnoticed.
-    #[test]
-    fn a_finished_turn_leaves_no_backups_behind() {
-        let dir = std::env::temp_dir().join(format!("turn-snap-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let file = dir.join("touched.txt");
-        std::fs::write(&file, b"before").unwrap();
-
-        WorkspaceSnapshot::global().backup_file(&file).unwrap();
-        assert!(
-            !WorkspaceSnapshot::global().tracked_files().is_empty(),
-            "precondition: the turn must have recorded a backup"
-        );
-
-        release_turn_snapshots();
-
-        assert!(
-            WorkspaceSnapshot::global().tracked_files().is_empty(),
-            "the global store must be released when the turn ends"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
 use crate::agent::models::AgentSessionEvent;
 use crate::agent::repository;
 
@@ -496,4 +464,36 @@ pub async fn execute_session_turn(
     // Fallback: If iteration limit reached while still running tools
     release_turn_snapshots();
     gates::handle_iteration_limit_fallback(session_id, &state).await
+}
+
+#[cfg(test)]
+mod turn_boundary_tests {
+    use super::release_turn_snapshots;
+    use crate::agent::executor::snapshot::WorkspaceSnapshot;
+
+    /// Guards the behaviour, not the helper: a turn boundary must leave the global
+    /// snapshot store empty. Testing `WorkspaceSnapshot::clear()` directly proves the
+    /// method works but says nothing about whether anything ever calls it, which is how
+    /// this store ended up growing for the lifetime of the process unnoticed.
+    #[test]
+    fn a_finished_turn_leaves_no_backups_behind() {
+        let dir = std::env::temp_dir().join(format!("turn-snap-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("touched.txt");
+        std::fs::write(&file, b"before").unwrap();
+
+        WorkspaceSnapshot::global().backup_file(&file).unwrap();
+        assert!(
+            !WorkspaceSnapshot::global().tracked_files().is_empty(),
+            "precondition: the turn must have recorded a backup"
+        );
+
+        release_turn_snapshots();
+
+        assert!(
+            WorkspaceSnapshot::global().tracked_files().is_empty(),
+            "the global store must be released when the turn ends"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

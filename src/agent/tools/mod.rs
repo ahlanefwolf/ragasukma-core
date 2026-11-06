@@ -1177,7 +1177,7 @@ mod tests {
 
         let has_child_count = entries.iter().any(|e| {
             e.as_str()
-                .map_or(false, |s| s.contains("subfolder/ (2 items)"))
+                .is_some_and(|s| s.contains("subfolder/ (2 items)"))
         });
         assert!(has_child_count);
 

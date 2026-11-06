@@ -431,7 +431,7 @@ fn test_gemini_thinking_config_auto_enabled() {
     let thinking_config = &payload["request"]["generationConfig"]["thinkingConfig"];
     assert!(thinking_config.is_object());
     assert_eq!(thinking_config["thinkingBudget"].as_i64().unwrap(), -1);
-    assert_eq!(thinking_config["includeThoughts"].as_bool().unwrap(), true);
+    assert!(thinking_config["includeThoughts"].as_bool().unwrap());
 }
 
 #[test]
@@ -513,7 +513,7 @@ fn test_gemini_thinking_config_tiered_payloads() {
     let payload_low = build_gemini_payload(&req_low, "test-project");
     let tc_low = &payload_low["request"]["generationConfig"]["thinkingConfig"];
     assert_eq!(tc_low["thinkingBudget"].as_i64().unwrap(), 1024);
-    assert_eq!(tc_low["includeThoughts"].as_bool().unwrap(), true);
+    assert!(tc_low["includeThoughts"].as_bool().unwrap());
     assert_eq!(
         payload_low["model"].as_str().unwrap(),
         "gemini-3.8-flash-low"
@@ -538,7 +538,7 @@ fn test_gemini_thinking_config_tiered_payloads() {
     let payload_none = build_gemini_payload(&req_none, "test-project");
     let tc_none = &payload_none["request"]["generationConfig"]["thinkingConfig"];
     assert_eq!(tc_none["thinkingBudget"].as_i64().unwrap(), 0);
-    assert_eq!(tc_none["includeThoughts"].as_bool().unwrap(), false);
+    assert!(!tc_none["includeThoughts"].as_bool().unwrap());
 
     let req_paren = V1ChatRequest {
         model: "ag/gemini-3.8-flash-low(low)".to_string(),
@@ -559,7 +559,7 @@ fn test_gemini_thinking_config_tiered_payloads() {
     let payload_paren = build_gemini_payload(&req_paren, "test-project");
     let tc_paren = &payload_paren["request"]["generationConfig"]["thinkingConfig"];
     assert_eq!(tc_paren["thinkingBudget"].as_i64().unwrap(), 1024);
-    assert_eq!(tc_paren["includeThoughts"].as_bool().unwrap(), true);
+    assert!(tc_paren["includeThoughts"].as_bool().unwrap());
     assert_eq!(
         payload_paren["model"].as_str().unwrap(),
         "gemini-3.8-flash-low"

@@ -120,26 +120,6 @@ pub fn fetch_models() -> Vec<(String, String)> {
     models
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn model_id_adds_prefix_without_repeating_it() {
-        fn with_prefix(prefix: &str, id: &str) -> String {
-            if id
-                .split_once('/')
-                .is_some_and(|(existing, _)| existing.eq_ignore_ascii_case(prefix))
-            {
-                id.to_string()
-            } else {
-                format!("{prefix}/{id}")
-            }
-        }
-
-        assert_eq!(with_prefix("or", "cc/opus-5.5"), "or/cc/opus-5.5");
-        assert_eq!(with_prefix("or", "or/model"), "or/model");
-    }
-}
-
 pub fn validate_account(account: &CustomLlmAccount) -> anyhow::Result<()> {
     let prefix = account.prefix.trim();
     if prefix.is_empty()
@@ -492,5 +472,25 @@ impl CustomProvider {
             tool_calls: tool_calls_opt,
             finish_reason,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn model_id_adds_prefix_without_repeating_it() {
+        fn with_prefix(prefix: &str, id: &str) -> String {
+            if id
+                .split_once('/')
+                .is_some_and(|(existing, _)| existing.eq_ignore_ascii_case(prefix))
+            {
+                id.to_string()
+            } else {
+                format!("{prefix}/{id}")
+            }
+        }
+
+        assert_eq!(with_prefix("or", "cc/opus-5.5"), "or/cc/opus-5.5");
+        assert_eq!(with_prefix("or", "or/model"), "or/model");
     }
 }
