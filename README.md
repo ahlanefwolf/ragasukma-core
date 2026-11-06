@@ -3,178 +3,155 @@
   <img src="icons/128x128@2x.png" alt="Ragasukma Logo" width="120" height="120" />
 
   # Ragasukma Core
-  **Headless Autonomous Agent Runtime, Tool Engine & Multi-Provider LLM Suite in Rust**
+  **The Engine Behind Your AI Coding Assistant**
 
-  [![Rust Edition: 2024](https://img.shields.io/badge/Rust-2024-orange.svg)](https://www.rust-lang.org/)
   [![License: MIT](https://img.shields.io/badge/License-MIT-F2B5D4?style=flat-square)](LICENSE)
   [![Donate](https://img.shields.io/badge/Donate-SociaBuzz-FF7043?style=flat-square&logo=coffeescript&logoColor=white)](https://sociabuzz.com/ahlanefwolf)
 
   <p align="center">
-    A standalone, headless Rust engine powering autonomous AI agent workflows, multi-provider LLM routing (Claude, Codex, Antigravity, Custom API endpoints), schema migrations, and tool orchestration without GUI or audio dependencies.
+    The brain of Ragasukma. Everything the AI needs to read your code, change it,
+    and prove the result actually works. Powers <a href="../ragasukma-tui">Ragasukma TUI</a>,
+    and can power your own creation too.
   </p>
 
 </div>
 
 ---
 
-`ragasukma-core` is a standalone, headless Rust library that powers the **Multi-Provider LLM Engine**, **Tool Registry**, and **Autonomous Agent Orchestrator** for Ragasukma. Built strictly without graphical (`wgpu`/`winit`) or audio driver (`rodio`/`cpal`) dependencies, it is lightweight, highly portable, and ready to be embedded into any runtime environment—such as TUIs (terminal interfaces), CLI utilities, daemon services, background workers, or voice assistant backends.
+## 💡 What is Ragasukma Core?
+
+Picture a personal programming assistant that can:
+
+- Read and understand your whole project
+- Write and change code when you ask
+- Check its own work so nothing breaks
+- Undo everything if something goes wrong
+
+**Ragasukma Core is what makes all of that possible.** It's the thinking part — no
+screen of its own, like the engine of a car. The steering wheel and dashboard come
+from somewhere else (that's [Ragasukma TUI](../ragasukma-tui)).
+
+- **Ragasukma Core** = the engine 🚗
+- **Ragasukma TUI** = the dashboard and steering wheel 🕹️
+
+You can put this engine under the hood of anything you build.
 
 ---
 
-## 🌟 Architecture & Core Features
+## ✨ What It Can Do
 
-### 1. Multi-Provider LLM Engine (`ragasukma_core::llm`)
-- **OpenAI-Compatible V1 Engine** (`ragasukma_core::llm::v1_engine`):
-  - Token-by-token streaming response handling.
-  - Native structured tool calling and function call execution.
-  - Flexible authentication (Bearer tokens, custom headers, and per-request model overrides).
-- **Multi-Provider Hub** (`ragasukma_core::llm::providers`):
-  - **Antigravity (Google Gemini)**: OAuth flow, real-time quota tracking, and thought signature support.
-  - **Claude (Anthropic)**: Native message stream adapter and adaptive token budgeting.
-  - **Codex (OpenAI)**: Direct client integration with dynamic model discovery.
-  - **Custom / Local Endpoints**: Ollama, vLLM, LMStudio, Qwen, DeepSeek, and custom OpenAI-compatible proxies.
-- **SQLite Usage & Token Telemetry** (`ragasukma_core::llm::usage`):
-  - Tracks prompt tokens, completion tokens, execution latency, cost approximations, and auto-reaps inactive database locks.
+### 🤖 Gets the Job Done on Its Own
+The assistant doesn't just chat — it **works**.
+- Tell it what you want in plain words: fix this bug, add that feature, tidy up this code.
+- It moves step by step, checking each result before going further.
+- If something is unclear, it stops and asks instead of guessing.
 
-### 2. SQLite Database & Repositories (`ragasukma_core::repository`)
-- **Automated Database Migrations** (`repository::migrate_database`):
-  - Embeds and executes SQLx migrations automatically for schema initialization and version control.
-- **Data Repositories**:
-  - **Chat History** (`repository::chat_history`): Fast persistence and retrieval of historical conversation turns.
-  - **Skills** (`repository::skill`): Storage, execution status, and management of user-defined capabilities.
-  - **Todos** (`repository::todo`): Task management and lifecycle tracking.
+### 🛠️ Reads and Edits Your Project
+- Looks through your folders and reads what's inside.
+- Creates new files and updates existing ones.
+- Finds any piece of text across the whole project.
+- Runs terminal commands when it genuinely needs to.
+- It only ever touches the folders you allow — safe by default.
 
-### 3. Autonomous Agent Engine (`ragasukma_core::agent`)
-- **Turn-Based Agent Execution** (`agent::executor::execute_session_turn`):
-  - Autonomous reasoning loop, safety gates, dynamic iteration limits, and graceful fallback recovery.
-  - Context-aware dynamic system prompt generation (`agent::executor::prompt`).
-- **Context Compressor & Token Budget Manager** (`agent::compressor`):
-  - Smart historical conversation truncation (`compact_assistant_tool_calls_smart`, `truncate_smart`) to maximize context retention within token limits.
-- **Evidence Cache & Ranking** (`agent::evidence_ranking`, `agent::evidence_scoring`):
-  - Recency- and relevance-weighted ordering for files, grep matches, and diagnostic logs within the active context window.
-- **Rollback & State Snapshot Store** (`agent::executor::snapshot`):
-  - Automatic pre-modification file snapshots allowing complete rollback upon revert instructions.
+### ✅ Proves the Work Actually Works
+This is what sets Ragasukma apart from a plain chatbot.
+- After changing code, it runs your checks by itself.
+- If something breaks, it reads the message and tries again.
+- It recognises your project type on its own — nothing to configure.
 
-### 4. Built-in Tools & Extensibility (`ragasukma_core::agent::tools`)
-Standard workspace tools executable autonomously by the agent runtime:
-- **`workspace_run_command`**: Executes shell commands on the host OS with strict safety checks, sandboxing guards, and timeouts.
-- **`workspace_read_file`**: Reads files with line slicing (`start_line`, `end_line`) or structural symbol outline generation.
-- **`workspace_edit_file`**: Precision line/block replacement with automatic rollback on error.
-- **`workspace_write_file`**: Creates or completely overwrites files with built-in language formatters.
-- **`workspace_list_dir`**: Shallow or depth-bounded directory explorer with item counts.
-- **`workspace_grep`**: Fast regex and literal text searching across project trees.
-- **MCP Client (`agent::mcp`)**: Extensible integration with external Model Context Protocol servers.
+### ↩️ Never Loses Your Code
+- Every change is saved like a checkpoint in a game.
+- If the assistant takes a wrong turn, rewind to before it started.
+- No more "my code is a mess and I can't undo it".
 
----
+### 🔌 Many AI Brains, Side by Side
+- Works with several AI services at once.
+- Each one's usage is tracked separately, so costs stay clear.
+- Adding another one later is easy.
 
-## 📦 Installation
+### 🧩 Grows New Abilities
+- Hand the assistant extra powers, like browsing the web or reaching a database.
+- Install a new ability and it picks it up straight away.
+- There's no limit to what you can plug in next.
 
-Add `ragasukma-core` to your `Cargo.toml`:
+### 💾 Remembers Everything
+- Conversations, usage, and progress are kept for good.
+- Close it today, open it next month — it's all still there.
+- Everything lives in one local file that's easy to back up or move.
 
-```toml
-[dependencies]
-ragasukma-core = { git = "https://github.com/ahlanefwolf/ragasukma-core.git" }
-tokio = { version = "1", features = ["full"] }
-```
-
-Or using a local path reference:
-
-```toml
-[dependencies]
-ragasukma-core = { path = "../ragasukma-core" }
-```
+### 👤 Learns Your Project's Rules
+- Each project can carry its own guidebook the assistant reads on its own.
+- It picks up your style, your rules, and how your project is organised.
+- Handy when you jump between projects that work differently.
 
 ---
 
-## 🚀 Quick Start & Usage
+## 🚀 Getting Started
 
-### 1. Direct LLM Chat Completion (V1 Engine)
+### If you just want to use the app
+You don't need this at all — head straight to **[Ragasukma TUI](../ragasukma-tui)**.
+It's the ready-made version. Nothing to set up, no code to write.
 
-```rust
-use ragasukma_core::llm::v1_engine::{execute_chat_v1, V1ChatRequest, V1ChatMessage};
+### If you want to build your own tool
+First, get a working development setup with Rust installed — [here's how](https://rustup.rs).
+Then download this project:
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let req = V1ChatRequest {
-        model: "gpt-4o".to_string(),
-        messages: vec![
-            V1ChatMessage {
-                role: "system".to_string(),
-                content: Some("You are a helpful assistant.".into()),
-                ..Default::default()
-            },
-            V1ChatMessage {
-                role: "user".to_string(),
-                content: Some("Explain Rust ownership in one sentence.".into()),
-                ..Default::default()
-            },
-        ],
-        stream: Some(false),
-        temperature: Some(0.7),
-        ..Default::default()
-    };
-
-    let base_url = "https://api.openai.com/v1";
-    let api_key = std::env::var("OPENAI_API_KEY")?;
-
-    let response = execute_chat_v1(base_url, &api_key, &req).await?;
-    println!("Response: {}", response);
-    Ok(())
-}
+```bash
+git clone https://github.com/ahlanefwolf/ragasukma-core.git
+cd ragasukma-core
+cargo build
 ```
 
-### 2. Executing an Autonomous Agent Turn
-
-```rust
-use ragasukma_core::agent::executor::execute_session_turn;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let session_id = "sess_demo_123";
-    // Runs an autonomous reasoning, tool execution, and response cycle
-    let result = execute_session_turn(session_id, None).await?;
-    println!("Agent Output: {}", result);
-    Ok(())
-}
-```
-
-### 3. Database Migrations & Repositories
-
-```rust
-use sqlx::sqlite::SqlitePoolOptions;
-use ragasukma_core::repository::{migrate_database, get_skills};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let pool = SqlitePoolOptions::new()
-        .connect("sqlite::memory:")
-        .await?;
-
-    // Run embedded SQLx schema migrations automatically
-    migrate_database(&pool).await?;
-
-    // Query skills
-    let skills = get_skills(&pool).await?;
-    println!("Loaded {} skill(s)", skills.len());
-    Ok(())
-}
-```
-
----
-
-## 🧪 Testing
-
-Run the test suite across unit and integration tests:
+To confirm everything is healthy:
 
 ```bash
 cargo test
 ```
 
+You should see every check pass without errors.
+
+### What you'll need
+
+| Requirement | Details |
+| :--- | :--- |
+| **A Rust setup** | Version 1.85 or newer |
+| **Git** | So the assistant can keep track of code changes |
+| **Operating system** | Linux, macOS, or Windows |
+| **Memory** | Very light — about 100 MB is plenty |
+
+There's no database or server to prepare. All your data goes into a single file that
+gets created for you automatically.
+
+---
+
+## 📖 Seeing It In Action
+
+The heart of it is simply this: you hand the assistant a request, and it gets on with
+the job until it's finished.
+
+> A single request in, a finished piece of work out.
+
+Everything else — reading files, checking the result, undoing mistakes — happens
+automatically behind that one moment.
+
+### Want to dig deeper?
+
+- 📘 **[Code Quality & Testing Guide](docs/code_quality_and_testing_guide.md)** — for anyone looking after this codebase.
+- 🖥️ **[Ragasukma TUI](../ragasukma-tui)** — a real, working example built on this engine.
+
+---
+
+## 🤝 Who Is This For?
+
+- **Just want to get coding done?** Use [Ragasukma TUI](../ragasukma-tui) — you'll never need to open this.
+- **Building your own assistant?** This engine is ready to drop into your project.
+- **Curious how it works?** The code is neatly organised and easy to explore.
+
 ---
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE) — see the [LICENSE](LICENSE) file for details.
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
 
-Created by **Ahlan Saputra** ([@ahlanefwolf](https://github.com/ahlanefwolf)).  
+Made by **Ahlan Saputra** ([@ahlanefwolf](https://github.com/ahlanefwolf)).
 Copyright © 2026 Ahlan Saputra.
