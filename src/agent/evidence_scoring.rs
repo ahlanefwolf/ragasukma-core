@@ -131,8 +131,14 @@ mod tests {
         );
         let login = score_candidate(&request, &cands, cands.len(), 0);
         let button = score_candidate(&request, &cands, cands.len(), 1);
-        assert!(login > 0.8, "the login file answers the request, got {login}");
-        assert_eq!(button, 0.0, "an unrelated file must score zero, got {button}");
+        assert!(
+            login > 0.8,
+            "the login file answers the request, got {login}"
+        );
+        assert_eq!(
+            button, 0.0,
+            "an unrelated file must score zero, got {button}"
+        );
     }
 
     #[test]
@@ -144,7 +150,10 @@ mod tests {
         let request = request_words("src writer");
         let writer = score_candidate(&request, &cands, cands.len(), 1);
         let parser = score_candidate(&request, &cands, cands.len(), 0);
-        assert!(writer > parser, "the distinguishing word must decide: {writer} vs {parser}");
+        assert!(
+            writer > parser,
+            "the distinguishing word must decide: {writer} vs {parser}"
+        );
         assert_eq!(parser, 0.0);
     }
 
@@ -163,7 +172,10 @@ mod tests {
     fn an_empty_request_scores_zero() {
         let cands = candidates(&[("src/auth/login.rs", "login flow")]);
         assert_eq!(score_candidate(&[], &cands, cands.len(), 0), 0.0);
-        assert_eq!(score_candidate(&request_words("   "), &cands, cands.len(), 0), 0.0);
+        assert_eq!(
+            score_candidate(&request_words("   "), &cands, cands.len(), 0),
+            0.0
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use std::path::Path;
 use super::{LanguageDetector, ProjectLanguageInfo};
+use std::path::Path;
 
 pub struct CCppDetector;
 
@@ -16,7 +16,10 @@ impl LanguageDetector for CCppDetector {
         let (primary, secondaries) = if has_cmake {
             (
                 "ctest --output-on-failure".to_string(),
-                vec!["cmake --build build".to_string(), "cmake -B build".to_string()],
+                vec![
+                    "cmake --build build".to_string(),
+                    "cmake -B build".to_string(),
+                ],
             )
         } else if has_meson {
             (

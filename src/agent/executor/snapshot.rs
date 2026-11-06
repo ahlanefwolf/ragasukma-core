@@ -1,7 +1,7 @@
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use anyhow::Result;
 
 static GLOBAL_SNAPSHOT: OnceLock<WorkspaceSnapshot> = OnceLock::new();
 
@@ -27,7 +27,10 @@ impl WorkspaceSnapshot {
     /// If the file does not exist, `None` is stored so rollback can delete created files.
     pub fn backup_file(&self, path: &Path) -> Result<()> {
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let mut backups = self.backups.lock().map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
+        let mut backups = self
+            .backups
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
         if let std::collections::hash_map::Entry::Vacant(e) = backups.entry(abs_path) {
             let content = if e.key().exists() {
                 Some(std::fs::read(e.key())?)
@@ -42,7 +45,10 @@ impl WorkspaceSnapshot {
     /// Rollback a specific file to its original state before any modifications.
     pub fn rollback_file(&self, path: &Path) -> Result<bool> {
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let mut backups = self.backups.lock().map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
+        let mut backups = self
+            .backups
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
         if let Some(original) = backups.remove(&abs_path) {
             match original {
                 Some(bytes) => {
@@ -65,7 +71,10 @@ impl WorkspaceSnapshot {
 
     /// Rollback all files modified during this session.
     pub fn rollback_all(&self) -> Result<Vec<PathBuf>> {
-        let mut backups = self.backups.lock().map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
+        let mut backups = self
+            .backups
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex poisoned: {}", e))?;
         let mut restored = Vec::new();
         for (path, original) in backups.drain() {
             match original {
@@ -119,7 +128,11 @@ mod tests {
         std::fs::write(&file, b"original").unwrap();
 
         snap.backup_file(&file).unwrap();
-        assert_eq!(snap.tracked_files().len(), 1, "the file must be tracked after backup");
+        assert_eq!(
+            snap.tracked_files().len(),
+            1,
+            "the file must be tracked after backup"
+        );
 
         snap.clear();
         assert!(
@@ -151,8 +164,15 @@ mod tests {
 
         let restored = snap.rollback_all().unwrap();
         assert_eq!(restored.len(), 2);
-        assert_eq!(std::fs::read(&edited).unwrap(), b"before", "edited file must be restored");
-        assert!(!created.exists(), "a file created during the session must be removed");
+        assert_eq!(
+            std::fs::read(&edited).unwrap(),
+            b"before",
+            "edited file must be restored"
+        );
+        assert!(
+            !created.exists(),
+            "a file created during the session must be removed"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

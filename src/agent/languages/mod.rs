@@ -61,9 +61,12 @@ pub fn detect_all_languages(allowed_folders: &[String]) -> Vec<ProjectLanguageIn
         // 1. First, check root directory directly
         for detector in &detectors {
             if let Some(info) = detector.detect(root)
-                && !results.iter().any(|r: &ProjectLanguageInfo| r.primary_verifier == info.primary_verifier) {
-                    results.push(info);
-                }
+                && !results
+                    .iter()
+                    .any(|r: &ProjectLanguageInfo| r.primary_verifier == info.primary_verifier)
+            {
+                results.push(info);
+            }
         }
 
         // 2. Scan immediate 1-level subdirectories (e.g. backend/, frontend/, client/, server/, web/, etc.)
@@ -94,14 +97,17 @@ pub fn detect_all_languages(allowed_folders: &[String]) -> Vec<ProjectLanguageIn
             for (sub_name, sub_path) in subdirs {
                 for detector in &detectors {
                     if let Some(mut info) = detector.detect(&sub_path) {
-                        info.primary_verifier = format!("cd {} && {}", sub_name, info.primary_verifier);
+                        info.primary_verifier =
+                            format!("cd {} && {}", sub_name, info.primary_verifier);
                         info.secondary_verifiers = info
                             .secondary_verifiers
                             .into_iter()
                             .map(|v| format!("cd {} && {}", sub_name, v))
                             .collect();
 
-                        if !results.iter().any(|r: &ProjectLanguageInfo| r.primary_verifier == info.primary_verifier) {
+                        if !results.iter().any(|r: &ProjectLanguageInfo| {
+                            r.primary_verifier == info.primary_verifier
+                        }) {
                             results.push(info);
                         }
                     }
@@ -135,7 +141,11 @@ pub fn is_executable_available(bin_name: &str, workspace_roots: &[String]) -> bo
     }
 
     // 1. If it's a relative path like ./gradlew or bin/test
-    if trimmed.starts_with("./") || trimmed.starts_with("../") || trimmed.contains('/') || trimmed.contains('\\') {
+    if trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
         for root in workspace_roots {
             let p = Path::new(root).join(trimmed);
             if p.exists() {
@@ -268,10 +278,31 @@ pub fn is_verification_command(cmd: &str) -> bool {
     // This is deliberately a property ("did the command merely create, move, or delete
     // files?") rather than an exhaustive inventory of every shell builtin that can do so.
     let fs_mutation_prefixes = [
-        "mkdir", "md ", "new-item", "ni ", "touch", "cp ", "copy ", "copy-item",
-        "mv ", "move ", "move-item", "rm ", "del ", "remove-item", "rd ", "rmdir",
-        "mkdir ", "rmdir ", "set-content", "add-content", "out-file", "chmod", "chown",
-        "ln ", "new-item",
+        "mkdir",
+        "md ",
+        "new-item",
+        "ni ",
+        "touch",
+        "cp ",
+        "copy ",
+        "copy-item",
+        "mv ",
+        "move ",
+        "move-item",
+        "rm ",
+        "del ",
+        "remove-item",
+        "rd ",
+        "rmdir",
+        "mkdir ",
+        "rmdir ",
+        "set-content",
+        "add-content",
+        "out-file",
+        "chmod",
+        "chown",
+        "ln ",
+        "new-item",
     ];
 
     // A bare existence probe reports a fact about the filesystem, not about behaviour.
@@ -279,24 +310,94 @@ pub fn is_verification_command(cmd: &str) -> bool {
 
     // Commands that are purely informational / navigation and NEVER count as verification
     let pure_info_prefixes = [
-        "git status", "git log", "git diff", "git show", "git branch", "git remote",
-        "ls", "dir", "pwd", "cd ", "echo ", "cat ", "type ", "head ", "tail ", "find ",
-        "which ", "where ", "whoami", "hostname", "uname",
+        "git status",
+        "git log",
+        "git diff",
+        "git show",
+        "git branch",
+        "git remote",
+        "ls",
+        "dir",
+        "pwd",
+        "cd ",
+        "echo ",
+        "cat ",
+        "type ",
+        "head ",
+        "tail ",
+        "find ",
+        "which ",
+        "where ",
+        "whoami",
+        "hostname",
+        "uname",
     ];
 
     // Package installation / dependency management commands that MUST NOT count as verification
     let pkg_mgmt_prefixes = [
-        "npm install", "npm i ", "npm i", "npm add", "npm update", "npm remove", "npm uninstall", "npm list", "npm audit", "npm init",
-        "pnpm install", "pnpm i ", "pnpm i", "pnpm add", "pnpm update", "pnpm remove", "pnpm list", "pnpm audit",
-        "yarn add", "yarn install", "yarn remove", "yarn list", "yarn why", "yarn init",
-        "bun install", "bun i ", "bun i", "bun add", "bun remove", "bun init",
-        "cargo add", "cargo install", "cargo remove", "cargo update", "cargo tree", "cargo new", "cargo init", "cargo metadata", "cargo run",
-        "pip install", "pip uninstall", "pip list", "pip freeze",
-        "pip3 install", "pip3 uninstall", "pip3 list", "pip3 freeze",
-        "poetry add", "poetry install", "poetry remove", "poetry lock", "poetry show",
-        "uv add", "uv pip", "uv sync", "uv lock",
-        "composer install", "composer require", "composer update", "composer remove",
-        "go get", "go install", "go mod",
+        "npm install",
+        "npm i ",
+        "npm i",
+        "npm add",
+        "npm update",
+        "npm remove",
+        "npm uninstall",
+        "npm list",
+        "npm audit",
+        "npm init",
+        "pnpm install",
+        "pnpm i ",
+        "pnpm i",
+        "pnpm add",
+        "pnpm update",
+        "pnpm remove",
+        "pnpm list",
+        "pnpm audit",
+        "yarn add",
+        "yarn install",
+        "yarn remove",
+        "yarn list",
+        "yarn why",
+        "yarn init",
+        "bun install",
+        "bun i ",
+        "bun i",
+        "bun add",
+        "bun remove",
+        "bun init",
+        "cargo add",
+        "cargo install",
+        "cargo remove",
+        "cargo update",
+        "cargo tree",
+        "cargo new",
+        "cargo init",
+        "cargo metadata",
+        "cargo run",
+        "pip install",
+        "pip uninstall",
+        "pip list",
+        "pip freeze",
+        "pip3 install",
+        "pip3 uninstall",
+        "pip3 list",
+        "pip3 freeze",
+        "poetry add",
+        "poetry install",
+        "poetry remove",
+        "poetry lock",
+        "poetry show",
+        "uv add",
+        "uv pip",
+        "uv sync",
+        "uv lock",
+        "composer install",
+        "composer require",
+        "composer update",
+        "composer remove",
+        "go get",
+        "go install",
+        "go mod",
     ];
 
     // Handle chained shell commands e.g. "cd simulations/python_scenario && python3 -m unittest discover -s tests"
@@ -313,52 +414,119 @@ pub fn is_verification_command(cmd: &str) -> bool {
         }
 
         // If the sub-command starts with a known pure-info command, skip it
-        if pure_info_prefixes.iter().any(|info| sub_trimmed == *info || sub_trimmed.starts_with(info)) {
+        if pure_info_prefixes
+            .iter()
+            .any(|info| sub_trimmed == *info || sub_trimmed.starts_with(info))
+        {
             continue;
         }
 
         // Filesystem bookkeeping carries no signal about correctness. Skipping it here
         // means `mkdir -p dist && npm run build` is judged on the build, not on the mkdir.
-        if fs_mutation_prefixes.iter().any(|p| sub_trimmed.starts_with(p))
+        if fs_mutation_prefixes
+            .iter()
+            .any(|p| sub_trimmed.starts_with(p))
             || fs_probe_prefixes.iter().any(|p| sub_trimmed.starts_with(p))
         {
             continue;
         }
 
         // If the sub-command is a package installation/management command, skip it
-        if pkg_mgmt_prefixes.iter().any(|pkg| sub_trimmed == *pkg || sub_trimmed.starts_with(pkg)) {
+        if pkg_mgmt_prefixes
+            .iter()
+            .any(|pkg| sub_trimmed == *pkg || sub_trimmed.starts_with(pkg))
+        {
             continue;
         }
 
         let known_prefixes = [
-            "cargo test", "cargo check", "cargo clippy", "cargo build",
-            "npm test", "npm run test", "npm run build", "npm run check", "npm run typecheck", "npm run lint",
-            "pnpm test", "pnpm run test", "pnpm run build", "pnpm run typecheck", "pnpm run lint",
-            "yarn test", "yarn run test", "yarn run build", "yarn run typecheck", "yarn run lint",
-            "bun test", "bun run build", "bun run check", "bun run lint",
-            "deno test", "deno check", "deno lint",
-            "node --test", "node --experimental-strip-types --test", "node test",
-            "npx tsc", "tsc",
+            "cargo test",
+            "cargo check",
+            "cargo clippy",
+            "cargo build",
+            "npm test",
+            "npm run test",
+            "npm run build",
+            "npm run check",
+            "npm run typecheck",
+            "npm run lint",
+            "pnpm test",
+            "pnpm run test",
+            "pnpm run build",
+            "pnpm run typecheck",
+            "pnpm run lint",
+            "yarn test",
+            "yarn run test",
+            "yarn run build",
+            "yarn run typecheck",
+            "yarn run lint",
+            "bun test",
+            "bun run build",
+            "bun run check",
+            "bun run lint",
+            "deno test",
+            "deno check",
+            "deno lint",
+            "node --test",
+            "node --experimental-strip-types --test",
+            "node test",
+            "npx tsc",
+            "tsc",
             "vite build",
             "pytest",
-            "python -m unittest", "python3 -m unittest", "py -m unittest",
-            "python -m pytest", "python3 -m pytest", "py -m pytest",
-            "python -m", "python3 -m",
-            "uv run pytest", "poetry run pytest", "pipenv run pytest",
-            "uv run", "poetry run",
-            "go test", "go vet", "go build",
-            "flutter test", "flutter analyze", "dart test", "dart analyze",
-            "dotnet test", "dotnet build",
-            "gradle test", "./gradlew test", "mvn test", "mvn verify",
-            "ctest", "cmake --build", "make test", "make check", "meson test", "ninja",
-            "php artisan test", "./vendor/bin/phpunit", "composer test", "./vendor/bin/pest",
-            "bundle exec rspec", "bundle exec rake test", "rake test",
+            "python -m unittest",
+            "python3 -m unittest",
+            "py -m unittest",
+            "python -m pytest",
+            "python3 -m pytest",
+            "py -m pytest",
+            "python -m",
+            "python3 -m",
+            "uv run pytest",
+            "poetry run pytest",
+            "pipenv run pytest",
+            "uv run",
+            "poetry run",
+            "go test",
+            "go vet",
+            "go build",
+            "flutter test",
+            "flutter analyze",
+            "dart test",
+            "dart analyze",
+            "dotnet test",
+            "dotnet build",
+            "gradle test",
+            "./gradlew test",
+            "mvn test",
+            "mvn verify",
+            "ctest",
+            "cmake --build",
+            "make test",
+            "make check",
+            "meson test",
+            "ninja",
+            "php artisan test",
+            "./vendor/bin/phpunit",
+            "composer test",
+            "./vendor/bin/pest",
+            "bundle exec rspec",
+            "bundle exec rake test",
+            "rake test",
             "mix test",
-            "swift test", "swift build",
-            "zig build test", "zig build",
-            "vitest", "jest",
-            "just test", "just check", "task test", "task check",
-            "bazel test", "buck test", "pants test",
+            "swift test",
+            "swift build",
+            "zig build test",
+            "zig build",
+            "vitest",
+            "jest",
+            "just test",
+            "just check",
+            "task test",
+            "task check",
+            "bazel test",
+            "buck test",
+            "pants test",
         ];
 
         if known_prefixes.iter().any(|p| sub_trimmed.starts_with(p)) {
@@ -381,15 +549,26 @@ pub fn is_verification_command(cmd: &str) -> bool {
             }
 
             // Script executions e.g. "./test.sh", "bash run_tests.sh", "sh check.sh", "python3 tests/test.py"
-            if base_cmd.contains("test") || base_cmd.contains("check") || base_cmd.contains("verify") || base_cmd.contains("lint") {
+            if base_cmd.contains("test")
+                || base_cmd.contains("check")
+                || base_cmd.contains("verify")
+                || base_cmd.contains("lint")
+            {
                 return true;
             }
 
             // Arguments containing verification keywords
             if parts.iter().skip(1).any(|arg| {
-                *arg == "test" || *arg == "check" || *arg == "lint" || *arg == "build"
-                    || *arg == "typecheck" || *arg == "verify" || *arg == "validate"
-                    || arg.starts_with("test") || arg.contains("pytest") || arg.contains("unittest")
+                *arg == "test"
+                    || *arg == "check"
+                    || *arg == "lint"
+                    || *arg == "build"
+                    || *arg == "typecheck"
+                    || *arg == "verify"
+                    || *arg == "validate"
+                    || arg.starts_with("test")
+                    || arg.contains("pytest")
+                    || arg.contains("unittest")
             }) {
                 return true;
             }
@@ -424,8 +603,12 @@ mod tests {
         assert!(is_verification_command("npm test"));
         assert!(is_verification_command("npx tsc --noEmit"));
         assert!(is_verification_command("pytest tests/"));
-        assert!(is_verification_command("python3 -m unittest discover -s tests"));
-        assert!(is_verification_command("cd simulations/python_scenario && python3 -m unittest discover -s tests"));
+        assert!(is_verification_command(
+            "python3 -m unittest discover -s tests"
+        ));
+        assert!(is_verification_command(
+            "cd simulations/python_scenario && python3 -m unittest discover -s tests"
+        ));
         assert!(is_verification_command("./test.sh"));
         assert!(is_verification_command("make check"));
         assert!(is_verification_command("bazel test //..."));
@@ -444,15 +627,21 @@ mod tests {
         assert!(is_verification_command("go test ./..."));
         assert!(is_verification_command("flutter test"));
         assert!(is_verification_command("dotnet test"));
-        assert!(is_verification_command("(cd backend && cargo test) && (cd frontend && npm run build)"));
+        assert!(is_verification_command(
+            "(cd backend && cargo test) && (cd frontend && npm run build)"
+        ));
         assert!(!is_verification_command("git status"));
         assert!(!is_verification_command("ls -la"));
 
         let failing_json = r#"{"command":"npx tsc --noEmit","cwd":"/home/headway/MyWork/project/portofolio","error_banner":"❌ COMMAND FAILED with exit code 2.","exit_code":2,"status":"FAILED","stderr":"","stdout":"src/App.tsx(28,5): error TS2741","success":false}"#;
-        assert!(crate::agent::diagnostics::is_command_output_error(failing_json));
+        assert!(crate::agent::diagnostics::is_command_output_error(
+            failing_json
+        ));
 
         let success_json = r#"{"command":"npx tsc --noEmit","cwd":"/home/headway/MyWork/project/portofolio","exit_code":0,"stderr":"","stdout":"","success":true}"#;
-        assert!(!crate::agent::diagnostics::is_command_output_error(success_json));
+        assert!(!crate::agent::diagnostics::is_command_output_error(
+            success_json
+        ));
     }
 
     /// Filesystem mutations are not verification, however they are spelled.
@@ -492,7 +681,10 @@ mod tests {
             "go test ./...",
             "mkdir -p out && npm run build",
         ] {
-            assert!(is_verification_command(cmd), "`{cmd}` must count as verification");
+            assert!(
+                is_verification_command(cmd),
+                "`{cmd}` must count as verification"
+            );
         }
     }
 
@@ -515,13 +707,19 @@ mod tests {
         let detected = detect_all_languages(&allowed);
         assert_eq!(detected.len(), 2);
         assert_eq!(detected[0].primary_verifier, "cd backend && cargo test");
-        assert_eq!(detected[1].primary_verifier, "cd frontend && npm run check && npm run build");
+        assert_eq!(
+            detected[1].primary_verifier,
+            "cd frontend && npm run check && npm run build"
+        );
 
         let primary_chained = detect_primary_verification_command(&allowed);
         if is_executable_available("npm", &allowed) {
             assert_eq!(
                 primary_chained,
-                Some("(cd backend && cargo test) && (cd frontend && npm run check && npm run build)".to_string())
+                Some(
+                    "(cd backend && cargo test) && (cd frontend && npm run check && npm run build)"
+                        .to_string()
+                )
             );
         } else {
             assert_eq!(
@@ -534,12 +732,18 @@ mod tests {
         let mod_frontend = vec!["frontend/src/App.tsx".to_string()];
         let scoped_front = detect_verifiers_for_modified_files(&allowed, &mod_frontend);
         if is_executable_available("npm", &allowed) {
-            assert_eq!(scoped_front, vec!["cd frontend && npm run check && npm run build".to_string()]);
+            assert_eq!(
+                scoped_front,
+                vec!["cd frontend && npm run check && npm run build".to_string()]
+            );
         } else {
             assert!(scoped_front.is_empty());
         }
 
-        let mod_both = vec!["backend/src/main.rs".to_string(), "frontend/src/App.tsx".to_string()];
+        let mod_both = vec![
+            "backend/src/main.rs".to_string(),
+            "frontend/src/App.tsx".to_string(),
+        ];
         let scoped_both = detect_verifiers_for_modified_files(&allowed, &mod_both);
         if is_executable_available("npm", &allowed) {
             assert_eq!(
@@ -550,10 +754,7 @@ mod tests {
                 ]
             );
         } else {
-            assert_eq!(
-                scoped_both,
-                vec!["cd backend && cargo test".to_string()]
-            );
+            assert_eq!(scoped_both, vec!["cd backend && cargo test".to_string()]);
         }
 
         let _ = fs::remove_dir_all(&temp);

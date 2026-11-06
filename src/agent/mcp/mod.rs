@@ -68,7 +68,10 @@ use tokio::process::Command;
 pub use types::*;
 
 /// Resolves executable command and arguments directly via system PATH.
-fn resolve_executable(command_str: &str, args: &[String]) -> (String, Vec<String>, Option<std::path::PathBuf>) {
+fn resolve_executable(
+    command_str: &str,
+    args: &[String],
+) -> (String, Vec<String>, Option<std::path::PathBuf>) {
     (command_str.to_string(), args.to_vec(), None)
 }
 
@@ -106,13 +109,24 @@ async fn call_stdio_rpc(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process '{}': {}", command_str, e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn process '{}': {}", command_str, e))?;
 
-    let mut stdin = child.stdin.take().ok_or_else(|| "Failed to capture stdin of MCP process".to_string())?;
-    let stdout = child.stdout.take().ok_or_else(|| "Failed to capture stdout of MCP process".to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to capture stdin of MCP process".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture stdout of MCP process".to_string())?;
 
     let line_writer = tokio::spawn(async move {
-        stdin.write_all(payload.as_bytes()).await.map_err(|e| e.to_string())?;
+        stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
         stdin.flush().await.map_err(|e| e.to_string())?;
         Ok::<(), String>(())
@@ -185,41 +199,58 @@ async fn call_http_rpc(
         }
         Ok(r) if r.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED && url.ends_with("/sse") => {
             // Server might require standard SSE handshake via GET first
-            if let Ok(mut sse_resp) = client.get(url).header("Accept", "text/event-stream").send().await
-                && sse_resp.status().is_success() {
-                    while let Ok(Some(chunk)) = sse_resp.chunk().await {
-                        let text = String::from_utf8_lossy(&chunk);
-                        for line in text.lines() {
-                            if line.starts_with("data:") {
-                                let endpoint = line.trim_start_matches("data:").trim();
-                                let resolved_url = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+            if let Ok(mut sse_resp) = client
+                .get(url)
+                .header("Accept", "text/event-stream")
+                .send()
+                .await
+                && sse_resp.status().is_success()
+            {
+                while let Ok(Some(chunk)) = sse_resp.chunk().await {
+                    let text = String::from_utf8_lossy(&chunk);
+                    for line in text.lines() {
+                        if line.starts_with("data:") {
+                            let endpoint = line.trim_start_matches("data:").trim();
+                            let resolved_url = if endpoint.starts_with("http://")
+                                || endpoint.starts_with("https://")
+                            {
+                                endpoint.to_string()
+                            } else {
+                                let base = url.trim_end_matches("/sse");
+                                let clean_path = if endpoint.starts_with('/') {
                                     endpoint.to_string()
                                 } else {
-                                    let base = url.trim_end_matches("/sse");
-                                    let clean_path = if endpoint.starts_with('/') { endpoint.to_string() } else { format!("/{}", endpoint) };
-                                    format!("{}{}", base, clean_path)
+                                    format!("/{}", endpoint)
                                 };
+                                format!("{}{}", base, clean_path)
+                            };
 
-                                let post_resp = client
-                                    .post(&resolved_url)
-                                    .header("Content-Type", "application/json")
-                                    .json(request_json)
-                                    .send()
-                                    .await
-                                    .map_err(|e| format!("POST to SSE endpoint failed: {}", e))?;
+                            let post_resp = client
+                                .post(&resolved_url)
+                                .header("Content-Type", "application/json")
+                                .json(request_json)
+                                .send()
+                                .await
+                                .map_err(|e| format!("POST to SSE endpoint failed: {}", e))?;
 
-                                let body: serde_json::Value = post_resp
-                                    .json()
-                                    .await
-                                    .map_err(|e| format!("Failed to parse SSE JSON response: {}", e))?;
-                                return Ok(body);
-                            }
+                            let body: serde_json::Value = post_resp
+                                .json()
+                                .await
+                                .map_err(|e| format!("Failed to parse SSE JSON response: {}", e))?;
+                            return Ok(body);
                         }
                     }
                 }
-            Err(format!("MCP HTTP server responded with status: {}", r.status()))
+            }
+            Err(format!(
+                "MCP HTTP server responded with status: {}",
+                r.status()
+            ))
         }
-        Ok(r) => Err(format!("MCP HTTP server responded with status: {}", r.status())),
+        Ok(r) => Err(format!(
+            "MCP HTTP server responded with status: {}",
+            r.status()
+        )),
         Err(e) => Err(format!("HTTP request failed to {}: {}", url, e)),
     }
 }
@@ -287,7 +318,11 @@ impl McpClient {
     }
 
     /// Call a specific tool on the MCP server
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> Result<McpToolResult, String> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolResult, String> {
         let call_req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 3,
@@ -308,7 +343,10 @@ impl McpClient {
         }
 
         let result_val = resp.get("result").unwrap_or(&serde_json::Value::Null);
-        let is_error = result_val.get("isError").and_then(|b| b.as_bool()).unwrap_or(false);
+        let is_error = result_val
+            .get("isError")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
         let content = result_val
             .get("content")
             .and_then(|c| c.as_array())
@@ -326,15 +364,26 @@ impl McpClient {
                 let cmd = self.config.command.as_deref().ok_or_else(|| {
                     "MCP stdio transport requires a 'command' to execute".to_string()
                 })?;
-                call_stdio_rpc(cmd, &self.config.args, &self.config.env, request, self.timeout).await
+                call_stdio_rpc(
+                    cmd,
+                    &self.config.args,
+                    &self.config.env,
+                    request,
+                    self.timeout,
+                )
+                .await
             }
             "sse" | "http" => {
-                let url = self.config.url.as_deref().ok_or_else(|| {
-                    "MCP HTTP/SSE transport requires a valid 'url'".to_string()
-                })?;
+                let url =
+                    self.config.url.as_deref().ok_or_else(|| {
+                        "MCP HTTP/SSE transport requires a valid 'url'".to_string()
+                    })?;
                 call_http_rpc(url, request, self.timeout).await
             }
-            other => Err(format!("Unsupported MCP transport '{}'. Supported: stdio, sse, http", other)),
+            other => Err(format!(
+                "Unsupported MCP transport '{}'. Supported: stdio, sse, http",
+                other
+            )),
         }
     }
 
@@ -413,7 +462,9 @@ pub struct ActiveMcpTool {
 }
 
 /// Discovers tools from all active MCP servers for a project
-pub async fn resolve_active_mcp_tools(servers: &[crate::agent::models::McpServer]) -> Vec<ActiveMcpTool> {
+pub async fn resolve_active_mcp_tools(
+    servers: &[crate::agent::models::McpServer],
+) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
     for s in servers {
         if s.is_enabled != 1 {
@@ -452,7 +503,12 @@ pub async fn call_active_mcp_tool(
     let matched = tools
         .iter()
         .find(|t| t.namespaced_name == called_name || t.original_name == called_name)
-        .ok_or_else(|| format!("MCP tool '{}' not found in active project tools", called_name))?;
+        .ok_or_else(|| {
+            format!(
+                "MCP tool '{}' not found in active project tools",
+                called_name
+            )
+        })?;
 
     let client = McpClient::new(matched.server_config.clone());
     let res = client.call_tool(&matched.original_name, arguments).await?;

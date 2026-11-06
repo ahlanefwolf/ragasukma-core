@@ -34,11 +34,7 @@ pub fn parse_retention_days(raw: Option<&str>, default: u64) -> Option<u64> {
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(default);
 
-    if days == 0 {
-        None
-    } else {
-        Some(days)
-    }
+    if days == 0 { None } else { Some(days) }
 }
 
 /// Reads a retention window in days from the environment, falling back to `default`.
@@ -65,7 +61,11 @@ pub async fn run_retention_sweep() {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_messages(cutoff).await {
             Ok(0) => {}
-            Ok(n) => tracing::info!("[Retention] Pruned {} message row(s) older than {}d", n, days),
+            Ok(n) => tracing::info!(
+                "[Retention] Pruned {} message row(s) older than {}d",
+                n,
+                days
+            ),
             Err(e) => tracing::error!("[Retention] Message sweep failed: {e}"),
         }
     }
@@ -85,7 +85,11 @@ pub async fn run_retention_sweep() {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_sessions(cutoff).await {
             Ok(0) => {}
-            Ok(n) => tracing::info!("[Retention] Pruned {} session(s) idle for over {}d", n, days),
+            Ok(n) => tracing::info!(
+                "[Retention] Pruned {} session(s) idle for over {}d",
+                n,
+                days
+            ),
             Err(e) => tracing::error!("[Retention] Session sweep failed: {e}"),
         }
         match repository::delete_orphan_projects().await {

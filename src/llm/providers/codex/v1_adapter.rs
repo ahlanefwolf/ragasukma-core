@@ -1,6 +1,6 @@
 use super::constants::*;
 use crate::llm::types::ChatMessage;
-use crate::llm::v1_engine::{extract_text_content, generate_v1_uuid, V1ChatRequest, V1StreamEvent};
+use crate::llm::v1_engine::{V1ChatRequest, V1StreamEvent, extract_text_content, generate_v1_uuid};
 use serde_json::json;
 
 pub fn build_codex_payload_from_messages(
@@ -173,10 +173,20 @@ pub fn build_codex_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
         let mut translated_tools = Vec::new();
         for tool in tools {
             if let Some(func) = tool.get("function") {
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let name = func
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
                 if !name.is_empty() {
-                    let desc = func.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let params = func.get("parameters").cloned().unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+                    let desc = func
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let params = func
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
                     translated_tools.push(json!({
                         "type": "function",
                         "name": name,
@@ -185,9 +195,10 @@ pub fn build_codex_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                     }));
                 }
             } else if let Some(name) = tool.get("name").and_then(|v| v.as_str())
-                && !name.trim().is_empty() {
-                    translated_tools.push(tool.clone());
-                }
+                && !name.trim().is_empty()
+            {
+                translated_tools.push(tool.clone());
+            }
         }
         if !translated_tools.is_empty() {
             payload["tools"] = json!(translated_tools);
@@ -294,9 +305,10 @@ impl CodexSseParserState {
         // 3. Reasoning / Thought Deltas
         if event_type == "response.reasoning_summary_text.delta" {
             if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str())
-                && !delta.is_empty() {
-                    events.push(V1StreamEvent::ThoughtDelta(delta.to_string()));
-                }
+                && !delta.is_empty()
+            {
+                events.push(V1StreamEvent::ThoughtDelta(delta.to_string()));
+            }
             return events;
         }
 
@@ -315,14 +327,18 @@ impl CodexSseParserState {
 
         if event_type.ends_with(".delta") {
             if let Some(text) = parsed.get("text").and_then(|v| v.as_str())
-                && !text.is_empty() {
-                    events.push(V1StreamEvent::ContentDelta(text.to_string()));
-                }
+                && !text.is_empty()
+            {
+                events.push(V1StreamEvent::ContentDelta(text.to_string()));
+            }
             return events;
         }
 
         // 6. Alternative OpenAI streaming format: choices[0].delta.content
-        if let Some(content) = parsed.pointer("/choices/0/delta/content").and_then(|v| v.as_str()) {
+        if let Some(content) = parsed
+            .pointer("/choices/0/delta/content")
+            .and_then(|v| v.as_str())
+        {
             if !content.is_empty() {
                 events.push(V1StreamEvent::ContentDelta(content.to_string()));
             }

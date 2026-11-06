@@ -315,10 +315,11 @@ pub async fn get_history_dates() -> Vec<String> {
 pub async fn get_history_dates_from_pool(pool: &SqlitePool) -> Vec<String> {
     let mut dates: Vec<String> = Vec::new();
 
-    if let Ok(rows) =
-        sqlx::query_scalar::<_, String>("SELECT DISTINCT date_str FROM chat_history ORDER BY date_str DESC")
-            .fetch_all(pool)
-            .await
+    if let Ok(rows) = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT date_str FROM chat_history ORDER BY date_str DESC",
+    )
+    .fetch_all(pool)
+    .await
     {
         dates = rows;
     }
@@ -347,17 +348,18 @@ pub async fn get_history_by_date_paginated_from_pool(
     let limit = limit.clamp(1, 100);
     let offset = (page - 1) * limit;
 
-    let total_rows: usize = sqlx::query("SELECT COUNT(*) as cnt FROM chat_history WHERE date_str = ?")
-        .bind(target_date)
-        .fetch_one(pool)
-        .await
-        .ok()
-        .and_then(|row| {
-            use sqlx::Row;
-            row.try_get::<i64, _>("cnt").ok()
-        })
-        .map(|c| c.max(0) as usize)
-        .unwrap_or(0);
+    let total_rows: usize =
+        sqlx::query("SELECT COUNT(*) as cnt FROM chat_history WHERE date_str = ?")
+            .bind(target_date)
+            .fetch_one(pool)
+            .await
+            .ok()
+            .and_then(|row| {
+                use sqlx::Row;
+                row.try_get::<i64, _>("cnt").ok()
+            })
+            .map(|c| c.max(0) as usize)
+            .unwrap_or(0);
 
     let total_turns = total_rows * 2;
     let total_pages = if total_rows == 0 {
@@ -366,7 +368,9 @@ pub async fn get_history_by_date_paginated_from_pool(
         total_rows.div_ceil(limit)
     };
 
-    let is_desc = order.map(|s| s.eq_ignore_ascii_case("desc")).unwrap_or(false);
+    let is_desc = order
+        .map(|s| s.eq_ignore_ascii_case("desc"))
+        .unwrap_or(false);
 
     let rows = if is_desc {
         let mut r = sqlx::query_as::<_, ChatHistoryRecord>(
@@ -488,13 +492,16 @@ mod tests {
         let dates = get_history_dates_from_pool(&pool).await;
         assert!(dates.contains(&test_date.to_string()));
 
-        let paginated = get_history_by_date_paginated_from_pool(&pool, test_date, 1, 10, None).await;
+        let paginated =
+            get_history_by_date_paginated_from_pool(&pool, test_date, 1, 10, None).await;
         assert_eq!(paginated.total_turns, 2);
         assert_eq!(paginated.turns.len(), 2);
         assert_eq!(paginated.turns[0].message, "hello");
         assert_eq!(paginated.turns[1].message, "hi there");
 
-        let deleted = delete_history_by_date_from_pool(&pool, test_date).await.unwrap();
+        let deleted = delete_history_by_date_from_pool(&pool, test_date)
+            .await
+            .unwrap();
         assert!(deleted);
 
         let dates_after = get_history_dates_from_pool(&pool).await;

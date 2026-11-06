@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::HashSet;
 
 /// Applies surgical edits to file content with a multi-tier resilient matcher inspired by Git's 3-way merge & fuzzy patch algorithms:
@@ -29,7 +29,8 @@ pub fn apply_resilient_edit(
         } else if count > 1 {
             bail!(
                 "'old_text' matches {} times in file '{}'. Provide 2-3 additional surrounding lines to make it unique.",
-                count, file_path
+                count,
+                file_path
             );
         }
     }
@@ -37,7 +38,10 @@ pub fn apply_resilient_edit(
     // Tier 2: Trimmed leading/trailing blank lines
     let trimmed_old = normalized_old.trim_matches('\n');
     let trimmed_new = normalized_new.trim_matches('\n');
-    if !trimmed_old.is_empty() && trimmed_old != normalized_old && normalized_content.contains(trimmed_old) {
+    if !trimmed_old.is_empty()
+        && trimmed_old != normalized_old
+        && normalized_content.contains(trimmed_old)
+    {
         let count = normalized_content.matches(trimmed_old).count();
         if count == 1 {
             return Ok(normalized_content.replacen(trimmed_old, trimmed_new, 1));
@@ -50,9 +54,14 @@ pub fn apply_resilient_edit(
     // Check if lines have line-number prefixes (e.g. "   42\t" or "   42 | ") from tool output
     let has_line_prefixes = raw_old_lines.iter().any(|l| {
         let t = l.trim_start();
-        t.find(|c: char| !c.is_ascii_digit()).map(|idx| {
-            idx > 0 && (t[idx..].starts_with('\t') || t[idx..].starts_with('|') || t[idx..].starts_with(": "))
-        }).unwrap_or(false)
+        t.find(|c: char| !c.is_ascii_digit())
+            .map(|idx| {
+                idx > 0
+                    && (t[idx..].starts_with('\t')
+                        || t[idx..].starts_with('|')
+                        || t[idx..].starts_with(": "))
+            })
+            .unwrap_or(false)
     });
 
     let cleaned_old_lines_owned: Vec<String>;
@@ -64,8 +73,15 @@ pub fn apply_resilient_edit(
     };
 
     // Strip leading & trailing empty lines from old_lines
-    let start_empty = effective_raw_old_lines.iter().take_while(|l| l.trim().is_empty()).count();
-    let end_empty = effective_raw_old_lines.iter().rev().take_while(|l| l.trim().is_empty()).count();
+    let start_empty = effective_raw_old_lines
+        .iter()
+        .take_while(|l| l.trim().is_empty())
+        .count();
+    let end_empty = effective_raw_old_lines
+        .iter()
+        .rev()
+        .take_while(|l| l.trim().is_empty())
+        .count();
     let old_lines: Vec<&str> = if start_empty + end_empty < effective_raw_old_lines.len() {
         effective_raw_old_lines[start_empty..effective_raw_old_lines.len() - end_empty].to_vec()
     } else {
@@ -81,7 +97,11 @@ pub fn apply_resilient_edit(
         let mut match_indices = Vec::new();
         for i in 0..=(content_lines.len() - old_lines.len()) {
             let window = &content_lines[i..i + old_lines.len()];
-            if window.iter().zip(old_lines.iter()).all(|(c, o)| c.trim() == o.trim()) {
+            if window
+                .iter()
+                .zip(old_lines.iter())
+                .all(|(c, o)| c.trim() == o.trim())
+            {
                 match_indices.push(i);
             }
         }
@@ -101,7 +121,8 @@ pub fn apply_resilient_edit(
         } else if match_indices.len() > 1 {
             bail!(
                 "'old_text' matched {} different sections with whitespace tolerance in '{}'. Provide more surrounding lines.",
-                match_indices.len(), file_path
+                match_indices.len(),
+                file_path
             );
         }
     }
@@ -141,9 +162,10 @@ pub fn apply_resilient_edit(
     // Replaces only the intermediate modified hunk between matched context boundaries.
     let raw_new_lines: Vec<&str> = normalized_new.lines().collect();
     if let Some(hunk) = decompose_3way_hunk(&old_lines, &raw_new_lines)
-        && let Some(result) = apply_git_3way_hunk(&content_lines, &hunk) {
-            return Ok(result);
-        }
+        && let Some(result) = apply_git_3way_hunk(&content_lines, &hunk)
+    {
+        return Ok(result);
+    }
 
     // Tier 6: Git Unified Diff / Patch Parser
     // If the input was formatted as a unified diff with @@ hunk headers
@@ -171,7 +193,12 @@ pub fn apply_resilient_edit(
             .enumerate()
             .find(|(_, l)| {
                 let t = l.trim();
-                t.len() > 3 && t != "</div>" && t != "}" && t != "};" && t != "</button>" && t != "</div>;"
+                t.len() > 3
+                    && t != "</div>"
+                    && t != "}"
+                    && t != "};"
+                    && t != "</button>"
+                    && t != "</div>;"
             })
             .map(|(idx, l)| (idx, l.trim()));
 
@@ -181,61 +208,70 @@ pub fn apply_resilient_edit(
             .rev()
             .find(|(_, l)| {
                 let t = l.trim();
-                t.len() > 3 && t != "</div>" && t != "}" && t != "};" && t != "</button>" && t != "</div>;"
+                t.len() > 3
+                    && t != "</div>"
+                    && t != "}"
+                    && t != "};"
+                    && t != "</button>"
+                    && t != "</div>;"
             })
             .map(|(idx, l)| (idx, l.trim()));
 
-        if let (Some((first_idx_in_old, first_anchor)), Some((last_idx_in_old, last_anchor))) = (first_meaningful, last_meaningful)
-            && first_idx_in_old < last_idx_in_old {
-                let mut anchor_matches = Vec::new();
-                for i in 0..content_lines.len() {
-                    if content_lines[i].trim() == first_anchor {
-                        let min_end = i + 1;
-                        let max_end = (i + old_lines.len() + 15).min(content_lines.len());
-                        for (j, line) in content_lines.iter().enumerate().take(max_end).skip(min_end) {
-                            if line.trim() == last_anchor {
-                                anchor_matches.push((i, j));
-                            }
+        if let (Some((first_idx_in_old, first_anchor)), Some((last_idx_in_old, last_anchor))) =
+            (first_meaningful, last_meaningful)
+            && first_idx_in_old < last_idx_in_old
+        {
+            let mut anchor_matches = Vec::new();
+            for i in 0..content_lines.len() {
+                if content_lines[i].trim() == first_anchor {
+                    let min_end = i + 1;
+                    let max_end = (i + old_lines.len() + 15).min(content_lines.len());
+                    for (j, line) in content_lines.iter().enumerate().take(max_end).skip(min_end) {
+                        if line.trim() == last_anchor {
+                            anchor_matches.push((i, j));
                         }
-                    }
-                }
-
-                if !anchor_matches.is_empty() {
-                    let target_span = old_lines.len();
-                    let mut best_anchor = anchor_matches[0];
-                    let mut min_diff = (anchor_matches[0].1 - anchor_matches[0].0 + 1).abs_diff(target_span);
-                    let mut second_diff = usize::MAX;
-
-                    for &(start, end) in &anchor_matches[1..] {
-                        let diff = (end - start + 1).abs_diff(target_span);
-                        if diff < min_diff {
-                            second_diff = min_diff;
-                            min_diff = diff;
-                            best_anchor = (start, end);
-                        } else if diff < second_diff {
-                            second_diff = diff;
-                        }
-                    }
-
-                    if anchor_matches.len() == 1 || min_diff < second_diff {
-                        let (start_idx, end_idx) = best_anchor;
-                        let suffix_count = old_lines.len() - 1 - last_idx_in_old;
-                        let effective_start = start_idx.saturating_sub(first_idx_in_old);
-                        let effective_end = (end_idx + suffix_count).min(content_lines.len().saturating_sub(1));
-
-                        let target_slice = &content_lines[effective_start..=effective_end];
-                        let adapted_new = adapt_indentation(target_slice, &old_lines, &normalized_new);
-
-                        let mut result_lines = Vec::new();
-                        result_lines.extend_from_slice(&content_lines[..effective_start]);
-                        result_lines.push(&adapted_new);
-                        if effective_end + 1 < content_lines.len() {
-                            result_lines.extend_from_slice(&content_lines[effective_end + 1..]);
-                        }
-                        return Ok(result_lines.join("\n"));
                     }
                 }
             }
+
+            if !anchor_matches.is_empty() {
+                let target_span = old_lines.len();
+                let mut best_anchor = anchor_matches[0];
+                let mut min_diff =
+                    (anchor_matches[0].1 - anchor_matches[0].0 + 1).abs_diff(target_span);
+                let mut second_diff = usize::MAX;
+
+                for &(start, end) in &anchor_matches[1..] {
+                    let diff = (end - start + 1).abs_diff(target_span);
+                    if diff < min_diff {
+                        second_diff = min_diff;
+                        min_diff = diff;
+                        best_anchor = (start, end);
+                    } else if diff < second_diff {
+                        second_diff = diff;
+                    }
+                }
+
+                if anchor_matches.len() == 1 || min_diff < second_diff {
+                    let (start_idx, end_idx) = best_anchor;
+                    let suffix_count = old_lines.len() - 1 - last_idx_in_old;
+                    let effective_start = start_idx.saturating_sub(first_idx_in_old);
+                    let effective_end =
+                        (end_idx + suffix_count).min(content_lines.len().saturating_sub(1));
+
+                    let target_slice = &content_lines[effective_start..=effective_end];
+                    let adapted_new = adapt_indentation(target_slice, &old_lines, &normalized_new);
+
+                    let mut result_lines = Vec::new();
+                    result_lines.extend_from_slice(&content_lines[..effective_start]);
+                    result_lines.push(&adapted_new);
+                    if effective_end + 1 < content_lines.len() {
+                        result_lines.extend_from_slice(&content_lines[effective_end + 1..]);
+                    }
+                    return Ok(result_lines.join("\n"));
+                }
+            }
+        }
     }
 
     // Tier 9: Diagnostics reporting exact file lines
@@ -265,7 +301,10 @@ pub fn apply_resilient_edit(
             .join("\n");
         format!(
             "\nClosest actual content in '{}' (lines {}-{}):\n```\n{}\n```\nAction: Copy the exact lines above to form `old_text` or use `workspace_write_file` if replacing a large block.",
-            file_path, start + 1, end, snippet
+            file_path,
+            start + 1,
+            end,
+            snippet
         )
     } else {
         format!(
@@ -274,7 +313,11 @@ pub fn apply_resilient_edit(
         )
     };
 
-    bail!("'old_text' not found in file '{}'.{}", file_path, hint_block)
+    bail!(
+        "'old_text' not found in file '{}'.{}",
+        file_path,
+        hint_block
+    )
 }
 
 // =========================================================================
@@ -284,16 +327,20 @@ pub fn apply_resilient_edit(
 pub fn strip_line_prefix(line: &str) -> String {
     let trimmed = line.trim_start();
     if let Some(idx) = trimmed.find(|c: char| !c.is_ascii_digit())
-        && idx > 0 {
-            let rem = &trimmed[idx..];
-            if let Some(after_tab) = rem.strip_prefix('\t') {
-                return after_tab.to_string();
-            } else if let Some(after_pipe) = rem.strip_prefix('|') {
-                return after_pipe.strip_prefix(' ').unwrap_or(after_pipe).to_string();
-            } else if let Some(after_colon) = rem.strip_prefix(": ") {
-                return after_colon.to_string();
-            }
+        && idx > 0
+    {
+        let rem = &trimmed[idx..];
+        if let Some(after_tab) = rem.strip_prefix('\t') {
+            return after_tab.to_string();
+        } else if let Some(after_pipe) = rem.strip_prefix('|') {
+            return after_pipe
+                .strip_prefix(' ')
+                .unwrap_or(after_pipe)
+                .to_string();
+        } else if let Some(after_colon) = rem.strip_prefix(": ") {
+            return after_colon.to_string();
         }
+    }
     line.to_string()
 }
 
@@ -358,7 +405,11 @@ fn adapt_indentation(target_slice: &[&str], old_lines: &[&str], new_text: &str) 
 
             if tf_indent_len > of_indent_len {
                 let diff = tf_indent_len - of_indent_len;
-                let pad = if is_tabs { "\t".repeat(diff) } else { " ".repeat(diff) };
+                let pad = if is_tabs {
+                    "\t".repeat(diff)
+                } else {
+                    " ".repeat(diff)
+                };
                 return new_text
                     .lines()
                     .map(|l| {
@@ -418,7 +469,10 @@ pub fn decompose_3way_hunk(old_lines: &[&str], new_lines: &[&str]) -> Option<Git
 
     // Require at least one boundary of context (prefix or suffix) to be a valid 3-way hunk
     if prefix_len > 0 || suffix_len > 0 {
-        let ctx_pre: Vec<String> = old_lines[..prefix_len].iter().map(|s| s.to_string()).collect();
+        let ctx_pre: Vec<String> = old_lines[..prefix_len]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let to_del: Vec<String> = old_lines[prefix_len..old_lines.len() - suffix_len]
             .iter()
             .map(|s| s.to_string())
@@ -531,7 +585,10 @@ fn apply_unified_diff_patch(content_lines: &[&str], diff_text: &str) -> Option<S
             let mut ctx_post = Vec::new();
             let mut seen_mods = false;
 
-            while i < lines.len() && !lines[i].starts_with("@@ ") && !lines[i].starts_with("diff --git") {
+            while i < lines.len()
+                && !lines[i].starts_with("@@ ")
+                && !lines[i].starts_with("diff --git")
+            {
                 let hline = lines[i];
                 if let Some(stripped) = hline.strip_prefix('+') {
                     add.push(stripped.to_string());
@@ -670,19 +727,18 @@ fn apply_git_lcs_alignment(
     }
 
     // Require high LCS alignment (>= 0.75) and confidence margin
-    if best_score >= 0.75 && (best_score - second_best_score >= 0.05 || second_best_score == 0.0)
-        && let Some((start_idx, end_idx)) = best_window {
-            let adapted_new = adapt_indentation(
-                &content_lines[start_idx..end_idx],
-                old_lines,
-                new_text,
-            );
-            let mut result = Vec::new();
-            result.extend_from_slice(&content_lines[..start_idx]);
-            result.push(&adapted_new);
-            result.extend_from_slice(&content_lines[end_idx..]);
-            return Some(result.join("\n"));
-        }
+    if best_score >= 0.75
+        && (best_score - second_best_score >= 0.05 || second_best_score == 0.0)
+        && let Some((start_idx, end_idx)) = best_window
+    {
+        let adapted_new =
+            adapt_indentation(&content_lines[start_idx..end_idx], old_lines, new_text);
+        let mut result = Vec::new();
+        result.extend_from_slice(&content_lines[..start_idx]);
+        result.push(&adapted_new);
+        result.extend_from_slice(&content_lines[end_idx..]);
+        return Some(result.join("\n"));
+    }
 
     None
 }
@@ -707,9 +763,15 @@ mod tests {
         ];
 
         let hunk = decompose_3way_hunk(&old_lines, &new_lines).expect("Should decompose hunk");
-        assert_eq!(hunk.context_before, vec!["function calculateTotal(items) {"]);
+        assert_eq!(
+            hunk.context_before,
+            vec!["function calculateTotal(items) {"]
+        );
         assert_eq!(hunk.to_delete, vec!["    let sum = 0;"]);
-        assert_eq!(hunk.to_insert, vec!["    let sum = items.reduce((a, b) => a + b, 0);"]);
+        assert_eq!(
+            hunk.to_insert,
+            vec!["    let sum = items.reduce((a, b) => a + b, 0);"]
+        );
         assert_eq!(hunk.context_after, vec!["    return sum;", "}"]);
     }
 

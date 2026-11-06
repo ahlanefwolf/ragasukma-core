@@ -7,7 +7,9 @@ use crate::agent::models::AgentSessionEvent;
 use crate::llm::providers::antigravity::AntigravityProvider;
 use crate::llm::providers::claude::ClaudeProvider;
 use crate::llm::providers::codex::CodexProvider;
-use crate::llm::v1_engine::{V1ChatRequest, V1Message, V1StreamEvent, V1ToolCall, V1ToolCallFunction};
+use crate::llm::v1_engine::{
+    V1ChatRequest, V1Message, V1StreamEvent, V1ToolCall, V1ToolCallFunction,
+};
 
 /// Upper bound on how long a single streaming attempt may run before it is abandoned.
 ///
@@ -122,23 +124,33 @@ fn accumulate_tool_call_delta(
     // filled means the provider restarted that slot (typical after a retry or
     // after a KeepAlive gap). Reset the accumulator so we do not concatenate
     // two unrelated argument payloads.
-    let restarted = (fresh_id && progress.id.as_deref().is_some_and(|prev| Some(prev) != id.as_deref()))
-        || (fresh_name && progress.name.as_deref().is_some_and(|prev| Some(prev) != name.as_deref()));
+    let restarted = (fresh_id
+        && progress
+            .id
+            .as_deref()
+            .is_some_and(|prev| Some(prev) != id.as_deref()))
+        || (fresh_name
+            && progress
+                .name
+                .as_deref()
+                .is_some_and(|prev| Some(prev) != name.as_deref()));
     if restarted {
         collected[index].function.arguments.clear();
         progress.saw_arguments = false;
     }
 
     if let Some(tc_id) = id
-        && !tc_id.trim().is_empty() {
-            collected[index].id = tc_id.clone();
-            progress.id = Some(tc_id);
-        }
+        && !tc_id.trim().is_empty()
+    {
+        collected[index].id = tc_id.clone();
+        progress.id = Some(tc_id);
+    }
     if let Some(tc_name) = name
-        && !tc_name.trim().is_empty() {
-            collected[index].function.name = tc_name.clone();
-            progress.name = Some(tc_name);
-        }
+        && !tc_name.trim().is_empty()
+    {
+        collected[index].function.name = tc_name.clone();
+        progress.name = Some(tc_name);
+    }
 
     if arguments.is_empty() {
         return;
@@ -199,9 +211,11 @@ pub async fn execute_model_stream(
         tool_choice: tool_choice_payload,
     };
 
-    let input_chars: usize = chat_req.messages.iter().map(|m| {
-        m.content.as_ref().map(|c| c.to_string().len()).unwrap_or(0)
-    }).sum();
+    let input_chars: usize = chat_req
+        .messages
+        .iter()
+        .map(|m| m.content.as_ref().map(|c| c.to_string().len()).unwrap_or(0))
+        .sum();
     let estimated_input_tokens = (input_chars / 4).max(1);
     let turn_start_time = std::time::Instant::now();
 
@@ -223,10 +237,7 @@ pub async fn execute_model_stream(
             // Ghost Streaming mitigation: If retrying after tokens were already streamed to UI,
             // send a StreamReset event so UI clears partial accumulated tokens and avoids duplicate output.
             if attempt > 1 && deltas_broadcasted {
-                broadcast_session_event(
-                    &sess_id_clone,
-                    AgentSessionEvent::StreamReset,
-                );
+                broadcast_session_event(&sess_id_clone, AgentSessionEvent::StreamReset);
                 deltas_broadcasted = false;
             }
 
@@ -236,47 +247,54 @@ pub async fn execute_model_stream(
 
             let family = crate::agent::executor::state::detect_provider_family(&model_clone);
 
-            let attempt_result = if family == crate::agent::executor::state::ModelProviderFamily::Claude {
-                let mut announced_tool_indices: HashSet<usize> = HashSet::new();
-                let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
-                let mut provider = ClaudeProvider::new();
-                let res = provider.chat_stream_v1(&req_clone, |event| {
-                    if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        anyhow::bail!("Session cancelled by user");
-                    }
-                    match event {
-                        V1StreamEvent::ContentDelta(delta) => {
-                            accumulated_content.push_str(&delta);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::Delta { delta },
-                            );
+            let attempt_result =
+                if family == crate::agent::executor::state::ModelProviderFamily::Claude {
+                    let mut announced_tool_indices: HashSet<usize> = HashSet::new();
+                    let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
+                    let mut provider = ClaudeProvider::new();
+                    let res = provider.chat_stream_v1(&req_clone, |event| {
+                        if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            anyhow::bail!("Session cancelled by user");
                         }
-                        V1StreamEvent::ThoughtDelta(thought) => {
-                            accumulated_thought.push_str(&thought);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::ThoughtDelta { delta: thought },
-                            );
-                        }
-                        V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
-                            let announced_name = name
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|n| !n.is_empty())
-                                .map(str::to_string);
-                            accumulate_tool_call_delta(
-                                &mut collected_tool_calls,
-                                &mut delta_progress,
+                        match event {
+                            V1StreamEvent::ContentDelta(delta) => {
+                                accumulated_content.push_str(&delta);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::Delta { delta },
+                                );
+                            }
+                            V1StreamEvent::ThoughtDelta(thought) => {
+                                accumulated_thought.push_str(&thought);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::ThoughtDelta { delta: thought },
+                                );
+                            }
+                            V1StreamEvent::ToolCallDelta {
                                 index,
                                 id,
                                 name,
-                                &arguments,
-                            );
-                            if let Some(tc_name) = announced_name
-                                && announced_tool_indices.insert(index) {
+                                arguments,
+                            } => {
+                                let announced_name = name
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|n| !n.is_empty())
+                                    .map(str::to_string);
+                                accumulate_tool_call_delta(
+                                    &mut collected_tool_calls,
+                                    &mut delta_progress,
+                                    index,
+                                    id,
+                                    name,
+                                    &arguments,
+                                );
+                                if let Some(tc_name) = announced_name
+                                    && announced_tool_indices.insert(index)
+                                {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -286,62 +304,70 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                    Ok(())
-                });
-                res.map(|v1_res| {
-                    let tc = if v1_res.tool_calls.is_some() {
-                        v1_res.tool_calls
-                    } else if !collected_tool_calls.is_empty() {
-                        Some(collected_tool_calls)
-                    } else {
-                        None
-                    };
-                    (accumulated_content, accumulated_thought, tc)
-                })
-            } else if family == crate::agent::executor::state::ModelProviderFamily::Codex || is_codex {
-                let mut announced_tool_indices: HashSet<usize> = HashSet::new();
-                let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
-                let mut provider = CodexProvider::new();
-                let res = provider.chat_stream_v1(&req_clone, |event| {
-                    if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        anyhow::bail!("Session cancelled by user");
-                    }
-                    match event {
-                        V1StreamEvent::ContentDelta(delta) => {
-                            accumulated_content.push_str(&delta);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::Delta { delta },
-                            );
+                        Ok(())
+                    });
+                    res.map(|v1_res| {
+                        let tc = if v1_res.tool_calls.is_some() {
+                            v1_res.tool_calls
+                        } else if !collected_tool_calls.is_empty() {
+                            Some(collected_tool_calls)
+                        } else {
+                            None
+                        };
+                        (accumulated_content, accumulated_thought, tc)
+                    })
+                } else if family == crate::agent::executor::state::ModelProviderFamily::Codex
+                    || is_codex
+                {
+                    let mut announced_tool_indices: HashSet<usize> = HashSet::new();
+                    let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
+                    let mut provider = CodexProvider::new();
+                    let res = provider.chat_stream_v1(&req_clone, |event| {
+                        if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            anyhow::bail!("Session cancelled by user");
                         }
-                        V1StreamEvent::ThoughtDelta(thought) => {
-                            accumulated_thought.push_str(&thought);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::ThoughtDelta { delta: thought },
-                            );
-                        }
-                        V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
-                            let announced_name = name
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|n| !n.is_empty())
-                                .map(str::to_string);
-                            accumulate_tool_call_delta(
-                                &mut collected_tool_calls,
-                                &mut delta_progress,
+                        match event {
+                            V1StreamEvent::ContentDelta(delta) => {
+                                accumulated_content.push_str(&delta);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::Delta { delta },
+                                );
+                            }
+                            V1StreamEvent::ThoughtDelta(thought) => {
+                                accumulated_thought.push_str(&thought);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::ThoughtDelta { delta: thought },
+                                );
+                            }
+                            V1StreamEvent::ToolCallDelta {
                                 index,
                                 id,
                                 name,
-                                &arguments,
-                            );
-                            if let Some(tc_name) = announced_name
-                                && announced_tool_indices.insert(index) {
+                                arguments,
+                            } => {
+                                let announced_name = name
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|n| !n.is_empty())
+                                    .map(str::to_string);
+                                accumulate_tool_call_delta(
+                                    &mut collected_tool_calls,
+                                    &mut delta_progress,
+                                    index,
+                                    id,
+                                    name,
+                                    &arguments,
+                                );
+                                if let Some(tc_name) = announced_name
+                                    && announced_tool_indices.insert(index)
+                                {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -351,62 +377,68 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                    Ok(())
-                });
-                res.map(|v1_res| {
-                    let tc = if v1_res.tool_calls.is_some() {
-                        v1_res.tool_calls
-                    } else if !collected_tool_calls.is_empty() {
-                        Some(collected_tool_calls)
-                    } else {
-                        None
-                    };
-                    (accumulated_content, accumulated_thought, tc)
-                })
-            } else if family == crate::agent::executor::state::ModelProviderFamily::Custom {
-                let mut announced_tool_indices: HashSet<usize> = HashSet::new();
-                let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
-                let mut provider = crate::llm::providers::custom::CustomProvider::new();
-                let res = provider.chat_stream_v1(&req_clone, |event| {
-                    if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        anyhow::bail!("Session cancelled by user");
-                    }
-                    match event {
-                        V1StreamEvent::ContentDelta(delta) => {
-                            accumulated_content.push_str(&delta);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::Delta { delta },
-                            );
+                        Ok(())
+                    });
+                    res.map(|v1_res| {
+                        let tc = if v1_res.tool_calls.is_some() {
+                            v1_res.tool_calls
+                        } else if !collected_tool_calls.is_empty() {
+                            Some(collected_tool_calls)
+                        } else {
+                            None
+                        };
+                        (accumulated_content, accumulated_thought, tc)
+                    })
+                } else if family == crate::agent::executor::state::ModelProviderFamily::Custom {
+                    let mut announced_tool_indices: HashSet<usize> = HashSet::new();
+                    let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
+                    let mut provider = crate::llm::providers::custom::CustomProvider::new();
+                    let res = provider.chat_stream_v1(&req_clone, |event| {
+                        if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            anyhow::bail!("Session cancelled by user");
                         }
-                        V1StreamEvent::ThoughtDelta(thought) => {
-                            accumulated_thought.push_str(&thought);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::ThoughtDelta { delta: thought },
-                            );
-                        }
-                        V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
-                            let announced_name = name
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|n| !n.is_empty())
-                                .map(str::to_string);
-                            accumulate_tool_call_delta(
-                                &mut collected_tool_calls,
-                                &mut delta_progress,
+                        match event {
+                            V1StreamEvent::ContentDelta(delta) => {
+                                accumulated_content.push_str(&delta);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::Delta { delta },
+                                );
+                            }
+                            V1StreamEvent::ThoughtDelta(thought) => {
+                                accumulated_thought.push_str(&thought);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::ThoughtDelta { delta: thought },
+                                );
+                            }
+                            V1StreamEvent::ToolCallDelta {
                                 index,
                                 id,
                                 name,
-                                &arguments,
-                            );
-                            if let Some(tc_name) = announced_name
-                                && announced_tool_indices.insert(index) {
+                                arguments,
+                            } => {
+                                let announced_name = name
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|n| !n.is_empty())
+                                    .map(str::to_string);
+                                accumulate_tool_call_delta(
+                                    &mut collected_tool_calls,
+                                    &mut delta_progress,
+                                    index,
+                                    id,
+                                    name,
+                                    &arguments,
+                                );
+                                if let Some(tc_name) = announced_name
+                                    && announced_tool_indices.insert(index)
+                                {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -416,62 +448,68 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                    Ok(())
-                });
-                res.map(|v1_res| {
-                    let tc = if v1_res.tool_calls.is_some() {
-                        v1_res.tool_calls
-                    } else if !collected_tool_calls.is_empty() {
-                        Some(collected_tool_calls)
-                    } else {
-                        None
-                    };
-                    (accumulated_content, accumulated_thought, tc)
-                })
-            } else {
-                let mut announced_tool_indices: HashSet<usize> = HashSet::new();
-                let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
-                let mut provider = AntigravityProvider::new();
-                let res = provider.chat_stream_v1(&req_clone, |event| {
-                    if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        anyhow::bail!("Session cancelled by user");
-                    }
-                    match event {
-                        V1StreamEvent::ContentDelta(delta) => {
-                            accumulated_content.push_str(&delta);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::Delta { delta },
-                            );
+                        Ok(())
+                    });
+                    res.map(|v1_res| {
+                        let tc = if v1_res.tool_calls.is_some() {
+                            v1_res.tool_calls
+                        } else if !collected_tool_calls.is_empty() {
+                            Some(collected_tool_calls)
+                        } else {
+                            None
+                        };
+                        (accumulated_content, accumulated_thought, tc)
+                    })
+                } else {
+                    let mut announced_tool_indices: HashSet<usize> = HashSet::new();
+                    let mut delta_progress: HashMap<usize, ToolCallDeltaProgress> = HashMap::new();
+                    let mut provider = AntigravityProvider::new();
+                    let res = provider.chat_stream_v1(&req_clone, |event| {
+                        if cancellation_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                            anyhow::bail!("Session cancelled by user");
                         }
-                        V1StreamEvent::ThoughtDelta(thought) => {
-                            accumulated_thought.push_str(&thought);
-                            deltas_broadcasted = true;
-                            broadcast_session_event(
-                                &sess_id_clone,
-                                AgentSessionEvent::ThoughtDelta { delta: thought },
-                            );
-                        }
-                        V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
-                            let announced_name = name
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|n| !n.is_empty())
-                                .map(str::to_string);
-                            accumulate_tool_call_delta(
-                                &mut collected_tool_calls,
-                                &mut delta_progress,
+                        match event {
+                            V1StreamEvent::ContentDelta(delta) => {
+                                accumulated_content.push_str(&delta);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::Delta { delta },
+                                );
+                            }
+                            V1StreamEvent::ThoughtDelta(thought) => {
+                                accumulated_thought.push_str(&thought);
+                                deltas_broadcasted = true;
+                                broadcast_session_event(
+                                    &sess_id_clone,
+                                    AgentSessionEvent::ThoughtDelta { delta: thought },
+                                );
+                            }
+                            V1StreamEvent::ToolCallDelta {
                                 index,
                                 id,
                                 name,
-                                &arguments,
-                            );
-                            if let Some(tc_name) = announced_name
-                                && announced_tool_indices.insert(index) {
+                                arguments,
+                            } => {
+                                let announced_name = name
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|n| !n.is_empty())
+                                    .map(str::to_string);
+                                accumulate_tool_call_delta(
+                                    &mut collected_tool_calls,
+                                    &mut delta_progress,
+                                    index,
+                                    id,
+                                    name,
+                                    &arguments,
+                                );
+                                if let Some(tc_name) = announced_name
+                                    && announced_tool_indices.insert(index)
+                                {
                                     broadcast_session_event(
                                         &sess_id_clone,
                                         AgentSessionEvent::StepInfo {
@@ -481,22 +519,22 @@ pub async fn execute_model_stream(
                                         },
                                     );
                                 }
+                            }
+                            _ => {}
                         }
-                        _ => {}
-                    }
-                    Ok(())
-                });
-                res.map(|v1_res| {
-                    let tc = if v1_res.tool_calls.is_some() {
-                        v1_res.tool_calls
-                    } else if !collected_tool_calls.is_empty() {
-                        Some(collected_tool_calls)
-                    } else {
-                        None
-                    };
-                    (accumulated_content, accumulated_thought, tc)
-                })
-            };
+                        Ok(())
+                    });
+                    res.map(|v1_res| {
+                        let tc = if v1_res.tool_calls.is_some() {
+                            v1_res.tool_calls
+                        } else if !collected_tool_calls.is_empty() {
+                            Some(collected_tool_calls)
+                        } else {
+                            None
+                        };
+                        (accumulated_content, accumulated_thought, tc)
+                    })
+                };
 
             match attempt_result {
                 Ok(val) => return Ok(val),
@@ -610,9 +648,15 @@ pub async fn execute_model_stream(
     }
 
     let duration_ms = turn_start_time.elapsed().as_millis() as u64;
-    let tool_chars: usize = tool_calls_opt.as_ref().map(|calls| {
-        calls.iter().map(|tc| tc.function.name.len() + tc.function.arguments.len()).sum()
-    }).unwrap_or(0);
+    let tool_chars: usize = tool_calls_opt
+        .as_ref()
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|tc| tc.function.name.len() + tc.function.arguments.len())
+                .sum()
+        })
+        .unwrap_or(0);
     let output_chars = final_content.len() + final_thought.len() + tool_chars;
     let estimated_output_tokens = (output_chars / 4).max(1);
 
@@ -646,7 +690,7 @@ pub async fn execute_model_stream(
 #[cfg(test)]
 mod tests {
     use super::accumulate_tool_call_delta;
-    use super::{parse_retry_after_ms, retry_delay, MAX_RETRY_DELAY_MS};
+    use super::{MAX_RETRY_DELAY_MS, parse_retry_after_ms, retry_delay};
     use crate::llm::v1_engine::V1ToolCall;
     use std::collections::HashMap;
 
@@ -690,9 +734,30 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_00_BlwK".into()), Some("workspace_list_dir".into()), "");
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_00_BlwK".into()), Some(String::new()), "{\"path");
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_00_BlwK".into()), Some(String::new()), "\":\"src/agent\"}");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_00_BlwK".into()),
+            Some("workspace_list_dir".into()),
+            "",
+        );
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_00_BlwK".into()),
+            Some(String::new()),
+            "{\"path",
+        );
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_00_BlwK".into()),
+            Some(String::new()),
+            "\":\"src/agent\"}",
+        );
 
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].function.name, "workspace_list_dir");
@@ -704,7 +769,14 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("c".into()), Some("workspace_grep".into()), "");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("c".into()),
+            Some("workspace_grep".into()),
+            "",
+        );
         accumulate_tool_call_delta(&mut collected, &mut seen, 0, None, Some("   ".into()), "{}");
 
         assert_eq!(collected[0].function.name, "workspace_grep");
@@ -721,7 +793,14 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_1".into()), None, "");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_1".into()),
+            None,
+            "",
+        );
         accumulate_tool_call_delta(
             &mut collected,
             &mut seen,
@@ -733,7 +812,10 @@ mod tests {
 
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].function.name, "workspace_list_dir");
-        assert_eq!(collected[0].function.arguments, "{\"path\":\"ragasukma/src\"}");
+        assert_eq!(
+            collected[0].function.arguments,
+            "{\"path\":\"ragasukma/src\"}"
+        );
     }
 
     #[test]
@@ -743,8 +825,22 @@ mod tests {
         let mut seen = HashMap::new();
         let fragment = "{\"path\":\"a\"}";
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("c".into()), Some("workspace_grep".into()), fragment);
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, None, Some("workspace_grep".into()), fragment);
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("c".into()),
+            Some("workspace_grep".into()),
+            fragment,
+        );
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            None,
+            Some("workspace_grep".into()),
+            fragment,
+        );
 
         assert_eq!(collected[0].function.arguments, fragment);
     }
@@ -754,11 +850,21 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("c".into()), Some("workspace_read_file".into()), "{\"path\":");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("c".into()),
+            Some("workspace_read_file".into()),
+            "{\"path\":",
+        );
         accumulate_tool_call_delta(&mut collected, &mut seen, 0, None, None, "\"src/main.rs\"}");
 
         assert_eq!(collected[0].function.name, "workspace_read_file");
-        assert_eq!(collected[0].function.arguments, "{\"path\":\"src/main.rs\"}");
+        assert_eq!(
+            collected[0].function.arguments,
+            "{\"path\":\"src/main.rs\"}"
+        );
     }
 
     #[test]
@@ -767,8 +873,22 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_A".into()), Some("workspace_list_dir".into()), "{\"path\":\"old\"}");
-        accumulate_tool_call_delta(&mut collected, &mut seen, 0, Some("call_B".into()), Some("workspace_list_dir".into()), "{\"path\":\"new\"}");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_A".into()),
+            Some("workspace_list_dir".into()),
+            "{\"path\":\"old\"}",
+        );
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            0,
+            Some("call_B".into()),
+            Some("workspace_list_dir".into()),
+            "{\"path\":\"new\"}",
+        );
 
         assert_eq!(collected.len(), 1);
         assert_eq!(collected[0].id, "call_B");
@@ -780,7 +900,14 @@ mod tests {
         let mut collected = empty_call();
         let mut seen = HashMap::new();
 
-        accumulate_tool_call_delta(&mut collected, &mut seen, 1, Some("b".into()), Some("workspace_grep".into()), "{}");
+        accumulate_tool_call_delta(
+            &mut collected,
+            &mut seen,
+            1,
+            Some("b".into()),
+            Some("workspace_grep".into()),
+            "{}",
+        );
         assert_eq!(collected.len(), 2);
         assert_eq!(collected[1].function.name, "workspace_grep");
         assert!(collected[0].function.name.is_empty());
@@ -816,7 +943,10 @@ mod tests {
         let samples: Vec<u128> = (0..16)
             .map(|_| retry_delay(3, "502 bad gateway").as_millis())
             .collect();
-        assert!(samples.windows(2).any(|w| w[0] != w[1]), "no jitter observed");
+        assert!(
+            samples.windows(2).any(|w| w[0] != w[1]),
+            "no jitter observed"
+        );
     }
 
     #[test]

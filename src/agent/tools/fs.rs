@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 #[cfg(not(target_os = "windows"))]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,10 +21,15 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
     // 1. If absolute path: verify it starts with an allowed root
     if input_path.is_absolute() {
         let canonical = if input_path.exists() {
-            input_path.canonicalize().unwrap_or_else(|_| input_path.to_path_buf())
+            input_path
+                .canonicalize()
+                .unwrap_or_else(|_| input_path.to_path_buf())
         } else if let Some(parent) = input_path.parent() {
             if parent.exists() {
-                parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()).join(input_path.file_name().unwrap_or_default())
+                parent
+                    .canonicalize()
+                    .unwrap_or_else(|_| parent.to_path_buf())
+                    .join(input_path.file_name().unwrap_or_default())
             } else {
                 input_path.to_path_buf()
             }
@@ -34,7 +39,9 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
 
         let is_inside = allowed_roots.iter().any(|r| {
             let r_path = Path::new(r);
-            let r_canon = r_path.canonicalize().unwrap_or_else(|_| r_path.to_path_buf());
+            let r_canon = r_path
+                .canonicalize()
+                .unwrap_or_else(|_| r_path.to_path_buf());
             canonical.starts_with(&r_canon)
         });
 
@@ -62,7 +69,9 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
         let root_p = Path::new(root);
         if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str()) {
             if input_path == Path::new(folder_name) {
-                return Ok(root_p.canonicalize().unwrap_or_else(|_| root_p.to_path_buf()));
+                return Ok(root_p
+                    .canonicalize()
+                    .unwrap_or_else(|_| root_p.to_path_buf()));
             }
             if let Ok(rel) = input_path.strip_prefix(folder_name) {
                 let candidate = root_p.join(rel);
@@ -77,9 +86,10 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
     let candidate = if let Some(matched_alias_path) = allowed_roots.iter().find_map(|root| {
         let root_p = Path::new(root);
         if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str())
-            && let Ok(rel) = input_path.strip_prefix(folder_name) {
-                return Some(root_p.join(rel));
-            }
+            && let Ok(rel) = input_path.strip_prefix(folder_name)
+        {
+            return Some(root_p.join(rel));
+        }
         None
     }) {
         matched_alias_path
@@ -93,7 +103,10 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
         candidate.canonicalize().unwrap_or(candidate)
     } else if let Some(parent) = candidate.parent() {
         if parent.exists() {
-            parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf()).join(candidate.file_name().unwrap_or_default())
+            parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf())
+                .join(candidate.file_name().unwrap_or_default())
         } else {
             candidate
         }
@@ -103,7 +116,9 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
 
     let is_inside = allowed_roots.iter().any(|r| {
         let r_path = Path::new(r);
-        let r_canon = r_path.canonicalize().unwrap_or_else(|_| r_path.to_path_buf());
+        let r_canon = r_path
+            .canonicalize()
+            .unwrap_or_else(|_| r_path.to_path_buf());
         target_canonical.starts_with(&r_canon)
     });
 
@@ -125,12 +140,11 @@ pub fn to_workspace_folder_path(path: &Path, allowed_roots: &[String]) -> String
 
     for root in allowed_roots {
         let root_p = Path::new(root);
-        let root_canon = root_p.canonicalize().unwrap_or_else(|_| root_p.to_path_buf());
+        let root_canon = root_p
+            .canonicalize()
+            .unwrap_or_else(|_| root_p.to_path_buf());
         if let Ok(rel) = canonical.strip_prefix(&root_canon) {
-            let folder_name = root_p
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let folder_name = root_p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if rel.as_os_str().is_empty() {
                 return folder_name.to_string();
             }
@@ -164,7 +178,8 @@ pub fn generate_smart_gitignore(root_path: &Path) -> String {
     let has_java = root_path.join("pom.xml").exists()
         || root_path.join("build.gradle").exists()
         || root_path.join("build.gradle.kts").exists();
-    let has_c_cpp = root_path.join("CMakeLists.txt").exists() || root_path.join("Makefile").exists();
+    let has_c_cpp =
+        root_path.join("CMakeLists.txt").exists() || root_path.join("Makefile").exists();
 
     let mut out = String::new();
     out.push_str("# Universal Workspace .gitignore (Auto-generated by Ragasukma Agent)\n\n");
@@ -304,11 +319,18 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
                 }
             }
             Err(e) => {
-                tracing::warn!("[Agent Workspace] Could not execute 'git init' at {:?}: {}", root_path, e);
+                tracing::warn!(
+                    "[Agent Workspace] Could not execute 'git init' at {:?}: {}",
+                    root_path,
+                    e
+                );
             }
         }
     } else if !git_dir.exists() && !auto_git_init {
-        tracing::info!("[Agent Workspace] Git auto-init skipped (opt-in disabled) for {:?}", root_path);
+        tracing::info!(
+            "[Agent Workspace] Git auto-init skipped (opt-in disabled) for {:?}",
+            root_path
+        );
     }
 
     // 2. Check & create smart .gitignore if missing
@@ -316,9 +338,16 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
     if !gitignore_path.exists() {
         let gitignore_content = generate_smart_gitignore(root_path);
         if let Err(e) = std::fs::write(&gitignore_path, gitignore_content) {
-            tracing::warn!("[Agent Workspace] Failed to write smart .gitignore at {:?}: {}", gitignore_path, e);
+            tracing::warn!(
+                "[Agent Workspace] Failed to write smart .gitignore at {:?}: {}",
+                gitignore_path,
+                e
+            );
         } else {
-            tracing::info!("[Agent Workspace] Created smart .gitignore at: {:?}", gitignore_path);
+            tracing::info!(
+                "[Agent Workspace] Created smart .gitignore at: {:?}",
+                gitignore_path
+            );
         }
     }
 
@@ -463,7 +492,8 @@ pub fn generate_file_outline(content: &str, file_path: &str) -> String {
         let indent = line.chars().take_while(|c| c.is_whitespace()).count();
 
         // 1. Markdown / Documentation Headings (# Heading, ## Subheading)
-        if trimmed.starts_with('#') && trimmed.chars().nth(1).is_some_and(|c| c == '#' || c == ' ') {
+        if trimmed.starts_with('#') && trimmed.chars().nth(1).is_some_and(|c| c == '#' || c == ' ')
+        {
             outline_entries.push((line_num, trimmed.chars().take(120).collect(), true));
             continue;
         }
@@ -497,21 +527,62 @@ pub fn generate_file_outline(content: &str, file_path: &str) -> String {
             // Major structural declarations across languages (functions, types, classes, modules)
             let is_major_decl = matches!(
                 clean_first,
-                "fn" | "pub" | "function" | "func" | "def" | "class" | "struct" | "enum" |
-                "interface" | "type" | "trait" | "impl" | "export" | "mod" | "module" |
-                "package" | "async" | "namespace" | "sub" | "proc" | "method" | "actor" |
-                "record" | "schema" | "table" | "CREATE" | "SELECT" | "ALTER" | "DROP" |
-                "router" | "endpoint" | "contract" | "service" | "proto"
+                "fn" | "pub"
+                    | "function"
+                    | "func"
+                    | "def"
+                    | "class"
+                    | "struct"
+                    | "enum"
+                    | "interface"
+                    | "type"
+                    | "trait"
+                    | "impl"
+                    | "export"
+                    | "mod"
+                    | "module"
+                    | "package"
+                    | "async"
+                    | "namespace"
+                    | "sub"
+                    | "proc"
+                    | "method"
+                    | "actor"
+                    | "record"
+                    | "schema"
+                    | "table"
+                    | "CREATE"
+                    | "SELECT"
+                    | "ALTER"
+                    | "DROP"
+                    | "router"
+                    | "endpoint"
+                    | "contract"
+                    | "service"
+                    | "proto"
             );
 
             // Top-level declarations only (indent == 0) for constants, variables, imports, config keys
-            let is_toplevel_decl = indent == 0 && matches!(
-                clean_first,
-                "import" | "from" | "const" | "let" | "var" | "val" | "static" | "data" | "entity" | "message"
-            );
+            let is_toplevel_decl = indent == 0
+                && matches!(
+                    clean_first,
+                    "import"
+                        | "from"
+                        | "const"
+                        | "let"
+                        | "var"
+                        | "val"
+                        | "static"
+                        | "data"
+                        | "entity"
+                        | "message"
+                );
 
-            let is_block_header = indent == 0 && (trimmed.ends_with('{') || trimmed.ends_with(':') || trimmed.contains("=> {"));
-            let is_top_key = indent == 0 && (trimmed.contains(':') && !trimmed.contains("::")) && !trimmed.starts_with('{');
+            let is_block_header = indent == 0
+                && (trimmed.ends_with('{') || trimmed.ends_with(':') || trimmed.contains("=> {"));
+            let is_top_key = indent == 0
+                && (trimmed.contains(':') && !trimmed.contains("::"))
+                && !trimmed.starts_with('{');
 
             if is_major_decl || is_toplevel_decl || is_block_header || is_top_key {
                 let display = if trimmed.chars().count() > 140 {
@@ -539,7 +610,10 @@ pub fn generate_file_outline(content: &str, file_path: &str) -> String {
 
     // Limit outline size to maximum 80 landmark symbols, prioritizing major declarations
     if outline_entries.len() > 80 {
-        let major_count = outline_entries.iter().filter(|(_, _, is_maj)| *is_maj).count();
+        let major_count = outline_entries
+            .iter()
+            .filter(|(_, _, is_maj)| *is_maj)
+            .count();
         if major_count > 0 && major_count <= 80 {
             let mut result = Vec::new();
             let step = (outline_entries.len() as f64 / 40.0).ceil() as usize;

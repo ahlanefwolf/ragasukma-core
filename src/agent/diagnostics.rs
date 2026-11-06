@@ -14,10 +14,14 @@ pub struct SessionDiagnosticQueue {
     pub pending_compile_cmd: Option<String>,
 }
 
-static SESSION_DIAGNOSTIC_STORE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, SessionDiagnosticQueue>>> = std::sync::OnceLock::new();
+static SESSION_DIAGNOSTIC_STORE: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, SessionDiagnosticQueue>>,
+> = std::sync::OnceLock::new();
 
-fn get_diagnostic_store() -> &'static std::sync::RwLock<std::collections::HashMap<String, SessionDiagnosticQueue>> {
-    SESSION_DIAGNOSTIC_STORE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+fn get_diagnostic_store()
+-> &'static std::sync::RwLock<std::collections::HashMap<String, SessionDiagnosticQueue>> {
+    SESSION_DIAGNOSTIC_STORE
+        .get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
 }
 
 fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
@@ -31,18 +35,26 @@ fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
 }
 
 /// Stores or replaces the diagnostic queue for a specific task session in RAM.
-pub fn set_session_diagnostic_queue(session_id: &str, items: Vec<DiagnosticTaskItem>, compile_cmd: Option<String>) {
+pub fn set_session_diagnostic_queue(
+    session_id: &str,
+    items: Vec<DiagnosticTaskItem>,
+    compile_cmd: Option<String>,
+) {
     if let Ok(mut lock) = get_diagnostic_store().write() {
         // Prevent unbounded memory growth if sessions disconnect abruptly without clean reset
-        if lock.len() >= 64 && !lock.contains_key(session_id)
+        if lock.len() >= 64
+            && !lock.contains_key(session_id)
             && let Some(oldest_key) = lock.keys().next().cloned()
         {
             lock.remove(&oldest_key);
         }
-        lock.insert(session_id.to_string(), SessionDiagnosticQueue {
-            items,
-            pending_compile_cmd: compile_cmd,
-        });
+        lock.insert(
+            session_id.to_string(),
+            SessionDiagnosticQueue {
+                items,
+                pending_compile_cmd: compile_cmd,
+            },
+        );
     }
 }
 
@@ -58,21 +70,31 @@ pub fn get_session_diagnostic_queue(session_id: &str) -> Option<SessionDiagnosti
 /// Marks all items associated with `file_path` as resolved (e.g. after editing the file).
 pub fn mark_diagnostic_file_resolved(session_id: &str, file_path: &str) -> (usize, usize) {
     if let Ok(mut lock) = get_diagnostic_store().write()
-        && let Some(queue) = lock.get_mut(session_id) {
-            let norm_target = file_path.replace('\\', "/").trim_start_matches("./").to_lowercase();
-            for item in &mut queue.items {
-                let norm_item = item.file_path.replace('\\', "/").trim_start_matches("./").to_lowercase();
-                if norm_item == norm_target
-                    || norm_target.ends_with(&norm_item)
-                    || norm_item.ends_with(&norm_target)
-                    || (norm_target.contains('/') && norm_item.contains('/') && norm_target.rsplit('/').next() == norm_item.rsplit('/').next())
-                {
-                    item.resolved = true;
-                }
+        && let Some(queue) = lock.get_mut(session_id)
+    {
+        let norm_target = file_path
+            .replace('\\', "/")
+            .trim_start_matches("./")
+            .to_lowercase();
+        for item in &mut queue.items {
+            let norm_item = item
+                .file_path
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_lowercase();
+            if norm_item == norm_target
+                || norm_target.ends_with(&norm_item)
+                || norm_item.ends_with(&norm_target)
+                || (norm_target.contains('/')
+                    && norm_item.contains('/')
+                    && norm_target.rsplit('/').next() == norm_item.rsplit('/').next())
+            {
+                item.resolved = true;
             }
-            let remaining = queue.items.iter().filter(|i| !i.resolved).count();
-            return (remaining, queue.items.len());
         }
+        let remaining = queue.items.iter().filter(|i| !i.resolved).count();
+        return (remaining, queue.items.len());
+    }
     (0, 0)
 }
 
@@ -88,8 +110,10 @@ pub fn clear_session_diagnostic_queue(session_id: &str) {
 /// to enable single-pass reading and single-pass editing per file.
 pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskItem> {
     let mut file_order: Vec<String> = Vec::new();
-    let mut file_errors: std::collections::HashMap<String, (Vec<usize>, Vec<String>)> = std::collections::HashMap::new();
-    let mut file_warnings: std::collections::HashMap<String, (Vec<usize>, Vec<String>)> = std::collections::HashMap::new();
+    let mut file_errors: std::collections::HashMap<String, (Vec<usize>, Vec<String>)> =
+        std::collections::HashMap::new();
+    let mut file_warnings: std::collections::HashMap<String, (Vec<usize>, Vec<String>)> =
+        std::collections::HashMap::new();
     let mut warning_order: Vec<String> = Vec::new();
 
     for line in output.lines() {
@@ -109,9 +133,10 @@ pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskIte
                     (Vec::new(), Vec::new())
                 });
                 if let Some(ln) = line_no
-                    && !entry.0.contains(&ln) {
-                        entry.0.push(ln);
-                    }
+                    && !entry.0.contains(&ln)
+                {
+                    entry.0.push(ln);
+                }
                 if entry.1.len() < 5 && !entry.1.contains(&msg) {
                     entry.1.push(msg);
                 }
@@ -121,9 +146,10 @@ pub fn parse_diagnostic_items_from_output(output: &str) -> Vec<DiagnosticTaskIte
                     (Vec::new(), Vec::new())
                 });
                 if let Some(ln) = line_no
-                    && !entry.0.contains(&ln) {
-                        entry.0.push(ln);
-                    }
+                    && !entry.0.contains(&ln)
+                {
+                    entry.0.push(ln);
+                }
                 if entry.1.len() < 5 && !entry.1.contains(&msg) {
                     entry.1.push(msg);
                 }
@@ -185,7 +211,10 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
             let mut line_no = None;
             if let Some(line_kw) = remainder.find("line ") {
                 let num_part = &remainder[line_kw + 5..];
-                let digits: String = num_part.chars().take_while(|c| c.is_ascii_digit()).collect();
+                let digits: String = num_part
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 if let Ok(ln) = digits.parse::<usize>() {
                     line_no = Some(ln);
                 }
@@ -206,7 +235,8 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
     });
 
     // Also support strict colon without spaces
-    static COMPILER_DIAG_STRICT: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    static COMPILER_DIAG_STRICT: std::sync::OnceLock<Option<regex::Regex>> =
+        std::sync::OnceLock::new();
     let re_strict = COMPILER_DIAG_STRICT.get_or_init(|| {
         regex::Regex::new(
             r#"(?m)(?:^|[^\w\./\\])([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9_\-]+)(?::(\d+)(?::\d+)?|\((\d+)(?:,\d+)?\)|:\[(\d+)(?:,\d+)?\])"#
@@ -217,27 +247,32 @@ pub fn parse_compiler_diagnostic_line(line: &str) -> Option<(String, Option<usiz
 
     if let Some(re) = re_to_use
         && let Some(cap) = re.captures(trimmed)
-            && let Some(file_match) = cap.get(1) {
-                let raw_path = file_match.as_str().trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == '[' || c == ']');
-                let clean_path = raw_path.trim_start_matches("./");
+        && let Some(file_match) = cap.get(1)
+    {
+        let raw_path = file_match
+            .as_str()
+            .trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == '[' || c == ']');
+        let clean_path = raw_path.trim_start_matches("./");
 
-                // Filter out URLs, protocols, or numeric/invalid extensions
-                if !trimmed.contains("://")
-                    && !clean_path.starts_with("//")
-                    && !clean_path.starts_with("http:")
-                    && !clean_path.starts_with("https:")
-                    && let Some(dot_idx) = clean_path.rfind('.') {
-                        let ext = &clean_path[dot_idx + 1..];
-                        // Extension must have 1-8 alphanumeric chars and contain at least one letter (prevents IPs like 192.168.1.1)
-                        if !ext.is_empty() && ext.len() <= 8 && ext.chars().any(|c| c.is_ascii_alphabetic()) {
-                            let line_no = cap.get(2)
-                                .or_else(|| cap.get(3))
-                                .or_else(|| cap.get(4))
-                                .and_then(|m| m.as_str().parse::<usize>().ok());
-                            return Some((clean_path.to_string(), line_no));
-                        }
-                    }
+        // Filter out URLs, protocols, or numeric/invalid extensions
+        if !trimmed.contains("://")
+            && !clean_path.starts_with("//")
+            && !clean_path.starts_with("http:")
+            && !clean_path.starts_with("https:")
+            && let Some(dot_idx) = clean_path.rfind('.')
+        {
+            let ext = &clean_path[dot_idx + 1..];
+            // Extension must have 1-8 alphanumeric chars and contain at least one letter (prevents IPs like 192.168.1.1)
+            if !ext.is_empty() && ext.len() <= 8 && ext.chars().any(|c| c.is_ascii_alphabetic()) {
+                let line_no = cap
+                    .get(2)
+                    .or_else(|| cap.get(3))
+                    .or_else(|| cap.get(4))
+                    .and_then(|m| m.as_str().parse::<usize>().ok());
+                return Some((clean_path.to_string(), line_no));
             }
+        }
+    }
 
     None
 }
@@ -259,14 +294,23 @@ pub fn group_diagnostics_by_file(output: &str) -> (Vec<GroupedFileDiagnostic>, V
             if !file_map.contains_key(&fpath) {
                 file_order.push(fpath.clone());
             }
-            let entry = file_map.entry(fpath).or_insert_with(|| (Vec::new(), 0, Vec::new()));
+            let entry = file_map
+                .entry(fpath)
+                .or_insert_with(|| (Vec::new(), 0, Vec::new()));
             entry.1 += 1;
             if let Some(ln) = line_no
-                && !entry.0.contains(&ln) {
-                    entry.0.push(ln);
-                }
+                && !entry.0.contains(&ln)
+            {
+                entry.0.push(ln);
+            }
             let lower = trimmed.to_lowercase();
-            if entry.2.len() < 3 && (lower.contains("error") || lower.contains("fail") || trimmed.contains("error[") || lower.contains("warning") || lower.contains("exception")) {
+            if entry.2.len() < 3
+                && (lower.contains("error")
+                    || lower.contains("fail")
+                    || trimmed.contains("error[")
+                    || lower.contains("warning")
+                    || lower.contains("exception"))
+            {
                 let sample = truncate_with_ellipsis(trimmed, 117);
                 entry.2.push(sample);
             }
@@ -387,9 +431,17 @@ pub fn is_command_output_error(output: &str) -> bool {
 
         let exit_code = val.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
         let success = val.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        let status = val.get("status").and_then(|v| v.as_str()).unwrap_or("SUCCESS");
+        let status = val
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("SUCCESS");
 
-        if !success || exit_code != 0 || status == "FAILED" || status == "ERROR" || status == "TIMEOUT" {
+        if !success
+            || exit_code != 0
+            || status == "FAILED"
+            || status == "ERROR"
+            || status == "TIMEOUT"
+        {
             return true;
         }
 
@@ -450,7 +502,8 @@ mod tests {
             "exit_code": 1,
             "success": false,
             "stderr": "error[E0425]: cannot find value `foo` in this scope"
-        }).to_string();
+        })
+        .to_string();
         assert!(is_command_output_error(&failed_cmd));
 
         // 2. Successful command (exit code 0)
@@ -459,7 +512,8 @@ mod tests {
             "exit_code": 0,
             "success": true,
             "stdout": "Build completed successfully."
-        }).to_string();
+        })
+        .to_string();
         assert!(!is_command_output_error(&success_cmd));
 
         // 2b. Python unittest output sent via stderr by default (exit code 0, status OK)
@@ -482,16 +536,22 @@ mod tests {
                 "line": 42,
                 "content": "if (!valid) throw new TypeError('Invalid argument');"
             }]
-        }).to_string();
+        })
+        .to_string();
         assert!(!is_command_output_error(&grep_with_typeerror));
 
         // 4. Raw file read with syntaxerror / typeerror (MUST NOT trigger false positive!)
-        let raw_file_content = "class MyError extends TypeError {\n  constructor() { super('failed'); }\n}";
+        let raw_file_content =
+            "class MyError extends TypeError {\n  constructor() { super('failed'); }\n}";
         assert!(!is_command_output_error(raw_file_content));
 
         // 5. Explicit error banner from tool execution
-        assert!(is_command_output_error("Tool execution error: failed to edit file"));
-        assert!(is_command_output_error("❌ COMMAND FAILED with exit code 2. Review stdout and stderr below."));
+        assert!(is_command_output_error(
+            "Tool execution error: failed to edit file"
+        ));
+        assert!(is_command_output_error(
+            "❌ COMMAND FAILED with exit code 2. Review stdout and stderr below."
+        ));
     }
 
     #[test]
@@ -567,8 +627,14 @@ mod tests {
         );
 
         // Invalid: IP address or URL
-        assert_eq!(parse_compiler_diagnostic_line("Connected to 192.168.1.1:8080"), None);
-        assert_eq!(parse_compiler_diagnostic_line("GET http://example.com/api.js:80"), None);
+        assert_eq!(
+            parse_compiler_diagnostic_line("Connected to 192.168.1.1:8080"),
+            None
+        );
+        assert_eq!(
+            parse_compiler_diagnostic_line("GET http://example.com/api.js:80"),
+            None
+        );
     }
 
     #[test]
@@ -592,7 +658,11 @@ fatal error: build failed
         assert_eq!(grouped[2].file_path, "Controllers/Order.cs");
         assert_eq!(grouped[2].lines, vec![30]);
 
-        assert!(general.iter().any(|g| g.contains("fatal error: build failed")));
+        assert!(
+            general
+                .iter()
+                .any(|g| g.contains("fatal error: build failed"))
+        );
     }
 
     #[test]
@@ -614,7 +684,10 @@ Random console log line with no errors
     fn test_multibyte_emoji_truncation_does_not_panic() {
         // String where 117th byte boundary falls inside a 4-byte emoji (like ❌)
         let prefix = "a".repeat(115);
-        let error_line = format!("src/main.rs:10:5: error: {}❌ extra long error line exceeding max truncation limits", prefix);
+        let error_line = format!(
+            "src/main.rs:10:5: error: {}❌ extra long error line exceeding max truncation limits",
+            prefix
+        );
         let (grouped, _general) = group_diagnostics_by_file(&error_line);
         assert!(!grouped.is_empty());
 

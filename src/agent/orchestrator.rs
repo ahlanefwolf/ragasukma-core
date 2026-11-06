@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::context_builder::{build_goal_context_prompt, revalidate_evidence_cache, reuse_evidence_from_parent};
+use super::context_builder::{
+    build_goal_context_prompt, reuse_evidence_from_parent, revalidate_evidence_cache,
+};
 use super::models::{Goal, GoalVerification};
 use super::repository;
 
@@ -103,8 +105,13 @@ impl GoalOrchestrator {
             Ok(_stale_count) => {}
             Err(e) => {
                 let err_str = e.to_string();
-                tracing::warn!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Continuing in degraded mode.", goal_id, err_str);
-                let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
+                tracing::warn!(
+                    "[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Continuing in degraded mode.",
+                    goal_id,
+                    err_str
+                );
+                let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str))
+                    .await;
             }
         }
 
@@ -116,11 +123,18 @@ impl GoalOrchestrator {
         // wordless continuation has a defined result (`CONTINUATION_ONLY_SCORE`), so the guard no longer
         // protects against anything. Keywords remain optional input that sharpens the score.
         if let Some(parent_id) = parent_goal_id
-            && let Err(e) = reuse_evidence_from_parent(goal_id, parent_id, reuse_keywords).await {
-                let err_str = e.to_string();
-                tracing::warn!("[Agent Context Warning] Failed to reuse evidence from parent goal {} for {}: {}", parent_id, goal_id, err_str);
-                let _ = repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
-            }
+            && let Err(e) = reuse_evidence_from_parent(goal_id, parent_id, reuse_keywords).await
+        {
+            let err_str = e.to_string();
+            tracing::warn!(
+                "[Agent Context Warning] Failed to reuse evidence from parent goal {} for {}: {}",
+                parent_id,
+                goal_id,
+                err_str
+            );
+            let _ =
+                repository::update_goal_context_health(goal_id, "degraded", Some(&err_str)).await;
+        }
 
         // 3. Move state to discovery
         repository::update_goal_status(goal_id, GoalState::Discovery.as_str()).await?;
@@ -178,10 +192,7 @@ impl GoalOrchestrator {
     /// The "is it verified?" check and the status update are evaluated inside one
     /// transaction, so a goal can never be concluded on the strength of a verification
     /// that was rolled back (or miss one that landed concurrently).
-    pub async fn conclude(
-        &self,
-        conclusion_summary: &str,
-    ) -> Result<()> {
+    pub async fn conclude(&self, conclusion_summary: &str) -> Result<()> {
         repository::conclude_goal_if_verified(
             &self.goal_id,
             GoalState::Completed.as_str(),
@@ -215,10 +226,7 @@ impl GoalOrchestrator {
     /// Falls back to [`Self::conclude`] when verification does exist, so a goal is never labelled
     /// unverified when the evidence says otherwise. When nothing verifies it, the conclusion is
     /// written and the goal is marked `completed_unverified` in the same write.
-    pub async fn conclude_after_work(
-        &self,
-        conclusion_summary: &str,
-    ) -> Result<()> {
+    pub async fn conclude_after_work(&self, conclusion_summary: &str) -> Result<()> {
         match self.conclude(conclusion_summary).await {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -321,7 +329,9 @@ mod inheritance_tests {
         .await
         .unwrap();
 
-        let inherited = repository::get_active_evidences_for_goal(&child_id).await.unwrap();
+        let inherited = repository::get_active_evidences_for_goal(&child_id)
+            .await
+            .unwrap();
         assert!(
             inherited.iter().any(|e| e.file_path == "src/auth/login.rs"),
             "a wordless continuation must still inherit the parent's evidence"
@@ -352,7 +362,9 @@ mod inheritance_tests {
         .await
         .unwrap();
 
-        let inherited = repository::get_active_evidences_for_goal(&standalone_id).await.unwrap();
+        let inherited = repository::get_active_evidences_for_goal(&standalone_id)
+            .await
+            .unwrap();
         assert!(
             inherited.is_empty(),
             "without a parent goal there is nothing to inherit, got {inherited:?}"

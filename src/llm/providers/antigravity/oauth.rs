@@ -143,9 +143,10 @@ pub fn refresh_account_token(
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(300);
     if let Some(new_refresh) = token_data.refresh_token
-        && !new_refresh.is_empty() {
-            account.refresh_token = new_refresh;
-        }
+        && !new_refresh.is_empty()
+    {
+        account.refresh_token = new_refresh;
+    }
     account.consecutive_errors = 0;
     Ok(token_data.access_token)
 }
@@ -155,9 +156,10 @@ pub fn ensure_project_id(
     account: &mut AntigravityAccount,
 ) -> Result<String> {
     if let Some(ref pid) = account.project_id
-        && !pid.trim().is_empty() {
-            return Ok(pid.clone());
-        }
+        && !pid.trim().is_empty()
+    {
+        return Ok(pid.clone());
+    }
 
     let access_token = match account.access_token.as_deref() {
         Some(tok) => tok.to_string(),
@@ -185,45 +187,47 @@ pub fn ensure_project_id(
 
     if let Ok(response) = res
         && response.status().is_success()
-            && let Ok(val) = response.json::<serde_json::Value>() {
-                let project_id = val
-                    .pointer("/cloudaicompanionProject/id")
-                    .or_else(|| val.pointer("/cloudaicompanionProject"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "cloudaicompanion-default".to_string());
+        && let Ok(val) = response.json::<serde_json::Value>()
+    {
+        let project_id = val
+            .pointer("/cloudaicompanionProject/id")
+            .or_else(|| val.pointer("/cloudaicompanionProject"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "cloudaicompanion-default".to_string());
 
-                let mut default_tier = "legacy-tier".to_string();
-                if let Some(tiers) = val.pointer("/allowedTiers").and_then(|v| v.as_array()) {
-                    for t in tiers {
-                        if t.get("isDefault")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            && let Some(tid) = t.get("id").and_then(|v| v.as_str()) {
-                                default_tier = tid.to_string();
-                                break;
-                            }
-                    }
+        let mut default_tier = "legacy-tier".to_string();
+        if let Some(tiers) = val.pointer("/allowedTiers").and_then(|v| v.as_array()) {
+            for t in tiers {
+                if t.get("isDefault")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                    && let Some(tid) = t.get("id").and_then(|v| v.as_str())
+                {
+                    default_tier = tid.to_string();
+                    break;
                 }
-
-                account.project_id = Some(project_id.clone());
-                account.tier_id = Some(default_tier.clone());
-
-                // Fire onboarding call
-                let _ = client
-                    .post(ANTIGRAVITY_ONBOARD_USER_URL)
-                    .header("Authorization", format!("Bearer {access_token}"))
-                    .header("Content-Type", "application/json")
-                    .header("User-Agent", ANTIGRAVITY_USER_AGENT)
-                    .header("x-request-source", "local")
-                    .json(&serde_json::json!({
-                        "tierId": default_tier,
-                        "metadata": metadata
-                    }))
-                    .send();
-
-                return Ok(project_id);
             }
+        }
+
+        account.project_id = Some(project_id.clone());
+        account.tier_id = Some(default_tier.clone());
+
+        // Fire onboarding call
+        let _ = client
+            .post(ANTIGRAVITY_ONBOARD_USER_URL)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Content-Type", "application/json")
+            .header("User-Agent", ANTIGRAVITY_USER_AGENT)
+            .header("x-request-source", "local")
+            .json(&serde_json::json!({
+                "tierId": default_tier,
+                "metadata": metadata
+            }))
+            .send();
+
+        return Ok(project_id);
+    }
 
     let fallback_pid = format!("project-{}", &generate_pseudo_uuid("p")[..16]);
     account.project_id = Some(fallback_pid.clone());

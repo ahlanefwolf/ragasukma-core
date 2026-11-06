@@ -55,7 +55,8 @@ impl AntigravityProvider {
     }
 
     pub fn new() -> Self {
-        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> =
+            std::sync::OnceLock::new();
         let client = SHARED_CLIENT
             .get_or_init(|| {
                 reqwest::blocking::Client::builder()
@@ -433,15 +434,16 @@ impl AntigravityProvider {
             };
 
             if need_token
-                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    self.accounts[acc_idx].consecutive_errors += 1;
-                    crate::term_err!(
-                        "[Antigravity] Failed to refresh token for account {}: {}",
-                        self.accounts[acc_idx].id,
-                        e
-                    );
-                    continue;
-                }
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
+            {
+                self.accounts[acc_idx].consecutive_errors += 1;
+                crate::term_err!(
+                    "[Antigravity] Failed to refresh token for account {}: {}",
+                    self.accounts[acc_idx].id,
+                    e
+                );
+                continue;
+            }
 
             let project_id = match ensure_project_id(&self.client, &mut self.accounts[acc_idx]) {
                 Ok(pid) => pid,
@@ -680,15 +682,16 @@ impl AntigravityProvider {
             };
 
             if need_token
-                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    self.accounts[acc_idx].consecutive_errors += 1;
-                    crate::term_err!(
-                        "[Antigravity] Failed to refresh token for account {}: {}",
-                        self.accounts[acc_idx].id,
-                        e
-                    );
-                    continue;
-                }
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
+            {
+                self.accounts[acc_idx].consecutive_errors += 1;
+                crate::term_err!(
+                    "[Antigravity] Failed to refresh token for account {}: {}",
+                    self.accounts[acc_idx].id,
+                    e
+                );
+                continue;
+            }
 
             let project_id = match ensure_project_id(&self.client, &mut self.accounts[acc_idx]) {
                 Ok(pid) => pid,
@@ -723,7 +726,11 @@ impl AntigravityProvider {
                     if is_rate_limit {
                         let cooldown = 15 * 60;
                         let now = current_timestamp_secs();
-                        self.accounts[acc_idx].set_rate_limit_for_model(Some(&req.model), cooldown, now);
+                        self.accounts[acc_idx].set_rate_limit_for_model(
+                            Some(&req.model),
+                            cooldown,
+                            now,
+                        );
                         crate::term_err!(
                             "[Antigravity] Account {} hit 429 quota limit for model '{}'. Rotating to next account...",
                             self.accounts[acc_idx].id,

@@ -3,7 +3,7 @@ use super::providers::claude::ClaudeProvider;
 use super::providers::codex::CodexProvider;
 use super::providers::custom::CustomProvider;
 use super::types::{ChatMessage, ChatRequest};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub struct LlmClient {
     pub model: String,
@@ -59,14 +59,18 @@ impl LlmClient {
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.default_system_prompt = prompt.clone();
         if let Some(first) = self.history.first_mut()
-            && first.role == "system" {
-                first.content = prompt;
-                return;
-            }
-        self.history.insert(0, ChatMessage {
-            role: "system".to_string(),
-            content: prompt,
-        });
+            && first.role == "system"
+        {
+            first.content = prompt;
+            return;
+        }
+        self.history.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: prompt,
+            },
+        );
     }
 
     pub fn reset_history(&mut self) {
@@ -121,9 +125,10 @@ impl LlmClient {
 
         if let Some(sys_prompt) = custom_system_prompt
             && let Some(first_msg) = self.history.first_mut()
-                && first_msg.role == "system" {
-                    first_msg.content = sys_prompt.to_string();
-                }
+            && first_msg.role == "system"
+        {
+            first_msg.content = sys_prompt.to_string();
+        }
 
         self.history.push(ChatMessage {
             role: role.to_string(),
@@ -140,14 +145,16 @@ impl LlmClient {
         if is_claude_engine && !self.claude.accounts.is_empty() {
             let start_time = std::time::Instant::now();
 
-            let in_tokens = self.history.iter().map(|m| m.content.len() / 4).sum::<usize>().max(1);
-            match self.claude.chat_stream(
-                &self.model,
-                &self.history,
-                0.7,
-                8192,
-                &mut on_delta,
-            ) {
+            let in_tokens = self
+                .history
+                .iter()
+                .map(|m| m.content.len() / 4)
+                .sum::<usize>()
+                .max(1);
+            match self
+                .claude
+                .chat_stream(&self.model, &self.history, 0.7, 8192, &mut on_delta)
+            {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let out_tokens = (reply.len() / 4).max(1);
@@ -188,7 +195,10 @@ impl LlmClient {
                         duration_ms,
                         "error",
                     );
-                    crate::term_err!("[Claude Engine Error]: {}. Falling back to default provider...", e);
+                    crate::term_err!(
+                        "[Claude Engine Error]: {}. Falling back to default provider...",
+                        e
+                    );
                 }
             }
         }
@@ -197,14 +207,16 @@ impl LlmClient {
 
         if is_codex_engine && !self.codex.accounts.is_empty() {
             let start_time = std::time::Instant::now();
-            let in_tokens = self.history.iter().map(|m| m.content.len() / 4).sum::<usize>().max(1);
-            match self.codex.chat_stream(
-                &self.model,
-                &self.history,
-                0.7,
-                8192,
-                &mut on_delta,
-            ) {
+            let in_tokens = self
+                .history
+                .iter()
+                .map(|m| m.content.len() / 4)
+                .sum::<usize>()
+                .max(1);
+            match self
+                .codex
+                .chat_stream(&self.model, &self.history, 0.7, 8192, &mut on_delta)
+            {
                 Ok(reply) => {
                     let duration_ms = start_time.elapsed().as_millis() as u64;
                     let out_tokens = (reply.len() / 4).max(1);
@@ -245,7 +257,10 @@ impl LlmClient {
                         duration_ms,
                         "error",
                     );
-                    crate::term_err!("[Codex Engine Error]: {}. Falling back to default provider...", e);
+                    crate::term_err!(
+                        "[Codex Engine Error]: {}. Falling back to default provider...",
+                        e
+                    );
                 }
             }
         }
@@ -255,9 +270,15 @@ impl LlmClient {
             if !self.antigravity.accounts.is_empty() {
                 let raw_model = self.model.strip_prefix("ag/").unwrap_or(&self.model);
 
-                let ag_model = crate::llm::providers::antigravity::v1_adapter::resolve_model_alias(raw_model);
+                let ag_model =
+                    crate::llm::providers::antigravity::v1_adapter::resolve_model_alias(raw_model);
                 let start_time = std::time::Instant::now();
-                let in_tokens = self.history.iter().map(|m| m.content.len() / 4).sum::<usize>().max(1);
+                let in_tokens = self
+                    .history
+                    .iter()
+                    .map(|m| m.content.len() / 4)
+                    .sum::<usize>()
+                    .max(1);
 
                 match self.antigravity.chat_stream(
                     &ag_model,
@@ -317,15 +338,17 @@ impl LlmClient {
 
         // Route user-defined prefix/model requests through the matching OpenAI-compatible account.
         let start_time = std::time::Instant::now();
-        let in_tokens = self.history.iter().map(|m| m.content.len() / 4).sum::<usize>().max(1);
+        let in_tokens = self
+            .history
+            .iter()
+            .map(|m| m.content.len() / 4)
+            .sum::<usize>()
+            .max(1);
 
-        match self.custom.chat_stream(
-            &self.model,
-            &self.history,
-            0.7,
-            8192,
-            &mut on_delta,
-        ) {
+        match self
+            .custom
+            .chat_stream(&self.model, &self.history, 0.7, 8192, &mut on_delta)
+        {
             Ok(reply) => {
                 let duration_ms = start_time.elapsed().as_millis() as u64;
                 let out_tokens = (reply.len() / 4).max(1);
@@ -370,7 +393,10 @@ impl LlmClient {
             }
         }
 
-        bail!("Selected model '{}' is not supported or misconfigured.", self.model);
+        bail!(
+            "Selected model '{}' is not supported or misconfigured.",
+            self.model
+        );
     }
 
     /// Complete a prompt or message sequence silently without triggering audio playback or modifying chat history.
@@ -382,13 +408,10 @@ impl LlmClient {
         let is_claude_engine = self.model.starts_with("cc/");
         if is_claude_engine && !self.claude.accounts.is_empty() {
             let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
-            if let Ok(reply) = self.claude.chat_stream(
-                &self.model,
-                messages,
-                0.2,
-                4096,
-                &mut dummy_cb,
-            ) {
+            if let Ok(reply) =
+                self.claude
+                    .chat_stream(&self.model, messages, 0.2, 4096, &mut dummy_cb)
+            {
                 return Ok(reply);
             }
         }
@@ -396,13 +419,10 @@ impl LlmClient {
         let is_codex_engine = self.model.starts_with("cx/");
         if is_codex_engine && !self.codex.accounts.is_empty() {
             let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
-            if let Ok(reply) = self.codex.chat_stream(
-                &self.model,
-                messages,
-                0.2,
-                4096,
-                &mut dummy_cb,
-            ) {
+            if let Ok(reply) =
+                self.codex
+                    .chat_stream(&self.model, messages, 0.2, 4096, &mut dummy_cb)
+            {
                 return Ok(reply);
             }
         }
@@ -410,7 +430,8 @@ impl LlmClient {
         let is_antigravity_model = self.model.starts_with("ag/");
         if is_antigravity_model && !self.antigravity.accounts.is_empty() {
             let raw_model = self.model.strip_prefix("ag/").unwrap_or(&self.model);
-            let ag_model = crate::llm::providers::antigravity::v1_adapter::resolve_model_alias(raw_model);
+            let ag_model =
+                crate::llm::providers::antigravity::v1_adapter::resolve_model_alias(raw_model);
             let mut dummy_cb = |_delta: &str| -> Result<()> { Ok(()) };
             if let Ok(reply) = self.antigravity.chat_stream(
                 &ag_model,
@@ -433,13 +454,20 @@ impl LlmClient {
                 .map(|account| (account, model.to_string()))
         });
 
-        let (account, request_model) = custom_account
-            .ok_or_else(|| anyhow::anyhow!("No enabled provider account found for model '{}'", self.model))?;
+        let (account, request_model) = custom_account.ok_or_else(|| {
+            anyhow::anyhow!(
+                "No enabled provider account found for model '{}'",
+                self.model
+            )
+        })?;
 
         let custom_endpoint = if account.base_url.ends_with("/chat/completions") {
             account.base_url
         } else {
-            format!("{}/chat/completions", account.base_url.trim_end_matches('/'))
+            format!(
+                "{}/chat/completions",
+                account.base_url.trim_end_matches('/')
+            )
         };
 
         let req_body = ChatRequest {
@@ -457,7 +485,8 @@ impl LlmClient {
             .header("Content-Type", "application/json");
 
         if !account.api_key.trim().is_empty() {
-            req_builder = req_builder.header("Authorization", format!("Bearer {}", account.api_key));
+            req_builder =
+                req_builder.header("Authorization", format!("Bearer {}", account.api_key));
         }
 
         let response = req_builder.json(&req_body).send()?;

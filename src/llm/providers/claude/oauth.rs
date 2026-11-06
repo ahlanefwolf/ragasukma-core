@@ -1,5 +1,7 @@
 use super::constants::*;
-use super::types::{ClaudeAccount, ClaudeTokenResponse, current_timestamp_secs, generate_pseudo_uuid};
+use super::types::{
+    ClaudeAccount, ClaudeTokenResponse, current_timestamp_secs, generate_pseudo_uuid,
+};
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -55,8 +57,7 @@ pub fn build_auth_url(redirect_uri: &str, state: &str, code_challenge: &str) -> 
     let encoded_state = form_urlencoded::byte_serialize(state.as_bytes()).collect::<String>();
     let encoded_challenge =
         form_urlencoded::byte_serialize(code_challenge.as_bytes()).collect::<String>();
-    let encoded_scopes =
-        form_urlencoded::byte_serialize(scopes.as_bytes()).collect::<String>();
+    let encoded_scopes = form_urlencoded::byte_serialize(scopes.as_bytes()).collect::<String>();
 
     format!(
         "{}?code=true&client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
@@ -108,8 +109,9 @@ pub fn exchange_code(
         bail!("Claude authorization code exchange failed: {err}");
     }
 
-    let token_data: ClaudeTokenResponse =
-        res.json().context("Failed to parse Claude token response")?;
+    let token_data: ClaudeTokenResponse = res
+        .json()
+        .context("Failed to parse Claude token response")?;
     Ok(token_data)
 }
 
@@ -123,28 +125,32 @@ pub fn fetch_claude_profile(
         .header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("User-Agent", format!("claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"))
+        .header(
+            "User-Agent",
+            format!("claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"),
+        )
         .send();
 
     if let Ok(resp) = res
         && resp.status().is_success()
-            && let Ok(json) = resp.json::<serde_json::Value>() {
-                let email = json
-                    .get("account")
-                    .and_then(|a| a.get("email_address").or_else(|| a.get("email")))
-                    .or_else(|| json.get("email"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+        && let Ok(json) = resp.json::<serde_json::Value>()
+    {
+        let email = json
+            .get("account")
+            .and_then(|a| a.get("email_address").or_else(|| a.get("email")))
+            .or_else(|| json.get("email"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
-                let org_id = json
-                    .get("organization")
-                    .and_then(|o| o.get("uuid").or_else(|| o.get("id")))
-                    .or_else(|| json.get("organization_id"))
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+        let org_id = json
+            .get("organization")
+            .and_then(|o| o.get("uuid").or_else(|| o.get("id")))
+            .or_else(|| json.get("organization_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
-                return Ok((email, org_id));
-            }
+        return Ok((email, org_id));
+    }
 
     Ok((None, None))
 }
@@ -162,8 +168,8 @@ pub fn complete_oauth_flow(
         _ => bail!("Anthropic did not return a refresh_token. Please re-authorize."),
     };
 
-    let (email, org_id) = fetch_claude_profile(client, &tokens.access_token)
-        .unwrap_or((None, None));
+    let (email, org_id) =
+        fetch_claude_profile(client, &tokens.access_token).unwrap_or((None, None));
 
     let now = current_timestamp_secs();
     let account = ClaudeAccount {
@@ -206,27 +212,30 @@ pub fn refresh_account_token(
         bail!("Failed to refresh Claude token: {err}");
     }
 
-    let token_data: ClaudeTokenResponse =
-        res.json().context("Failed to parse Claude refresh token response")?;
+    let token_data: ClaudeTokenResponse = res
+        .json()
+        .context("Failed to parse Claude refresh token response")?;
 
     let now = current_timestamp_secs();
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(120);
 
     if let Some(ref new_refresh) = token_data.refresh_token
-        && !new_refresh.trim().is_empty() {
-            account.refresh_token = new_refresh.trim().to_string();
-        }
+        && !new_refresh.trim().is_empty()
+    {
+        account.refresh_token = new_refresh.trim().to_string();
+    }
 
     if (account.email.is_none() || account.org_id.is_none())
-        && let Ok((em, org)) = fetch_claude_profile(client, &token_data.access_token) {
-            if account.email.is_none() && em.is_some() {
-                account.email = em;
-            }
-            if account.org_id.is_none() && org.is_some() {
-                account.org_id = org;
-            }
+        && let Ok((em, org)) = fetch_claude_profile(client, &token_data.access_token)
+    {
+        if account.email.is_none() && em.is_some() {
+            account.email = em;
         }
+        if account.org_id.is_none() && org.is_some() {
+            account.org_id = org;
+        }
+    }
 
     Ok(token_data.access_token)
 }

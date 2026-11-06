@@ -56,7 +56,11 @@ pub struct UserConfig {
     pub tts_voice_name: String,
     #[serde(default, alias = "ttsSpeed")]
     pub tts_speed: f32,
-    #[serde(default = "default_tts_volume", alias = "ttsVolume", alias = "voiceVolume")]
+    #[serde(
+        default = "default_tts_volume",
+        alias = "ttsVolume",
+        alias = "voiceVolume"
+    )]
     pub tts_volume: f32,
     #[serde(default, alias = "avatarType")]
     pub avatar_type: String,
@@ -108,7 +112,9 @@ impl Default for UserConfig {
 pub fn get_app_config_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA")) {
+        if let Ok(local_appdata) =
+            std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA"))
+        {
             let p = PathBuf::from(local_appdata).join("ragasukma");
             let _ = fs::create_dir_all(&p);
             return p;
@@ -155,7 +161,9 @@ pub fn get_app_config_dir() -> PathBuf {
 pub fn get_app_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA")) {
+        if let Ok(local_appdata) =
+            std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA"))
+        {
             let p = PathBuf::from(local_appdata).join("ragasukma");
             let _ = fs::create_dir_all(&p);
             return p;
@@ -184,7 +192,10 @@ pub fn get_app_data_dir() -> PathBuf {
             return p;
         }
         if let Ok(home) = std::env::var("HOME") {
-            let p = PathBuf::from(home).join(".local").join("share").join("ragasukma");
+            let p = PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("ragasukma");
             let _ = fs::create_dir_all(&p);
             return p;
         }
@@ -196,7 +207,9 @@ pub fn get_app_data_dir() -> PathBuf {
 pub fn get_app_cache_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA")) {
+        if let Ok(local_appdata) =
+            std::env::var("LOCALAPPDATA").or_else(|_| std::env::var("APPDATA"))
+        {
             let p = PathBuf::from(local_appdata).join("ragasukma").join("cache");
             let _ = fs::create_dir_all(&p);
             return p;
@@ -206,7 +219,10 @@ pub fn get_app_cache_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         if let Ok(home) = std::env::var("HOME") {
-            let p = PathBuf::from(home).join("Library").join("Caches").join("ragasukma");
+            let p = PathBuf::from(home)
+                .join("Library")
+                .join("Caches")
+                .join("ragasukma");
             let _ = fs::create_dir_all(&p);
             return p;
         }
@@ -279,15 +295,16 @@ pub fn load_user_config() -> UserConfig {
         let candidate = crate::assets::find_file_in_candidates(filename);
         if candidate.exists()
             && let Ok(content) = fs::read_to_string(&candidate)
-                && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
-                    if cfg.lang.trim().is_empty() {
-                        cfg.lang = "id".to_string();
-                    }
-                    if cfg.tts_voice_name.trim().is_empty() || cfg.tts_voice_name.contains("Google") {
-                        cfg.tts_voice_name = "F4".to_string();
-                    }
-                    return cfg;
-                }
+            && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content)
+        {
+            if cfg.lang.trim().is_empty() {
+                cfg.lang = "id".to_string();
+            }
+            if cfg.tts_voice_name.trim().is_empty() || cfg.tts_voice_name.contains("Google") {
+                cfg.tts_voice_name = "F4".to_string();
+            }
+            return cfg;
+        }
     }
 
     let config_dir = get_app_config_dir();
@@ -295,15 +312,16 @@ pub fn load_user_config() -> UserConfig {
         let config_path = config_dir.join(filename);
         if config_path.exists()
             && let Ok(content) = fs::read_to_string(&config_path)
-                && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content) {
-                    if cfg.lang.trim().is_empty() {
-                        cfg.lang = "id".to_string();
-                    }
-                    if cfg.tts_voice_name.trim().is_empty() || cfg.tts_voice_name.contains("Google") {
-                        cfg.tts_voice_name = "F4".to_string();
-                    }
-                    return cfg;
-                }
+            && let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&content)
+        {
+            if cfg.lang.trim().is_empty() {
+                cfg.lang = "id".to_string();
+            }
+            if cfg.tts_voice_name.trim().is_empty() || cfg.tts_voice_name.contains("Google") {
+                cfg.tts_voice_name = "F4".to_string();
+            }
+            return cfg;
+        }
     }
 
     UserConfig::default()

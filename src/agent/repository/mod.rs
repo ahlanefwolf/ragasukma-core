@@ -45,7 +45,12 @@ pub fn generate_id(prefix: &str) -> String {
     hasher.write_u128(now.as_nanos());
     hasher.write_u64(counter);
     let hash = hasher.finish();
-    format!("{}_{}_{:012x}", prefix, now.as_millis(), hash & 0xffffffffffff)
+    format!(
+        "{}_{}_{:012x}",
+        prefix,
+        now.as_millis(),
+        hash & 0xffffffffffff
+    )
 }
 
 #[cfg(test)]
@@ -62,10 +67,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
         // 1. Create a Project
         let proj_id = "test_proj_1";
@@ -131,11 +133,12 @@ mod tests {
             .await
             .unwrap();
 
-        let remaining_msgs: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE session_id = ?1")
-            .bind(sess_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let remaining_msgs: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM messages WHERE session_id = ?1")
+                .bind(sess_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(remaining_msgs.0, 0);
     }
 
@@ -147,10 +150,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
         // 1. Setup project
         let proj_id = "proj_auth";
@@ -235,10 +235,12 @@ mod tests {
         assert_eq!(g2_evidences[0].file_path, "src/auth/handler.rs");
 
         // Mark stale if handler file changed
-        sqlx::query("UPDATE evidence_cache SET is_stale = 1 WHERE file_path = 'src/auth/handler.rs'")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE evidence_cache SET is_stale = 1 WHERE file_path = 'src/auth/handler.rs'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         // G2 active fresh evidences should now be empty until revalidated
         let fresh_ev = sqlx::query_as::<_, EvidenceCache>(
@@ -299,10 +301,11 @@ mod tests {
         .await
         .unwrap();
 
-        let audit_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM agent_audit_logs WHERE goal_id = 'G1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        let audit_count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM agent_audit_logs WHERE goal_id = 'G1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(audit_count.0, 1);
     }
 }

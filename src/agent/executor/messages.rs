@@ -43,7 +43,9 @@ pub fn prepare_turn_messages(
     let total_history_tokens: usize = db_messages.iter().map(estimate_message_tokens).sum();
 
     let mut evicted_older_messages: Vec<&Message> = Vec::new();
-    let messages_to_send: Vec<&Message> = if total_history_tokens > history_token_budget || db_messages.len() > MAX_HISTORY_MESSAGES {
+    let messages_to_send: Vec<&Message> = if total_history_tokens > history_token_budget
+        || db_messages.len() > MAX_HISTORY_MESSAGES
+    {
         let mut pruned = Vec::new();
         if let Some(first_user_msg) = db_messages.iter().find(|m| m.role == "user") {
             pruned.push(first_user_msg);
@@ -54,7 +56,9 @@ pub fn prepare_turn_messages(
         let mut tail_start_idx = db_messages.len().saturating_sub(1);
         while tail_start_idx > 0 {
             let msg_tok = estimate_message_tokens(&db_messages[tail_start_idx]);
-            if accumulated_tail_tokens + msg_tok > history_token_budget && (db_messages.len() - tail_start_idx) >= 10 {
+            if accumulated_tail_tokens + msg_tok > history_token_budget
+                && (db_messages.len() - tail_start_idx) >= 10
+            {
                 break;
             }
             accumulated_tail_tokens += msg_tok;
@@ -62,7 +66,9 @@ pub fn prepare_turn_messages(
         }
 
         // Never start tail right on a "tool" message (which would orphan it without its parent assistant)
-        while tail_start_idx > 0 && db_messages.get(tail_start_idx).map(|m| m.role.as_str()) == Some("tool") {
+        while tail_start_idx > 0
+            && db_messages.get(tail_start_idx).map(|m| m.role.as_str()) == Some("tool")
+        {
             tail_start_idx = tail_start_idx.saturating_sub(1);
         }
 
@@ -80,9 +86,12 @@ pub fn prepare_turn_messages(
             }
         }
         if let Some(last_user_msg) = db_messages.iter().rev().find(|m| m.role == "user")
-            && !pruned.iter().any(|existing| existing.id == last_user_msg.id) {
-                pruned.push(last_user_msg);
-            }
+            && !pruned
+                .iter()
+                .any(|existing| existing.id == last_user_msg.id)
+        {
+            pruned.push(last_user_msg);
+        }
         // Strict sequence sort so user prompt is NEVER before older assistant/tool messages
         pruned.sort_by_key(|m| m.sequence_num);
         pruned
@@ -114,18 +123,25 @@ pub fn prepare_turn_messages(
     for msg in &messages_to_send {
         if msg.role == "assistant"
             && let Some(ref tc_raw) = msg.tool_calls
-                && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
-                    for c in calls {
-                        known_tool_call_ids.insert(c.id.clone());
-                        if (c.function.name == "workspace_edit_file" || c.function.name == "workspace_write_file")
-                            && let Ok(args_obj) = serde_json::from_str::<serde_json::Value>(&c.function.arguments)
-                                && let Some(path) = args_obj.get("file_path").or_else(|| args_obj.get("path")).and_then(|p| p.as_str()) {
-                                    let clean = path.trim_start_matches("./").to_string();
-                                    files_modified_in_window.insert(clean);
-                                }
-                        tool_id_to_name.insert(c.id, c.function.name);
-                    }
+            && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw)
+        {
+            for c in calls {
+                known_tool_call_ids.insert(c.id.clone());
+                if (c.function.name == "workspace_edit_file"
+                    || c.function.name == "workspace_write_file")
+                    && let Ok(args_obj) =
+                        serde_json::from_str::<serde_json::Value>(&c.function.arguments)
+                    && let Some(path) = args_obj
+                        .get("file_path")
+                        .or_else(|| args_obj.get("path"))
+                        .and_then(|p| p.as_str())
+                {
+                    let clean = path.trim_start_matches("./").to_string();
+                    files_modified_in_window.insert(clean);
                 }
+                tool_id_to_name.insert(c.id, c.function.name);
+            }
+        }
     }
 
     // 2. Identify all tool messages that actually have valid parent assistant calls in this window
@@ -133,13 +149,17 @@ pub fn prepare_turn_messages(
     for msg in &messages_to_send {
         if msg.role == "tool"
             && let Some(ref tcid) = msg.tool_call_id
-                && known_tool_call_ids.contains(tcid) {
-                    retained_tool_ids.insert(tcid.clone());
-                }
+            && known_tool_call_ids.contains(tcid)
+        {
+            retained_tool_ids.insert(tcid.clone());
+        }
     }
 
     let total_tool_msgs = messages_to_send.iter().filter(|m| m.role == "tool").count();
-    let total_assistant_msgs = messages_to_send.iter().filter(|m| m.role == "assistant").count();
+    let total_assistant_msgs = messages_to_send
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .count();
     let mut tool_counter = 0;
     let mut assistant_counter = 0;
 
@@ -147,9 +167,10 @@ pub fn prepare_turn_messages(
         // Drop orphaned tool messages whose parent assistant tool_call was pruned out
         if msg.role == "tool"
             && let Some(ref tcid) = msg.tool_call_id
-                && !retained_tool_ids.contains(tcid) {
-                    continue;
-                }
+            && !retained_tool_ids.contains(tcid)
+        {
+            continue;
+        }
 
         let mut tc_parsed: Option<Vec<V1ToolCall>> = msg
             .tool_calls
@@ -178,16 +199,19 @@ pub fn prepare_turn_messages(
         // do not see an unacknowledged tool response directly followed by a new user turn.
         if msg.role == "user"
             && let Some(last_v1) = v1_messages.last()
-                && last_v1.role == "tool" {
-                    v1_messages.push(V1Message {
-                        role: "assistant".to_string(),
-                        content: Some(json!("I have executed the requested tool operations and inspected the workspace.")),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        name: None,
-                        thought_signature: None,
-                    });
-                }
+            && last_v1.role == "tool"
+        {
+            v1_messages.push(V1Message {
+                role: "assistant".to_string(),
+                content: Some(json!(
+                    "I have executed the requested tool operations and inspected the workspace."
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            });
+        }
 
         let content_val = if msg.role == "user" {
             msg.content.as_ref().map(|c| {
@@ -197,7 +221,11 @@ pub fn prepare_turn_messages(
         } else if msg.role == "tool" {
             tool_counter += 1;
             let is_recent_tail = tool_counter > total_tool_msgs.saturating_sub(6);
-            let tool_name = msg.tool_call_id.as_ref().and_then(|id| tool_id_to_name.get(id)).map(|s| s.as_str());
+            let tool_name = msg
+                .tool_call_id
+                .as_ref()
+                .and_then(|id| tool_id_to_name.get(id))
+                .map(|s| s.as_str());
             msg.content.as_ref().map(|c| {
                 // If this is an older file read on a file that has subsequently been edited in this session,
                 // stub it out aggressively to save thousands of tokens
@@ -251,9 +279,21 @@ pub fn prepare_turn_messages(
                 let lines_display = if item.lines.is_empty() {
                     "unspecified lines".to_string()
                 } else {
-                    format!("lines [{}]", item.lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", "))
+                    format!(
+                        "lines [{}]",
+                        item.lines
+                            .iter()
+                            .map(|l| l.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 };
-                diag_msg.push_str(&format!("{}. `{}` ({})\n", idx + 1, item.file_path, lines_display));
+                diag_msg.push_str(&format!(
+                    "{}. `{}` ({})\n",
+                    idx + 1,
+                    item.file_path,
+                    lines_display
+                ));
                 for msg in item.error_messages.iter().take(4) {
                     diag_msg.push_str(&format!("   - {}\n", msg));
                 }
@@ -278,7 +318,10 @@ pub fn prepare_turn_messages(
     }
 
     if let Some(directive) = final_directive {
-        let is_last_tool = v1_messages.last().map(|m| m.role == "tool").unwrap_or(false);
+        let is_last_tool = v1_messages
+            .last()
+            .map(|m| m.role == "tool")
+            .unwrap_or(false);
         if is_last_tool {
             if let Some(last_msg) = v1_messages.last_mut() {
                 let existing_text = last_msg

@@ -22,6 +22,6 @@ pub use compressor::{
     summarize_evicted_messages, truncate_smart,
 };
 pub use diagnostics::is_command_output_error;
-pub use evidence_ranking::{rank_evidence, EvidenceOrigin};
+pub use evidence_ranking::{EvidenceOrigin, rank_evidence};
 pub use evidence_scoring::score_candidate;
 pub use models::*;

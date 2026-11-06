@@ -1,6 +1,6 @@
+use super::{LanguageDetector, ProjectLanguageInfo};
 use std::fs;
 use std::path::Path;
-use super::{LanguageDetector, ProjectLanguageInfo};
 
 pub struct DartDetector;
 
@@ -21,10 +21,7 @@ impl LanguageDetector for DartDetector {
                 vec!["flutter analyze".to_string()],
             )
         } else {
-            (
-                "dart test".to_string(),
-                vec!["dart analyze".to_string()],
-            )
+            ("dart test".to_string(), vec!["dart analyze".to_string()])
         };
 
         Some(ProjectLanguageInfo {

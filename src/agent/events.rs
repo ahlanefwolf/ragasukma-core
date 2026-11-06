@@ -5,8 +5,9 @@ use tokio::sync::broadcast;
 
 use super::models::AgentSessionEvent;
 
-static SESSION_BROADCASTERS: OnceLock<Mutex<HashMap<String, broadcast::Sender<AgentSessionEvent>>>> =
-    OnceLock::new();
+static SESSION_BROADCASTERS: OnceLock<
+    Mutex<HashMap<String, broadcast::Sender<AgentSessionEvent>>>,
+> = OnceLock::new();
 
 static RUNNING_SESSION_TASKS: OnceLock<Mutex<HashMap<String, tokio::task::AbortHandle>>> =
     OnceLock::new();

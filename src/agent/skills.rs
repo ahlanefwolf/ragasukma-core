@@ -1,8 +1,8 @@
+use crate::agent::models::PromptSkill;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
-use crate::agent::models::PromptSkill;
 
 /// Check if a directory name matches any hidden skills folder variation (case-insensitive, strictly starting with dot: .skills, .skill)
 pub fn is_skill_dir_name(name: &str) -> bool {
@@ -22,7 +22,9 @@ pub fn is_agent_dir_name(name: &str) -> bool {
 /// Locate global skill directories (e.g. ~/.skills or ~/.skill)
 pub fn get_global_agent_skill_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    let home = std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok());
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok());
     if let Some(h) = home {
         let p = PathBuf::from(h);
         for name in [".skills", ".skill"] {
@@ -48,10 +50,11 @@ pub fn find_agent_dirs_in_path(base: &Path) -> Vec<PathBuf> {
 
     // Check if base itself is already a skill folder
     if let Some(name) = base.file_name().and_then(|n| n.to_str())
-        && is_skill_dir_name(name) {
-            results.push(base.to_path_buf());
-            return results;
-        }
+        && is_skill_dir_name(name)
+    {
+        results.push(base.to_path_buf());
+        return results;
+    }
 
     // Check immediate subdirectories of base
     if let Ok(entries) = fs::read_dir(base) {
@@ -59,9 +62,10 @@ pub fn find_agent_dirs_in_path(base: &Path) -> Vec<PathBuf> {
             let path = entry.path();
             if path.is_dir()
                 && let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && is_skill_dir_name(name) {
-                        results.push(path);
-                    }
+                && is_skill_dir_name(name)
+            {
+                results.push(path);
+            }
         }
     }
 
@@ -77,9 +81,10 @@ fn walk_md_files<F: FnMut(&Path)>(dir: &Path, cb: &mut F) {
                 walk_md_files(&path, cb);
             } else if path.is_file()
                 && let Some(ext) = path.extension().and_then(|e| e.to_str())
-                    && ext.eq_ignore_ascii_case("md") {
-                        cb(&path);
-                    }
+                && ext.eq_ignore_ascii_case("md")
+            {
+                cb(&path);
+            }
         }
     }
 }
@@ -129,10 +134,7 @@ pub fn parse_skill_file(path: &Path) -> Option<PromptSkill> {
         .cloned()
         .unwrap_or_else(|| extract_first_h1(&body).unwrap_or(default_name));
 
-    let slug = frontmatter_map
-        .get("slug")
-        .cloned()
-        .unwrap_or(default_slug);
+    let slug = frontmatter_map.get("slug").cloned().unwrap_or(default_slug);
 
     let description = frontmatter_map
         .get("description")
@@ -240,12 +242,13 @@ fn extract_first_h1(body: &str) -> Option<String> {
     for line in body.lines() {
         let trimmed = line.trim();
         if let Some(stripped) = trimmed.strip_prefix('#')
-            && !stripped.starts_with('#') {
-                let title = stripped.trim().to_string();
-                if !title.is_empty() {
-                    return Some(title);
-                }
+            && !stripped.starts_with('#')
+        {
+            let title = stripped.trim().to_string();
+            if !title.is_empty() {
+                return Some(title);
             }
+        }
     }
     None
 }
@@ -309,9 +312,10 @@ pub fn scan_project_skills(
 
     // 3. Current working directory
     if let Ok(cwd) = std::env::current_dir()
-        && !candidate_bases.contains(&cwd) {
-            candidate_bases.push(cwd);
-        }
+        && !candidate_bases.contains(&cwd)
+    {
+        candidate_bases.push(cwd);
+    }
 
     // Find agent directories across all candidates
     let mut agent_dirs = Vec::new();
@@ -355,7 +359,8 @@ pub fn save_skill_to_dir(
 ) -> Result<PromptSkill> {
     let clean_slug = slugify(if slug.trim().is_empty() { name } else { slug });
     let target_dir = base_dir.join(".skills");
-    fs::create_dir_all(&target_dir).with_context(|| format!("Failed to create skill directory {:?}", target_dir))?;
+    fs::create_dir_all(&target_dir)
+        .with_context(|| format!("Failed to create skill directory {:?}", target_dir))?;
 
     let file_path = target_dir.join(format!("{}.md", clean_slug));
     let tags_formatted = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
@@ -369,7 +374,8 @@ pub fn save_skill_to_dir(
         system_prompt.trim()
     );
 
-    fs::write(&file_path, content).with_context(|| format!("Failed to write skill file {:?}", file_path))?;
+    fs::write(&file_path, content)
+        .with_context(|| format!("Failed to write skill file {:?}", file_path))?;
 
     Ok(PromptSkill {
         id: format!("skill_{}", clean_slug),
@@ -468,7 +474,13 @@ Always write idiomatic code.
 
     #[test]
     fn test_strict_md_filtering() {
-        let temp_dir = std::env::temp_dir().join(format!("skills_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "skills_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let md_file = temp_dir.join("test_skill.md");
         let txt_file = temp_dir.join("notes.txt");

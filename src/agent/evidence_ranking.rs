@@ -35,7 +35,9 @@ mod tests {
 
     #[test]
     fn modified_files_outrank_read_files_at_equal_age() {
-        assert!(rank_evidence(EvidenceOrigin::Modified, 0) > rank_evidence(EvidenceOrigin::Read, 0));
+        assert!(
+            rank_evidence(EvidenceOrigin::Modified, 0) > rank_evidence(EvidenceOrigin::Read, 0)
+        );
         assert!(
             rank_evidence(EvidenceOrigin::Modified, i64::MAX / 2)
                 > rank_evidence(EvidenceOrigin::Read, i64::MAX / 2),
@@ -67,7 +69,10 @@ mod tests {
         for origin in [EvidenceOrigin::Read, EvidenceOrigin::Modified] {
             assert_eq!(rank_evidence(origin, 0), base_score(origin));
         }
-        assert_eq!(rank_evidence(EvidenceOrigin::Modified, -500), SCORE_MODIFIED);
+        assert_eq!(
+            rank_evidence(EvidenceOrigin::Modified, -500),
+            SCORE_MODIFIED
+        );
     }
 
     #[test]
@@ -75,7 +80,10 @@ mod tests {
         for origin in [EvidenceOrigin::Read, EvidenceOrigin::Modified] {
             for age in [0i64, 1, 600, 3_600, 86_400, i64::MAX / 2] {
                 let score = rank_evidence(origin, age);
-                assert!((0.0..=1.0).contains(&score), "{origin:?}/{age} produced {score}");
+                assert!(
+                    (0.0..=1.0).contains(&score),
+                    "{origin:?}/{age} produced {score}"
+                );
                 assert!(!score.is_nan(), "{origin:?}/{age} must never yield NaN");
             }
         }

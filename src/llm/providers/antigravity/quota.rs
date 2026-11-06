@@ -47,42 +47,43 @@ pub fn fetch_account_quota(
             let status = resp.status();
             if status.is_success() {
                 if let Ok(val) = resp.json::<serde_json::Value>()
-                    && let Some(models_obj) = val.get("models").and_then(|v| v.as_object()) {
-                        for (model_key, model_val) in models_obj {
-                            let is_internal = model_val
-                                .get("isInternal")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
-                            if is_internal {
-                                continue;
-                            }
+                    && let Some(models_obj) = val.get("models").and_then(|v| v.as_object())
+                {
+                    for (model_key, model_val) in models_obj {
+                        let is_internal = model_val
+                            .get("isInternal")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if is_internal {
+                            continue;
+                        }
 
-                            if let Some(q_info) = model_val.get("quotaInfo") {
-                                let frac = q_info
-                                    .get("remainingFraction")
-                                    .and_then(|v| v.as_f64())
-                                    .unwrap_or(0.0);
-                                let pct = (frac * 1000.0).round() / 10.0;
-                                let reset_time = q_info
-                                    .get("resetTime")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let display_name = model_val
-                                    .get("displayName")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(model_key)
-                                    .to_string();
+                        if let Some(q_info) = model_val.get("quotaInfo") {
+                            let frac = q_info
+                                .get("remainingFraction")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            let pct = (frac * 1000.0).round() / 10.0;
+                            let reset_time = q_info
+                                .get("resetTime")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let display_name = model_val
+                                .get("displayName")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(model_key)
+                                .to_string();
 
-                                models_quota.push(ModelQuotaInfo {
-                                    model_id: model_key.clone(),
-                                    display_name,
-                                    remaining_fraction: frac,
-                                    remaining_percentage: pct,
-                                    reset_time,
-                                });
-                            }
+                            models_quota.push(ModelQuotaInfo {
+                                model_id: model_key.clone(),
+                                display_name,
+                                remaining_fraction: frac,
+                                remaining_percentage: pct,
+                                reset_time,
+                            });
                         }
                     }
+                }
             } else {
                 let err_txt = resp.text().unwrap_or_default();
                 fetch_err = Some(format!("HTTP {status}: {err_txt}"));
@@ -110,58 +111,56 @@ pub fn fetch_account_quota(
 
     if let Ok(w_res) = weekly_resp
         && w_res.status().is_success()
-            && let Ok(w_val) = w_res.json::<serde_json::Value>() {
-                let groups = w_val
-                    .get("groups")
-                    .or_else(|| w_val.pointer("/quotaSummary/groups"))
-                    .and_then(|v| v.as_array());
+        && let Ok(w_val) = w_res.json::<serde_json::Value>()
+    {
+        let groups = w_val
+            .get("groups")
+            .or_else(|| w_val.pointer("/quotaSummary/groups"))
+            .and_then(|v| v.as_array());
 
-                if let Some(groups_arr) = groups {
-                    for g in groups_arr {
-                        let g_name = g.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
-                        let buckets = g.get("buckets").and_then(|v| v.as_array());
-                        if let Some(b_arr) = buckets {
-                            for b in b_arr {
-                                let b_id = b.get("bucketId").and_then(|v| v.as_str()).unwrap_or("");
-                                let b_name =
-                                    b.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
-                                let b_text = format!("{b_id} {b_name}").to_lowercase();
-                                if !b_text.contains("weekly") {
-                                    continue;
-                                }
-                                if b.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false) {
-                                    continue;
-                                }
-                                if let Some(frac) =
-                                    b.get("remainingFraction").and_then(|v| v.as_f64())
-                                {
-                                    let d_name = if g_name.to_lowercase().contains("gemini") {
-                                        "Gemini (Weekly)".to_string()
-                                    } else if g_name.to_lowercase().contains("claude")
-                                        || g_name.to_lowercase().contains("gpt")
-                                    {
-                                        "Claude & GPT (Weekly)".to_string()
-                                    } else {
-                                        format!("{g_name} (Weekly)")
-                                    };
-                                    let reset_time = b
-                                        .get("resetTime")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    let pct = (frac * 1000.0).round() / 10.0;
-                                    weekly_quota.push(ModelQuotaInfo {
-                                        model_id: b_id.to_string(),
-                                        display_name: d_name,
-                                        remaining_fraction: frac,
-                                        remaining_percentage: pct,
-                                        reset_time,
-                                    });
-                                }
-                            }
+        if let Some(groups_arr) = groups {
+            for g in groups_arr {
+                let g_name = g.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
+                let buckets = g.get("buckets").and_then(|v| v.as_array());
+                if let Some(b_arr) = buckets {
+                    for b in b_arr {
+                        let b_id = b.get("bucketId").and_then(|v| v.as_str()).unwrap_or("");
+                        let b_name = b.get("displayName").and_then(|v| v.as_str()).unwrap_or("");
+                        let b_text = format!("{b_id} {b_name}").to_lowercase();
+                        if !b_text.contains("weekly") {
+                            continue;
+                        }
+                        if b.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            continue;
+                        }
+                        if let Some(frac) = b.get("remainingFraction").and_then(|v| v.as_f64()) {
+                            let d_name = if g_name.to_lowercase().contains("gemini") {
+                                "Gemini (Weekly)".to_string()
+                            } else if g_name.to_lowercase().contains("claude")
+                                || g_name.to_lowercase().contains("gpt")
+                            {
+                                "Claude & GPT (Weekly)".to_string()
+                            } else {
+                                format!("{g_name} (Weekly)")
+                            };
+                            let reset_time = b
+                                .get("resetTime")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let pct = (frac * 1000.0).round() / 10.0;
+                            weekly_quota.push(ModelQuotaInfo {
+                                model_id: b_id.to_string(),
+                                display_name: d_name,
+                                remaining_fraction: frac,
+                                remaining_percentage: pct,
+                                reset_time,
+                            });
                         }
                     }
                 }
             }
+        }
+    }
 
     // Tier / Plan name
     let plan = tier_id.as_deref().map(|t| match t {

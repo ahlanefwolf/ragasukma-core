@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::agent::models::{AgentAuditLog, EvidenceCache, Goal, GoalVerification};
 use super::{generate_id, now_secs};
+use crate::agent::models::{AgentAuditLog, EvidenceCache, Goal, GoalVerification};
+use anyhow::Result;
 
 // ============================================================================
 // GOAL STORE REPOSITORY
@@ -72,7 +72,10 @@ pub async fn create_goal(
         .await?;
 
         if res.rows_affected() == 0 {
-            anyhow::bail!("Concurrent goal modification detected while updating goal '{}'", id);
+            anyhow::bail!(
+                "Concurrent goal modification detected while updating goal '{}'",
+                id
+            );
         }
 
         existing_goal.project_id = project_id.to_string();
@@ -172,12 +175,14 @@ pub async fn list_project_goals(project_id: &str) -> Result<Vec<Goal>> {
 pub async fn update_goal_phase(goal_id: &str, phase: &str) -> Result<()> {
     let pool = super::pool().await;
     let now = now_secs();
-    let res = sqlx::query("UPDATE goals SET phase = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3")
-        .bind(phase)
-        .bind(now)
-        .bind(goal_id)
-        .execute(pool)
-        .await?;
+    let res = sqlx::query(
+        "UPDATE goals SET phase = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(phase)
+    .bind(now)
+    .bind(goal_id)
+    .execute(pool)
+    .await?;
 
     if res.rows_affected() == 0 {
         anyhow::bail!("Goal '{}' not found for phase update", goal_id);
@@ -247,12 +252,14 @@ pub async fn lock_goal_targets(goal_id: &str, target_files_json: &str) -> Result
 pub async fn update_goal_status(goal_id: &str, status: &str) -> Result<()> {
     let pool = super::pool().await;
     let now = now_secs();
-    let res = sqlx::query("UPDATE goals SET status = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3")
-        .bind(status)
-        .bind(now)
-        .bind(goal_id)
-        .execute(pool)
-        .await?;
+    let res = sqlx::query(
+        "UPDATE goals SET status = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(status)
+    .bind(now)
+    .bind(goal_id)
+    .execute(pool)
+    .await?;
 
     if res.rows_affected() == 0 {
         anyhow::bail!("Goal '{}' not found for status update", goal_id);
@@ -335,11 +342,12 @@ pub async fn conclude_goal_if_verified(
     .await?;
 
     if has_passing.is_none() {
-        let already_completed: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM goals WHERE id = ?1 AND status = 'completed' LIMIT 1")
-                .bind(goal_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let already_completed: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM goals WHERE id = ?1 AND status = 'completed' LIMIT 1",
+        )
+        .bind(goal_id)
+        .fetch_optional(&mut *tx)
+        .await?;
 
         if already_completed.is_none() {
             tx.rollback().await?;
@@ -670,7 +678,8 @@ pub async fn get_active_evidences_for_goal(goal_id: &str) -> Result<Vec<Evidence
 
     let now = now_secs();
     for row in &mut rows {
-        row.ranked_score = row.relevance_score * crate::agent::evidence_ranking::recency_factor(now - row.updated_at);
+        row.ranked_score = row.relevance_score
+            * crate::agent::evidence_ranking::recency_factor(now - row.updated_at);
     }
 
     rows.sort_by(|a, b| {
@@ -680,7 +689,10 @@ pub async fn get_active_evidences_for_goal(goal_id: &str) -> Result<Vec<Evidence
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    Ok(rows.into_iter().map(RankedEvidence::into_evidence).collect())
+    Ok(rows
+        .into_iter()
+        .map(RankedEvidence::into_evidence)
+        .collect())
 }
 
 // ============================================================================
@@ -757,7 +769,10 @@ pub async fn record_verification_with_status(
         if res.rows_affected() == 0 {
             // Roll back so no orphan verification row survives a missing goal.
             tx.rollback().await?;
-            anyhow::bail!("Goal '{}' not found for verification status update", goal_id);
+            anyhow::bail!(
+                "Goal '{}' not found for verification status update",
+                goal_id
+            );
         }
     }
 
@@ -901,9 +916,17 @@ mod transaction_tests {
         let _guard = crate::agent::repository::testsupport::db_test_lock().await;
         let (_pid, goal_id) = seed_goal().await;
 
-        record_verification_with_status(&goal_id, 1, "cargo test", "ok", true, None, Some("action"))
-            .await
-            .unwrap();
+        record_verification_with_status(
+            &goal_id,
+            1,
+            "cargo test",
+            "ok",
+            true,
+            None,
+            Some("action"),
+        )
+        .await
+        .unwrap();
 
         let verifs = list_goal_verifications(&goal_id).await.unwrap();
         assert_eq!(verifs.len(), 1);
@@ -918,9 +941,16 @@ mod transaction_tests {
         let _guard = crate::agent::repository::testsupport::db_test_lock().await;
         // The insert would succeed on its own; the failed status update must undo it.
         let ghost = generate_id("ghost_goal");
-        let res =
-            record_verification_with_status(&ghost, 1, "cargo test", "ok", true, None, Some("action"))
-                .await;
+        let res = record_verification_with_status(
+            &ghost,
+            1,
+            "cargo test",
+            "ok",
+            true,
+            None,
+            Some("action"),
+        )
+        .await;
         assert!(res.is_err(), "expected failure for missing goal");
 
         let leftovers = list_goal_verifications(&ghost).await.unwrap();
@@ -950,7 +980,9 @@ mod transaction_tests {
             .await
             .unwrap();
 
-        conclude_goal_if_verified(&goal_id, "completed", "done").await.unwrap();
+        conclude_goal_if_verified(&goal_id, "completed", "done")
+            .await
+            .unwrap();
 
         let goal = get_goal(&goal_id).await.unwrap().unwrap();
         assert_eq!(goal.status, "completed");
@@ -997,14 +1029,28 @@ mod transaction_tests {
         );
 
         save_evidence_and_link(
-            &project_id, "src/a.rs", "v1", None, None, None, "edited", None,
+            &project_id,
+            "src/a.rs",
+            "v1",
+            None,
+            None,
+            None,
+            "edited",
+            None,
             Some((&goal_id, modified, true)),
         )
         .await
         .unwrap();
         // Agent reads the same file again later in the session.
         save_evidence_and_link(
-            &project_id, "src/a.rs", "v2", None, None, None, "read again", None,
+            &project_id,
+            "src/a.rs",
+            "v2",
+            None,
+            None,
+            None,
+            "read again",
+            None,
             Some((&goal_id, read, true)),
         )
         .await
@@ -1018,7 +1064,10 @@ mod transaction_tests {
         .await
         .unwrap();
 
-        assert_eq!(score, modified, "rank must never regress when a file is re-read");
+        assert_eq!(
+            score, modified,
+            "rank must never regress when a file is re-read"
+        );
     }
 
     /// Recency must actually reach the production read path, not just the pure ranking helper.
@@ -1034,14 +1083,28 @@ mod transaction_tests {
 
         // Old file: stored score 1.0, but aged past the recency floor.
         save_evidence_and_link(
-            &project_id, "old.rs", "v1", None, None, None, "s", None,
+            &project_id,
+            "old.rs",
+            "v1",
+            None,
+            None,
+            None,
+            "s",
+            None,
             Some((&goal_id, 1.0, true)),
         )
         .await
         .unwrap();
         // New file: stored score 0.8, freshly observed.
         save_evidence_and_link(
-            &project_id, "new.rs", "v1", None, None, None, "s", None,
+            &project_id,
+            "new.rs",
+            "v1",
+            None,
+            None,
+            None,
+            "s",
+            None,
             Some((&goal_id, 0.8, true)),
         )
         .await

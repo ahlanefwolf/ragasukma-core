@@ -7,15 +7,9 @@ pub const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 pub const CODEX_CLI_VERSION: &str = "0.159.0";
 pub const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 
-pub const CODEX_SCOPES: &[&str] = &[
-    "openid",
-    "profile",
-    "email",
-    "offline_access",
-];
+pub const CODEX_SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
 
 pub const CODEX_MODELS_URL: &str =
     "https://chatgpt.com/backend-api/codex/models?client_version=0.159.0";
 
-pub const CODEX_DEFAULT_INSTRUCTIONS: &str =
-    "You are an AI assistant in Ragasukma.";
+pub const CODEX_DEFAULT_INSTRUCTIONS: &str = "You are an AI assistant in Ragasukma.";

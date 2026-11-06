@@ -26,20 +26,21 @@ pub fn get_assets_dir() -> PathBuf {
 
     // 4. Bundled / portable distribution: only if exe_dir/assets contains real bundled assets
     if let Ok(exe_path) = std::env::current_exe()
-        && let Some(exe_dir) = exe_path.parent() {
-            let beside = exe_dir.join("assets");
-            if beside.is_dir()
-                && (beside.join("char.vrm").exists()
-                    || beside.join("icon.png").exists()
-                    || beside.join("i18n").exists())
-            {
-                return beside;
-            }
-            let mac_resources = exe_dir.join("../Resources/assets");
-            if mac_resources.exists() {
-                return mac_resources;
-            }
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        let beside = exe_dir.join("assets");
+        if beside.is_dir()
+            && (beside.join("char.vrm").exists()
+                || beside.join("icon.png").exists()
+                || beside.join("i18n").exists())
+        {
+            return beside;
         }
+        let mac_resources = exe_dir.join("../Resources/assets");
+        if mac_resources.exists() {
+            return mac_resources;
+        }
+    }
 
     let _ = fs::create_dir_all(&data_dir);
     data_dir
@@ -65,12 +66,13 @@ pub fn find_file_in_candidates(filename: &str) -> PathBuf {
 
     // 5. Bundled / portable beside exe
     if let Ok(exe_path) = std::env::current_exe()
-        && let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("assets").join(filename));
-            candidates.push(exe_dir.join(filename));
-            candidates.push(exe_dir.join("../Resources/assets").join(filename));
-            candidates.push(exe_dir.join("../Resources").join(filename));
-        }
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        candidates.push(exe_dir.join("assets").join(filename));
+        candidates.push(exe_dir.join(filename));
+        candidates.push(exe_dir.join("../Resources/assets").join(filename));
+        candidates.push(exe_dir.join("../Resources").join(filename));
+    }
 
     // 6. Dev mode candidates
     if PathBuf::from("Cargo.toml").exists() {
@@ -122,12 +124,13 @@ pub fn find_all_file_candidates(filename: &str) -> Vec<PathBuf> {
 
     // 5. Bundled / portable beside exe
     if let Ok(exe_path) = std::env::current_exe()
-        && let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join("assets").join(filename));
-            candidates.push(exe_dir.join(filename));
-            candidates.push(exe_dir.join("../Resources/assets").join(filename));
-            candidates.push(exe_dir.join("../Resources").join(filename));
-        }
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        candidates.push(exe_dir.join("assets").join(filename));
+        candidates.push(exe_dir.join(filename));
+        candidates.push(exe_dir.join("../Resources/assets").join(filename));
+        candidates.push(exe_dir.join("../Resources").join(filename));
+    }
 
     // 6. Dev mode candidates
     if PathBuf::from("Cargo.toml").exists() {

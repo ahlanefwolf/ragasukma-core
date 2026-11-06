@@ -56,7 +56,8 @@ impl CodexProvider {
     }
 
     pub fn new() -> Self {
-        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> =
+            std::sync::OnceLock::new();
         let client = SHARED_CLIENT
             .get_or_init(|| {
                 reqwest::blocking::Client::builder()
@@ -143,8 +144,14 @@ impl CodexProvider {
                             access_token: None,
                             id_token: None,
                             expires_at: 0,
-                            chatgpt_account_id: item.get("chatgptAccountId").and_then(|v| v.as_str()).map(String::from),
-                            chatgpt_plan_type: item.get("planType").and_then(|v| v.as_str()).map(String::from),
+                            chatgpt_account_id: item
+                                .get("chatgptAccountId")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            chatgpt_plan_type: item
+                                .get("planType")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
                             rate_limited_until: 0,
                             model_rate_limits: std::collections::HashMap::new(),
                             consecutive_errors: 0,
@@ -279,11 +286,7 @@ impl CodexProvider {
             .iter()
             .map(|a| {
                 let is_rl = a.rate_limited_until > now;
-                let left = if is_rl {
-                    a.rate_limited_until - now
-                } else {
-                    0
-                };
+                let left = if is_rl { a.rate_limited_until - now } else { 0 };
                 CodexAccountInfo {
                     id: a.id.clone(),
                     email: a.email.clone(),
@@ -425,7 +428,9 @@ impl CodexProvider {
                         }
                     } else {
                         let err_text = res.text().unwrap_or_default();
-                        last_err = Some(anyhow::anyhow!("Codex Models API returned HTTP {status}: {err_text}"));
+                        last_err = Some(anyhow::anyhow!(
+                            "Codex Models API returned HTTP {status}: {err_text}"
+                        ));
                     }
                 }
                 Err(e) => {
@@ -505,15 +510,16 @@ impl CodexProvider {
             };
 
             if need_token
-                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    self.accounts[acc_idx].consecutive_errors += 1;
-                    crate::term_err!(
-                        "[Codex] Failed to refresh token for account {}: {}",
-                        self.accounts[acc_idx].id,
-                        e
-                    );
-                    continue;
-                }
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
+            {
+                self.accounts[acc_idx].consecutive_errors += 1;
+                crate::term_err!(
+                    "[Codex] Failed to refresh token for account {}: {}",
+                    self.accounts[acc_idx].id,
+                    e
+                );
+                continue;
+            }
 
             let access_token = self.accounts[acc_idx]
                 .access_token
@@ -521,9 +527,15 @@ impl CodexProvider {
                 .unwrap_or_default();
             let chatgpt_account_id = self.accounts[acc_idx].chatgpt_account_id.clone();
 
-            let payload = build_codex_payload_from_messages(model, messages, temperature, max_tokens);
+            let payload =
+                build_codex_payload_from_messages(model, messages, temperature, max_tokens);
 
-            match self.execute_codex_stream(&access_token, chatgpt_account_id.as_deref(), &payload, &mut on_delta) {
+            match self.execute_codex_stream(
+                &access_token,
+                chatgpt_account_id.as_deref(),
+                &payload,
+                &mut on_delta,
+            ) {
                 Ok(full_reply) => {
                     self.accounts[acc_idx].consecutive_errors = 0;
                     let _ = self.save_accounts();
@@ -547,7 +559,10 @@ impl CodexProvider {
                             self.accounts[acc_idx].id,
                             model
                         );
-                    } else if err_str.contains("401") || err_str.contains("token_revoked") || err_str.contains("invalidated oauth token") {
+                    } else if err_str.contains("401")
+                        || err_str.contains("token_revoked")
+                        || err_str.contains("invalidated oauth token")
+                    {
                         crate::term_err!(
                             "[Codex] Account {} access token revoked or expired (401). Invalidating access token for refresh...",
                             self.accounts[acc_idx].id
@@ -605,16 +620,20 @@ impl CodexProvider {
             };
 
             if need_token
-                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    crate::term_err!(
-                        "[Codex] Failed to refresh token for account {}: {}",
-                        self.accounts[acc_idx].id,
-                        e
-                    );
-                    self.accounts[acc_idx].consecutive_errors += 1;
-                    last_err = Some(format!("Account {} token refresh failed: {e}", self.accounts[acc_idx].id));
-                    continue;
-                }
+                && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
+            {
+                crate::term_err!(
+                    "[Codex] Failed to refresh token for account {}: {}",
+                    self.accounts[acc_idx].id,
+                    e
+                );
+                self.accounts[acc_idx].consecutive_errors += 1;
+                last_err = Some(format!(
+                    "Account {} token refresh failed: {e}",
+                    self.accounts[acc_idx].id
+                ));
+                continue;
+            }
 
             let access_token = self.accounts[acc_idx]
                 .access_token
@@ -624,7 +643,12 @@ impl CodexProvider {
 
             let payload = build_codex_payload_from_v1(req);
 
-            match self.execute_codex_stream_internal_v1(&access_token, chatgpt_account_id.as_deref(), &payload, &mut on_event) {
+            match self.execute_codex_stream_internal_v1(
+                &access_token,
+                chatgpt_account_id.as_deref(),
+                &payload,
+                &mut on_event,
+            ) {
                 Ok((full_reply, tool_calls)) => {
                     self.accounts[acc_idx].consecutive_errors = 0;
                     let _ = self.save_accounts();
@@ -642,7 +666,10 @@ impl CodexProvider {
                             60,
                             current_timestamp_secs(),
                         );
-                    } else if err_str.contains("401") || err_str.contains("token_revoked") || err_str.contains("invalidated oauth token") {
+                    } else if err_str.contains("401")
+                        || err_str.contains("token_revoked")
+                        || err_str.contains("invalidated oauth token")
+                    {
                         crate::term_err!(
                             "[Codex] Account {} token revoked/expired (401). Invalidating access token...",
                             self.accounts[acc_idx].id
@@ -689,7 +716,10 @@ impl CodexProvider {
             req = req.header("ChatGPT-Account-ID", account_id);
         }
 
-        let res = req.json(payload).send().context("Failed to connect to Codex Responses API")?;
+        let res = req
+            .json(payload)
+            .send()
+            .context("Failed to connect to Codex Responses API")?;
 
         let status = res.status();
         if !status.is_success() {
@@ -710,7 +740,12 @@ impl CodexProvider {
                     crate::llm::v1_engine::V1StreamEvent::ContentDelta(c) => {
                         full_content.push_str(c);
                     }
-                    crate::llm::v1_engine::V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
+                    crate::llm::v1_engine::V1StreamEvent::ToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        arguments,
+                    } => {
                         let idx = *index;
                         if idx >= collected_tool_calls.len() {
                             collected_tool_calls.resize(
@@ -732,10 +767,14 @@ impl CodexProvider {
                             collected_tool_calls[idx].id = tc_id.clone();
                         }
                         if let Some(tc_name) = name
-                            && !tc_name.is_empty() {
-                                collected_tool_calls[idx].function.name = tc_name.clone();
-                            }
-                        collected_tool_calls[idx].function.arguments.push_str(arguments);
+                            && !tc_name.is_empty()
+                        {
+                            collected_tool_calls[idx].function.name = tc_name.clone();
+                        }
+                        collected_tool_calls[idx]
+                            .function
+                            .arguments
+                            .push_str(arguments);
                     }
                     _ => {}
                 }
@@ -776,7 +815,10 @@ impl CodexProvider {
             req = req.header("ChatGPT-Account-ID", account_id);
         }
 
-        let res = req.json(payload).send().context("Failed to connect to Codex Responses API")?;
+        let res = req
+            .json(payload)
+            .send()
+            .context("Failed to connect to Codex Responses API")?;
 
         let status = res.status();
         if !status.is_success() {
@@ -790,10 +832,11 @@ impl CodexProvider {
         for line_result in reader.lines() {
             let line = line_result?;
             if let Some(delta) = parse_codex_sse_line(&line)
-                && !delta.is_empty() {
-                    full_content.push_str(&delta);
-                    on_raw_delta(&delta)?;
-                }
+                && !delta.is_empty()
+            {
+                full_content.push_str(&delta);
+                on_raw_delta(&delta)?;
+            }
         }
 
         Ok(full_content)
@@ -835,7 +878,10 @@ mod tests {
         };
 
         let res = provider.get_dynamic_available_models();
-        assert!(res.is_err(), "Should return error without fallback when no accounts exist");
+        assert!(
+            res.is_err(),
+            "Should return error without fallback when no accounts exist"
+        );
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("No OpenAI Codex accounts available"));
     }

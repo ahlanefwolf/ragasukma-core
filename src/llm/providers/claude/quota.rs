@@ -19,9 +19,14 @@ pub fn fetch_account_quota(
         .header("Accept", "application/json")
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("anthropic-version", ANTHROPIC_VERSION)
-        .header("User-Agent", format!("claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"));
+        .header(
+            "User-Agent",
+            format!("claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"),
+        );
 
-    let res = req.send().context("Failed to send usage request to Claude OAuth usage endpoint")?;
+    let res = req
+        .send()
+        .context("Failed to send usage request to Claude OAuth usage endpoint")?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -44,13 +49,15 @@ pub fn fetch_account_quota(
 
     let parse_window = |val: Option<&serde_json::Value>| -> Option<ClaudeQuotaWindow> {
         let v = val?;
-        let used = v.get("utilization")
+        let used = v
+            .get("utilization")
             .or_else(|| v.get("used_percent"))
             .or_else(|| v.get("percent_used"))
             .and_then(|p| p.as_f64())
             .unwrap_or(0.0)
             .clamp(0.0, 100.0);
-        let reset_at = v.get("resets_at")
+        let reset_at = v
+            .get("resets_at")
             .or_else(|| v.get("reset_at"))
             .and_then(|s| s.as_str())
             .map(String::from);
@@ -85,7 +92,10 @@ pub fn fetch_account_quota(
         account_id: account.id.clone(),
         email: account.email.clone(),
         org_id: account.org_id.clone(),
-        plan: account.plan_type.clone().or_else(|| Some("Claude Code".to_string())),
+        plan: account
+            .plan_type
+            .clone()
+            .or_else(|| Some("Claude Code".to_string())),
         limit_reached,
         session_quota,
         weekly_quota,

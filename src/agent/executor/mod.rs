@@ -13,7 +13,9 @@ pub mod tool_runner;
 pub use super::compressor::*;
 pub use super::diagnostics::*;
 pub use super::events::*;
-pub use helpers::{detect_project_verification_commands, is_verification_command, parse_project_folders};
+pub use helpers::{
+    detect_project_verification_commands, is_verification_command, parse_project_folders,
+};
 pub use snapshot::WorkspaceSnapshot;
 pub use state::TurnState;
 
@@ -62,7 +64,10 @@ mod turn_boundary_tests {
 use crate::agent::models::AgentSessionEvent;
 use crate::agent::repository;
 
-pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>) -> Result<String> {
+pub async fn execute_session_turn(
+    session_id: &str,
+    model_override: Option<&str>,
+) -> Result<String> {
     // 1. Load Session & Project
     let session = repository::get_session(session_id)
         .await?
@@ -76,8 +81,11 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
     for folder in &allowed_folders {
         let _ = crate::agent::tools::ensure_git_and_gitignore(std::path::Path::new(folder));
     }
-    let prompt_skills = crate::agent::skills::scan_project_skills(project.root_path.as_deref(), &allowed_folders);
-    let active_mcp_servers = repository::get_project_active_mcp_servers(&project.id).await.unwrap_or_default();
+    let prompt_skills =
+        crate::agent::skills::scan_project_skills(project.root_path.as_deref(), &allowed_folders);
+    let active_mcp_servers = repository::get_project_active_mcp_servers(&project.id)
+        .await
+        .unwrap_or_default();
     let mcp_tools = crate::agent::mcp::resolve_active_mcp_tools(&active_mcp_servers).await;
     let dynamic_tools_schema = crate::agent::tools::get_dynamic_agent_tools_schema(&mcp_tools);
 
@@ -120,10 +128,13 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         session_id,
         goal_id: &goal_id,
         capabilities,
-    }).await?;
+    })
+    .await?;
 
     // 5. Initialize turn state
-    let prior_verifs = repository::list_goal_verifications(&goal_id).await.unwrap_or_default();
+    let prior_verifs = repository::list_goal_verifications(&goal_id)
+        .await
+        .unwrap_or_default();
     let mut state = TurnState::new(
         goal_id.clone(),
         current_phase,
@@ -131,7 +142,8 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         prior_verifs.len(),
     );
 
-    let detected_verifier = crate::agent::languages::detect_primary_verification_command(&allowed_folders);
+    let detected_verifier =
+        crate::agent::languages::detect_primary_verification_command(&allowed_folders);
 
     // 6. Autonomous Tool Execution Loop
     while state.iteration < state.max_safety_iterations {
@@ -139,10 +151,15 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
 
         // Check if session was stopped or aborted externally
         if let Ok(Some(status)) = repository::get_session_status(session_id).await
-            && status != "running" {
-                tracing::info!("[Agent] Session {} status changed to '{}', breaking iteration loop.", session_id, status);
-                break;
-            }
+            && status != "running"
+        {
+            tracing::info!(
+                "[Agent] Session {} status changed to '{}', breaking iteration loop.",
+                session_id,
+                status
+            );
+            break;
+        }
 
         broadcast_session_event(
             session_id,
@@ -181,7 +198,9 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                 dynamic_tools_schema.clone(),
                 state.force_final_text_only,
                 state.iteration,
-            ).await {
+            )
+            .await
+            {
                 Ok(res) => break Ok(res),
                 Err(e) => {
                     let err_str = e.to_string();
@@ -198,9 +217,15 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                         retry_count += 1;
                         tracing::warn!(
                             "[Agent Stream Retry] Transient error on iteration {}: {}. Retrying attempt {}/{}...",
-                            state.iteration, err_str, retry_count, max_stream_retries
+                            state.iteration,
+                            err_str,
+                            retry_count,
+                            max_stream_retries
                         );
-                        tokio::time::sleep(std::time::Duration::from_millis(1500 * retry_count as u64)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(
+                            1500 * retry_count as u64,
+                        ))
+                        .await;
                         continue;
                     }
                     break Err(e);
@@ -230,10 +255,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                 )
                 .await
                 {
-                    broadcast_session_event(
-                        session_id,
-                        AgentSessionEvent::MessageCreated(err_msg),
-                    );
+                    broadcast_session_event(session_id, AgentSessionEvent::MessageCreated(err_msg));
                 }
 
                 let _ = repository::update_session_status(session_id, "idle").await;
@@ -294,11 +316,15 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
 
                 // Drop any call whose name is blank. Persisting such a call only poisons
                 // the conversation history and makes the model repeat the same mistake.
-                let blank_calls = tool_calls.iter().filter(|tc| tc.function.name.trim().is_empty()).count();
+                let blank_calls = tool_calls
+                    .iter()
+                    .filter(|tc| tc.function.name.trim().is_empty())
+                    .count();
                 if blank_calls > 0 {
                     tracing::warn!(
                         "[Agent Turn] Dropped {} tool call(s) with an empty name on iteration {}",
-                        blank_calls, state.iteration
+                        blank_calls,
+                        state.iteration
                     );
                     tool_calls.retain(|tc| !tc.function.name.trim().is_empty());
                     state.consecutive_tool_errors += blank_calls;
@@ -343,7 +369,8 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                     &tool_calls,
                     &mut state,
                     &mut db_messages,
-                ).await?;
+                )
+                .await?;
 
                 // Circuit breaker: if the tool surface keeps failing in exactly the same
                 // way, stop burning the iteration budget and force a final answer.
@@ -360,7 +387,8 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
                 } else if state.consecutive_tool_errors >= 8 {
                     tracing::warn!(
                         "[Agent Circuit Breaker] {} consecutive tool errors on iteration {}",
-                        state.consecutive_tool_errors, state.iteration
+                        state.consecutive_tool_errors,
+                        state.iteration
                     );
                     state.trip_circuit_breaker(
                         "CIRCUIT BREAKER: consecutive tool errors exceeded the safe limit. Tools are now closed for this turn. Summarize findings and answer the user now.",
@@ -398,11 +426,8 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         }
 
         // Final turn conclusion
-        let composed_content = gates::compose_final_turn_content(
-            &state,
-            &turn_res.content,
-            &turn_res.thought,
-        );
+        let composed_content =
+            gates::compose_final_turn_content(&state, &turn_res.content, &turn_res.thought);
         let content_to_save = composed_content.as_str();
 
         // Final turn conclusion.
@@ -413,13 +438,20 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         let orch = crate::agent::orchestrator::GoalOrchestrator::new(&goal_id, &project.id);
         if state.last_command_had_error || state.last_tool_had_error {
             let _ = orch
-                .conclude_with_status(crate::agent::orchestrator::GoalState::Failed, content_to_save)
+                .conclude_with_status(
+                    crate::agent::orchestrator::GoalState::Failed,
+                    content_to_save,
+                )
                 .await;
         } else if state.has_taken_any_action || !state.modified_files.is_empty() {
             // Real work happened. `conclude_after_work` prefers a verified completion and only
             // labels the goal unverified when no passing verification exists.
             if let Err(e) = orch.conclude_after_work(content_to_save).await {
-                tracing::warn!("[Agent Conclusion Warning] Goal {} could not be concluded: {}", goal_id, e);
+                tracing::warn!(
+                    "[Agent Conclusion Warning] Goal {} could not be concluded: {}",
+                    goal_id,
+                    e
+                );
             }
         } else {
             // The turn only produced conversation: an answer, a clarifying question, or nothing at
@@ -441,10 +473,7 @@ pub async fn execute_session_turn(session_id: &str, model_override: Option<&str>
         )
         .await?;
 
-        broadcast_session_event(
-            session_id,
-            AgentSessionEvent::MessageCreated(final_msg),
-        );
+        broadcast_session_event(session_id, AgentSessionEvent::MessageCreated(final_msg));
         broadcast_session_event(
             session_id,
             AgentSessionEvent::Done {

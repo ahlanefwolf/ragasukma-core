@@ -50,6 +50,10 @@ mod tests {
 
         // Verify base64 signature format
         assert!(!DEFAULT_THINKING_AG_SIGNATURE.is_empty());
-        assert!(DEFAULT_THINKING_AG_SIGNATURE.chars().all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '='));
+        assert!(
+            DEFAULT_THINKING_AG_SIGNATURE
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '+' || c == '/' || c == '=')
+        );
     }
 }

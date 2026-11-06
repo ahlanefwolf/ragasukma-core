@@ -108,7 +108,8 @@ impl TurnState {
         self.consecutive_read_same_file.clear();
 
         let clean = file_path.trim_start_matches("./");
-        self.pending_error_files.retain(|ef| ef != clean && !clean.ends_with(ef) && !ef.ends_with(clean));
+        self.pending_error_files
+            .retain(|ef| ef != clean && !clean.ends_with(ef) && !ef.ends_with(clean));
         if !self.modified_files.iter().any(|f| f == file_path) {
             self.modified_files.push(file_path.to_string());
         }
@@ -133,12 +134,18 @@ pub async fn resolve_or_create_goal(
         .unwrap_or("")
         .to_string();
 
-    let session_goals = repository::list_session_goals(&session.id).await.unwrap_or_default();
+    let session_goals = repository::list_session_goals(&session.id)
+        .await
+        .unwrap_or_default();
     let latest_existing_goal = session_goals.first().cloned();
 
     // Check if the latest goal was already completed or failed; if so, create a new one
     let goal_id = match latest_existing_goal {
-        Some(ref g) if g.status != "completed" && g.status != "completed_unverified" && g.status != "failed" => {
+        Some(ref g)
+            if g.status != "completed"
+                && g.status != "completed_unverified"
+                && g.status != "failed" =>
+        {
             // Re-use current active goal if still in progress and user is continuing the task
             g.id.clone()
         }
@@ -146,7 +153,10 @@ pub async fn resolve_or_create_goal(
             // New distinct goal for this user request with sub-second entropy
             let new_gid = repository::generate_id(&format!("goal_{}", session.id));
             let title = if last_user_prompt.chars().count() > 60 {
-                format!("{}...", last_user_prompt.chars().take(57).collect::<String>())
+                format!(
+                    "{}...",
+                    last_user_prompt.chars().take(57).collect::<String>()
+                )
             } else if !last_user_prompt.trim().is_empty() {
                 last_user_prompt.trim().to_string()
             } else {
@@ -178,30 +188,50 @@ pub async fn resolve_or_create_goal(
                 &[],
                 &prompt_keywords,
                 allowed_folders,
-            ).await?;
+            )
+            .await?;
             new_gid
         }
     };
 
     // Revalidate evidence cache on disk with degradation recording
-    if let Err(e) = crate::agent::context_builder::revalidate_evidence_cache(&project.id, allowed_folders).await {
+    if let Err(e) =
+        crate::agent::context_builder::revalidate_evidence_cache(&project.id, allowed_folders).await
+    {
         let err_str = e.to_string();
-        tracing::warn!("[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Operating in degraded mode.", goal_id, err_str);
+        tracing::warn!(
+            "[Agent Context Warning] Evidence cache revalidation failed for goal {}: {}. Operating in degraded mode.",
+            goal_id,
+            err_str
+        );
         let _ = repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
     }
 
     // Only reuse prior evidence if this goal is explicitly a continuation child of a parent goal
     let active_goal_opt = repository::get_goal(&goal_id).await.unwrap_or(None);
     if let Some(ref g) = active_goal_opt
-        && let Some(ref parent_gid) = g.parent_goal_id {
-            // Passed whole; see the note on the call above. Scoring decides what matters.
-            let prompt_keywords: Vec<&str> = last_user_prompt.split_whitespace().collect();
-            if let Err(e) = crate::agent::context_builder::reuse_evidence_from_parent(&goal_id, parent_gid, &prompt_keywords).await {
-                let err_str = e.to_string();
-                tracing::warn!("[Agent Context Warning] Parent evidence reuse failed for goal {} from {}: {}", goal_id, parent_gid, err_str);
-                let _ = repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
-            }
+        && let Some(ref parent_gid) = g.parent_goal_id
+    {
+        // Passed whole; see the note on the call above. Scoring decides what matters.
+        let prompt_keywords: Vec<&str> = last_user_prompt.split_whitespace().collect();
+        if let Err(e) = crate::agent::context_builder::reuse_evidence_from_parent(
+            &goal_id,
+            parent_gid,
+            &prompt_keywords,
+        )
+        .await
+        {
+            let err_str = e.to_string();
+            tracing::warn!(
+                "[Agent Context Warning] Parent evidence reuse failed for goal {} from {}: {}",
+                goal_id,
+                parent_gid,
+                err_str
+            );
+            let _ =
+                repository::update_goal_context_health(&goal_id, "degraded", Some(&err_str)).await;
         }
+    }
 
     // A fresh user turn MUST ALWAYS start with active execution phase ("discovery" or "action").
     let current_phase = active_goal_opt
@@ -222,7 +252,13 @@ pub async fn resolve_model(session: &Session, model_override: Option<&str>) -> (
     let model = model_override
         .filter(|m| !m.trim().is_empty())
         .map(|m| m.to_string())
-        .or_else(|| session.model.as_ref().filter(|m| !m.trim().is_empty()).cloned())
+        .or_else(|| {
+            session
+                .model
+                .as_ref()
+                .filter(|m| !m.trim().is_empty())
+                .cloned()
+        })
         .unwrap_or_else(|| {
             let u = crate::config::load_user_config();
             if !u.llm_model.trim().is_empty() {
@@ -292,14 +328,17 @@ const EVIDENCE_ENTRY_TOKEN_COST: usize = 200;
 const MIN_EVIDENCE_PROMPT_LIMIT: usize = 8;
 
 fn evidence_prompt_limit_for(history_token_budget: usize) -> usize {
-    (history_token_budget / EVIDENCE_BUDGET_SHARE / EVIDENCE_ENTRY_TOKEN_COST).max(MIN_EVIDENCE_PROMPT_LIMIT)
+    (history_token_budget / EVIDENCE_BUDGET_SHARE / EVIDENCE_ENTRY_TOKEN_COST)
+        .max(MIN_EVIDENCE_PROMPT_LIMIT)
 }
 
 pub fn model_capabilities(family: ModelProviderFamily) -> ModelCapabilities {
     match family {
         // These adapters stream a dedicated thought channel to the UI; asking for
         // inline <thought> tags on top of that produces duplicated, conflicting output.
-        ModelProviderFamily::Antigravity | ModelProviderFamily::Claude | ModelProviderFamily::Codex => {
+        ModelProviderFamily::Antigravity
+        | ModelProviderFamily::Claude
+        | ModelProviderFamily::Codex => {
             let history_token_budget = LARGE_CONTEXT_HISTORY_BUDGET;
             ModelCapabilities {
                 native_reasoning: true,
@@ -401,8 +440,12 @@ mod goal_criteria_tests {
     #[tokio::test]
     async fn a_new_goal_does_not_copy_its_demand_into_success_criteria() {
         let _guard = repository::testsupport::db_test_lock().await;
-        let project = repository::create_project("Criteria Origin", "", None, None).await.unwrap();
-        let session = repository::create_session(&project.id, "S", None, None, None).await.unwrap();
+        let project = repository::create_project("Criteria Origin", "", None, None)
+            .await
+            .unwrap();
+        let session = repository::create_session(&project.id, "S", None, None, None)
+            .await
+            .unwrap();
         let demand = "Buat landing page untuk produk di folder kerja sekarang";
 
         let (goal_id, _, _) = super::resolve_or_create_goal(

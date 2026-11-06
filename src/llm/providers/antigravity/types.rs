@@ -54,9 +54,10 @@ impl AntigravityAccount {
         if let Some(m) = model {
             let clean_m = m.trim().trim_start_matches("ag/");
             if let Some(&until) = self.model_rate_limits.get(clean_m)
-                && until > now {
-                    return true;
-                }
+                && until > now
+            {
+                return true;
+            }
         }
         false
     }
@@ -81,9 +82,10 @@ impl AntigravityAccount {
         if let Some(m) = model {
             let clean_m = m.trim().trim_start_matches("ag/");
             if let Some(&until) = self.model_rate_limits.get(clean_m)
-                && until > now {
-                    waits.push(until - now);
-                }
+                && until > now
+            {
+                waits.push(until - now);
+            }
         }
         waits.into_iter().min()
     }

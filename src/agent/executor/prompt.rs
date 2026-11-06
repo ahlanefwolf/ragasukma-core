@@ -35,7 +35,8 @@ fn build_static_prompt(
 ) -> String {
     let os_name = std::env::consts::OS;
     let arch_name = std::env::consts::ARCH;
-    let detected_verifier = crate::agent::languages::detect_primary_verification_command(allowed_folders);
+    let detected_verifier =
+        crate::agent::languages::detect_primary_verification_command(allowed_folders);
     let verifier_hint = detected_verifier
         .as_deref()
         .unwrap_or("run project verification or test commands if available");
@@ -44,10 +45,12 @@ fn build_static_prompt(
     let shell_desc = "PowerShell. Use native PowerShell syntax for scripts and paths. For multiple commands in one execution, use ';' as separator (do not use '&&' as Windows PowerShell 5.1 does not support it).";
 
     #[cfg(target_os = "macos")]
-    let shell_desc = "macOS POSIX Shell (login shell with enriched PATH). Use standard Unix shell syntax.";
+    let shell_desc =
+        "macOS POSIX Shell (login shell with enriched PATH). Use standard Unix shell syntax.";
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let shell_desc = "Linux POSIX Shell (login shell with enriched PATH). Use standard Unix/Linux shell syntax.";
+    let shell_desc =
+        "Linux POSIX Shell (login shell with enriched PATH). Use standard Unix/Linux shell syntax.";
 
     #[cfg(target_os = "windows")]
     let script_runner_desc = "Scripts: Node.js (`node`) or Python (`python` / `py -3`)";
@@ -104,7 +107,13 @@ fn build_static_prompt(
             - Never mark a checklist item as completed `[x]` or claim a feature is implemented without physically verifying that every requested file was actually created and non-empty (via `workspace_list_dir` or `workspace_read_file`) and that required exports/logic exist.\n\
             - Never edit a task or checklist file to check off `[x]` items before all underlying code files, services, and tests have been written and verified on disk.\n\
          </core-guidelines>\n\n",
-        os_name, arch_name, shell_desc, script_runner_desc, verifier_hint, max_iterations, multiple_cmd_hint
+        os_name,
+        arch_name,
+        shell_desc,
+        script_runner_desc,
+        verifier_hint,
+        max_iterations,
+        multiple_cmd_hint
     );
 
     if !allowed_folders.is_empty() {
@@ -112,8 +121,15 @@ fn build_static_prompt(
         for (idx, f) in allowed_folders.iter().enumerate() {
             let p = std::path::Path::new(f);
             let folder_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("root");
-            let marker = if idx == 0 { " (Primary Default CWD)" } else { "" };
-            prompt.push_str(&format!("- `{}` [Folder Name/Alias: `{}`]{}\n", f, folder_name, marker));
+            let marker = if idx == 0 {
+                " (Primary Default CWD)"
+            } else {
+                ""
+            };
+            prompt.push_str(&format!(
+                "- `{}` [Folder Name/Alias: `{}`]{}\n",
+                f, folder_name, marker
+            ));
         }
         prompt.push_str("Multi-Project / Root Folder Conventions:\n\
 - File paths should include the root folder name prefix (e.g. `<folder>/src/file.ext` or `@<folder>/src/file.ext`) so targeting is 100% unambiguous.\n\
@@ -121,16 +137,21 @@ fn build_static_prompt(
     }
 
     if let Some(ref custom) = project.custom_instructions
-        && !custom.trim().is_empty() {
-            prompt.push_str("### Project Instructions:\n");
-            prompt.push_str(custom.trim());
-            prompt.push_str("\n\n");
-        }
+        && !custom.trim().is_empty()
+    {
+        prompt.push_str("### Project Instructions:\n");
+        prompt.push_str(custom.trim());
+        prompt.push_str("\n\n");
+    }
 
     if !prompt_skills.is_empty() {
         prompt.push_str("### Active Prompt Skills & Persona Guidelines:\n");
         for skill in prompt_skills {
-            prompt.push_str(&format!("#### Skill: {}\n{}\n\n", skill.name, skill.system_prompt.trim()));
+            prompt.push_str(&format!(
+                "#### Skill: {}\n{}\n\n",
+                skill.name,
+                skill.system_prompt.trim()
+            ));
         }
     }
 
@@ -172,28 +193,43 @@ fn build_static_prompt(
     );
 
     if !active_mcp_servers.is_empty() {
-        prompt.push_str("### ⚡ Active Project External MCP Servers & Services (Raw Configuration):\n\
-The following external MCP services / tools are configured for this workspace project. You can inspect their endpoints, commands, headers, and schemas below.\n\
-When you need to interact with these services, craft and run appropriate scripts (using Node.js with native `fetch` or Python) or terminal commands via `workspace_run_command`:\n\
-- **HTTP / SSE MCP Services**: Write concise Node.js or Python scripts to connect to the URL, send JSON-RPC 2.0 requests (e.g. `initialize`, `tools/call`, `tools/list`), and parse the response.\n\
-- **CLI / Stdio MCP Tools**: Execute the command directly (e.g. via `npx`, `uvx`, or binary) or wrap it with a script.\n\n");
+        prompt.push_str("### ⚡ Active Project External MCP Servers (Raw Configuration)\n\
+The raw JSON config of every external MCP server configured for this workspace project is inlined below. These are NOT callable functions and there is no dedicated wrapper tool for them — you are given the raw config so that YOU can reason about it yourself. Read the raw JSON, recognize what kind of service each one is, and then decide how to talk to it:\n\
+- **SSE / HTTP MCP** (`url` / `type: \"sse\"|\"http\"`): write a short Node.js (native `fetch`) or Python script that speaks JSON-RPC 2.0 over the endpoint (`initialize` → `tools/list` → `tools/call`), then run it with `workspace_run_command`.\n\
+- **CLI / Stdio MCP** (`command` + `args`): run the command directly through `workspace_run_command` (e.g. `npx`, `uvx`, or a binary), piping JSON-RPC 2.0 lines on stdin if the tool expects a stdio handshake.\n\
+Use the endpoint URL, headers, env, command and args exactly as they appear in the raw JSON — that is the source of truth. Do not guess a different address or invent servers.\n\n");
 
         for (idx, server) in active_mcp_servers.iter().enumerate() {
             let mut cfg_val = server.config_value();
             if let Some(obj) = cfg_val.as_object_mut()
-                && !obj.contains_key("name") {
-                    obj.insert("name".to_string(), serde_json::json!(server.name));
-                }
-            let pretty_json = serde_json::to_string_pretty(&cfg_val).unwrap_or_else(|_| server.config.clone());
-            prompt.push_str(&format!("#### {}. MCP Server: \"{}\" ({})\n```json\n{}\n```\n\n", idx + 1, server.name, server.transport(), pretty_json));
+                && !obj.contains_key("name")
+            {
+                obj.insert("name".to_string(), serde_json::json!(server.name));
+            }
+            let pretty_json =
+                serde_json::to_string_pretty(&cfg_val).unwrap_or_else(|_| server.config.clone());
+            prompt.push_str(&format!(
+                "#### {}. MCP Server: \"{}\" ({})\n```json\n{}\n```\n\n",
+                idx + 1,
+                server.name,
+                server.transport(),
+                pretty_json
+            ));
         }
     }
 
     if !mcp_tools.is_empty() {
         prompt.push_str("### ⚡ Pre-Resolved Tool Functions (Model Context Protocol):\n");
         for tool in mcp_tools {
-            let desc = tool.definition.description.as_deref().unwrap_or("Active tool");
-            prompt.push_str(&format!("- `{}` (from {}): {}\n", tool.namespaced_name, tool.server_name, desc));
+            let desc = tool
+                .definition
+                .description
+                .as_deref()
+                .unwrap_or("Active tool");
+            prompt.push_str(&format!(
+                "- `{}` (from {}): {}\n",
+                tool.namespaced_name, tool.server_name, desc
+            ));
         }
         prompt.push('\n');
     }
@@ -263,11 +299,14 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
     );
     // A poisoned lock only means another thread panicked while holding it; the cache holds no
     // invariants that a panic could corrupt, so recover instead of propagating.
-    let mut guard = STATIC_PROMPT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = STATIC_PROMPT_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some((cached_key, value)) = guard.as_ref()
-        && cached_key == &key {
-            return value.clone();
-        }
+        && cached_key == &key
+    {
+        return value.clone();
+    }
     let rendered: std::sync::Arc<str> = std::sync::Arc::from(build_static_prompt(
         ctx.project,
         ctx.allowed_folders,
@@ -285,18 +324,23 @@ pub async fn build_system_prompt(ctx: AgentPromptContext<'_>) -> Result<String> 
     let session_id = ctx.session_id;
     let goal_id = ctx.goal_id;
 
-    let verifier_hint = crate::agent::languages::detect_primary_verification_command(ctx.allowed_folders)
-        .unwrap_or_else(|| "run project verification or test commands if available".to_string());
+    let verifier_hint =
+        crate::agent::languages::detect_primary_verification_command(ctx.allowed_folders)
+            .unwrap_or_else(|| {
+                "run project verification or test commands if available".to_string()
+            });
 
     // Static block: cached, so a long session does not re-render it every turn. The cached text is
     // copied into an owned `String` because the dynamic sections below are appended to it.
     let mut system_prompt = cached_static_prompt(&ctx).to_string();
 
     // 1. Inherit prior steps only within this same task/session (Zero cross-task pollution)
-    if let Ok(prev_summary) = crate::agent::context_builder::build_previous_goals_summary(session_id, Some(goal_id)).await
-        && !prev_summary.is_empty() {
-            system_prompt.push_str(&prev_summary);
-        }
+    if let Ok(prev_summary) =
+        crate::agent::context_builder::build_previous_goals_summary(session_id, Some(goal_id)).await
+        && !prev_summary.is_empty()
+    {
+        system_prompt.push_str(&prev_summary);
+    }
 
     // 2. Goal objective, success criteria, constraints and active evidence.
     //    This block used to be reachable only from tests, so criteria/constraints
@@ -314,17 +358,27 @@ pub async fn build_system_prompt(ctx: AgentPromptContext<'_>) -> Result<String> 
     } else {
         // Fallback: no goal row could be loaded, still surface whatever evidence
         // is linked so the turn is not left without context.
-        let relevant_evs = repository::get_active_evidences_for_goal(goal_id).await.unwrap_or_default();
+        let relevant_evs = repository::get_active_evidences_for_goal(goal_id)
+            .await
+            .unwrap_or_default();
         if !relevant_evs.is_empty() {
-            system_prompt.push_str("### 🎯 Relevant Code Locations & Evidence Cache (Verified Fresh):\n");
+            system_prompt
+                .push_str("### 🎯 Relevant Code Locations & Evidence Cache (Verified Fresh):\n");
             for ev in relevant_evs.iter().take(15) {
                 let lines_info = match (ev.start_line, ev.end_line) {
                     (Some(s), Some(e)) => format!(" (Lines {}-{})", s, e),
                     (Some(s), None) => format!(" (Line {}+)", s),
                     _ => String::new(),
                 };
-                let sym_info = ev.symbol_name.as_deref().map(|s| format!(" [`{}`]", s)).unwrap_or_default();
-                system_prompt.push_str(&format!("- `{}`{}{}: {}\n", ev.file_path, lines_info, sym_info, ev.summary));
+                let sym_info = ev
+                    .symbol_name
+                    .as_deref()
+                    .map(|s| format!(" [`{}`]", s))
+                    .unwrap_or_default();
+                system_prompt.push_str(&format!(
+                    "- `{}`{}{}: {}\n",
+                    ev.file_path, lines_info, sym_info, ev.summary
+                ));
             }
             system_prompt.push('\n');
         }
@@ -344,15 +398,24 @@ pub async fn build_system_prompt(ctx: AgentPromptContext<'_>) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use crate::agent::executor::state::{
-        detect_provider_family, model_capabilities, ModelProviderFamily, TurnState,
+        ModelProviderFamily, TurnState, detect_provider_family, model_capabilities,
     };
 
     #[test]
     fn test_budget_numbers_are_derived_not_hardcoded() {
         let state = TurnState::new(String::new(), String::new(), Vec::new(), 0);
-        assert_eq!(state.max_safety_iterations, TurnState::MAX_SAFETY_ITERATIONS);
-        assert_eq!(state.inspect_soft_limit, TurnState::MAX_SAFETY_ITERATIONS / 2);
-        assert_eq!(state.inspection_streak_limit, TurnState::MAX_SAFETY_ITERATIONS / 5);
+        assert_eq!(
+            state.max_safety_iterations,
+            TurnState::MAX_SAFETY_ITERATIONS
+        );
+        assert_eq!(
+            state.inspect_soft_limit,
+            TurnState::MAX_SAFETY_ITERATIONS / 2
+        );
+        assert_eq!(
+            state.inspection_streak_limit,
+            TurnState::MAX_SAFETY_ITERATIONS / 5
+        );
         // Warnings must always trigger before the hard stop.
         assert!(state.inspect_soft_limit < state.max_safety_iterations);
         assert!(state.inspection_streak_limit < state.max_safety_iterations);
@@ -370,7 +433,11 @@ mod tests {
             assert!(model_capabilities(detect_provider_family(model)).native_reasoning);
         }
         // OpenAI-compatible gateways keep the portable inline tag fallback.
-        for model in ["9r/cbai/deepseek-v4.1-flash", "kc/deepseek/deepseek-chat", "unknown-model"] {
+        for model in [
+            "9r/cbai/deepseek-v4.1-flash",
+            "kc/deepseek/deepseek-chat",
+            "unknown-model",
+        ] {
             let family = detect_provider_family(model);
             assert!(matches!(family, ModelProviderFamily::Custom));
             assert!(!model_capabilities(family).native_reasoning);
@@ -402,12 +469,10 @@ mod tests {
     fn static_block_is_reused_across_turns_with_identical_inputs() {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
-        let first = super::build_static_prompt(
-            &project, &folders, &[], &[], &[], caps(true, false),
-        );
-        let second = super::build_static_prompt(
-            &project, &folders, &[], &[], &[], caps(true, false),
-        );
+        let first =
+            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+        let second =
+            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
         assert_eq!(first, second, "static rendering must be deterministic");
         assert_eq!(
             super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false)),
@@ -420,14 +485,22 @@ mod tests {
     fn cache_key_changes_when_any_rendered_input_changes() {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
-        let base = super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false));
+        let base =
+            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false));
 
         // Different project instructions must not reuse the cached block.
         let mut other_project = sample_project();
         other_project.custom_instructions = Some("Different rules.".to_string());
         assert_ne!(
             base,
-            super::static_prompt_cache_key(&other_project, &folders, &[], &[], &[], caps(true, false)),
+            super::static_prompt_cache_key(
+                &other_project,
+                &folders,
+                &[],
+                &[],
+                &[],
+                caps(true, false)
+            ),
             "project instructions must invalidate the cache"
         );
 
@@ -435,7 +508,14 @@ mod tests {
         let other_folders = vec!["other".to_string()];
         assert_ne!(
             base,
-            super::static_prompt_cache_key(&project, &other_folders, &[], &[], &[], caps(true, false)),
+            super::static_prompt_cache_key(
+                &project,
+                &other_folders,
+                &[],
+                &[],
+                &[],
+                caps(true, false)
+            ),
             "attached folders must invalidate the cache"
         );
 
@@ -453,7 +533,11 @@ mod tests {
         let folders = vec!["proj".to_string()];
         let freshly_rendered =
             super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
-        let cached = super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
-        assert_eq!(cached, freshly_rendered, "cache must never serve stale text");
+        let cached =
+            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+        assert_eq!(
+            cached, freshly_rendered,
+            "cache must never serve stale text"
+        );
     }
 }

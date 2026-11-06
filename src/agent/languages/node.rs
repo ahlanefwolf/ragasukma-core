@@ -1,6 +1,6 @@
+use super::{LanguageDetector, ProjectLanguageInfo};
 use std::fs;
 use std::path::Path;
-use super::{LanguageDetector, ProjectLanguageInfo};
 
 pub struct NodeDetector;
 
@@ -43,46 +43,50 @@ impl LanguageDetector for NodeDetector {
 
         if let Ok(content) = fs::read_to_string(&pkg_json)
             && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
-                && let Some(scripts) = val.get("scripts").and_then(|s| s.as_object()) {
-                    let has_test_script = scripts.contains_key("test");
-                    let test_is_dummy = scripts
-                        .get("test")
-                        .and_then(|t| t.as_str())
-                        .map(|t| t.contains("no test specified") || t.contains("exit 1"))
-                        .unwrap_or(false);
+            && let Some(scripts) = val.get("scripts").and_then(|s| s.as_object())
+        {
+            let has_test_script = scripts.contains_key("test");
+            let test_is_dummy = scripts
+                .get("test")
+                .and_then(|t| t.as_str())
+                .map(|t| t.contains("no test specified") || t.contains("exit 1"))
+                .unwrap_or(false);
 
-                    if !has_test_script || test_is_dummy {
-                        // If test script is absent or dummy, prioritize check / build scripts
-                        if scripts.contains_key("check") && scripts.contains_key("build") {
-                            primary = format!("{} run check && {} run build", pkg_runner, pkg_runner);
-                        } else if scripts.contains_key("check") {
-                            primary = format!("{} run check", pkg_runner);
-                        } else if scripts.contains_key("typecheck") {
-                            primary = format!("{} run typecheck", pkg_runner);
-                        } else if root.join("tsconfig.json").exists() && scripts.contains_key("build") {
-                            primary = format!("npx tsc --noEmit && {} run build", pkg_runner);
-                        } else if root.join("tsconfig.json").exists() {
-                            primary = "npx tsc --noEmit".to_string();
-                        } else if scripts.contains_key("build") {
-                            primary = format!("{} run build", pkg_runner);
-                        }
-                    }
-
-                    if scripts.contains_key("typecheck") && !primary.contains("typecheck") {
-                        secondaries.push(format!("{} run typecheck", pkg_runner));
-                    }
-                    if scripts.contains_key("check") {
-                        secondaries.push(format!("{} run check", pkg_runner));
-                    }
-                    if scripts.contains_key("build") && !primary.contains("build") {
-                        secondaries.push(format!("{} run build", pkg_runner));
-                    }
-                    if scripts.contains_key("lint") {
-                        secondaries.push(format!("{} run lint", pkg_runner));
-                    }
+            if !has_test_script || test_is_dummy {
+                // If test script is absent or dummy, prioritize check / build scripts
+                if scripts.contains_key("check") && scripts.contains_key("build") {
+                    primary = format!("{} run check && {} run build", pkg_runner, pkg_runner);
+                } else if scripts.contains_key("check") {
+                    primary = format!("{} run check", pkg_runner);
+                } else if scripts.contains_key("typecheck") {
+                    primary = format!("{} run typecheck", pkg_runner);
+                } else if root.join("tsconfig.json").exists() && scripts.contains_key("build") {
+                    primary = format!("npx tsc --noEmit && {} run build", pkg_runner);
+                } else if root.join("tsconfig.json").exists() {
+                    primary = "npx tsc --noEmit".to_string();
+                } else if scripts.contains_key("build") {
+                    primary = format!("{} run build", pkg_runner);
                 }
+            }
 
-        if root.join("tsconfig.json").exists() && !primary.contains("tsc") && !secondaries.iter().any(|s| s.contains("tsc")) {
+            if scripts.contains_key("typecheck") && !primary.contains("typecheck") {
+                secondaries.push(format!("{} run typecheck", pkg_runner));
+            }
+            if scripts.contains_key("check") {
+                secondaries.push(format!("{} run check", pkg_runner));
+            }
+            if scripts.contains_key("build") && !primary.contains("build") {
+                secondaries.push(format!("{} run build", pkg_runner));
+            }
+            if scripts.contains_key("lint") {
+                secondaries.push(format!("{} run lint", pkg_runner));
+            }
+        }
+
+        if root.join("tsconfig.json").exists()
+            && !primary.contains("tsc")
+            && !secondaries.iter().any(|s| s.contains("tsc"))
+        {
             secondaries.push("npx tsc --noEmit".to_string());
         }
 

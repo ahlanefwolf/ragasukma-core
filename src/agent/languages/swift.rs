@@ -1,5 +1,5 @@
-use std::path::Path;
 use super::{LanguageDetector, ProjectLanguageInfo};
+use std::path::Path;
 
 pub struct SwiftDetector;
 

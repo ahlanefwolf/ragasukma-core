@@ -167,9 +167,7 @@ fn process_is_alive(pid: u32) -> bool {
         // process table directly. A successful handle (even without PROCESS_TERMINATE) means the
         // PID is still owned; `ERROR_INVALID_PARAMETER` means the PID is free.
         use windows::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER};
-        use windows::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
 
         // SAFETY: `OpenProcess` only inspects the process table; the returned handle is closed below.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
@@ -213,8 +211,26 @@ static TEST_DB_GUARD: std::sync::OnceLock<TempDbGuard> = std::sync::OnceLock::ne
 
 #[cfg_attr(test, allow(dead_code))]
 pub fn get_db_path() -> PathBuf {
-    // 1. In dev mode (Cargo.toml exists), always anchor to local assets/ragasukma.db
+    // 1. Explicit override always wins (useful for tests and power users).
+    if let Ok(custom) = std::env::var("RAGASUKMA_DB")
+        && !custom.trim().is_empty()
+    {
+        return PathBuf::from(custom);
+    }
+
+    // 2. In dev mode (Cargo.toml exists) prefer the *nearest* existing assets/ragasukma.db,
+    //    walking up from the current directory. This lets `cargo run` from a workspace root
+    //    pick up the real DB in a member crate's assets/ instead of silently creating an
+    //    empty one next to the root.
     if PathBuf::from("Cargo.toml").exists() {
+        if let Ok(cwd) = std::env::current_dir() {
+            for dir in cwd.ancestors() {
+                let candidate = dir.join("assets").join("ragasukma.db");
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+        }
         let local_assets = PathBuf::from("assets");
         let _ = std::fs::create_dir_all(&local_assets);
         return local_assets.join("ragasukma.db");
@@ -580,13 +596,10 @@ pub async fn get_usage_records_paginated_from_pool(
         .map(|c| c.max(0) as usize)
         .unwrap_or(0);
 
-    let total_pages = if total == 0 {
-        1
-    } else {
-        total.div_ceil(limit)
-    };
+    let total_pages = if total == 0 { 1 } else { total.div_ceil(limit) };
 
-    let items = get_usage_records_from_pool(pool, provider_filter, date_filter, limit, offset).await;
+    let items =
+        get_usage_records_from_pool(pool, provider_filter, date_filter, limit, offset).await;
 
     LlmUsagePaginatedResponse {
         items,
@@ -640,7 +653,9 @@ pub async fn clear_usage() -> anyhow::Result<()> {
 }
 
 pub async fn clear_usage_from_pool(pool: &SqlitePool) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM usage_records").execute(pool).await?;
+    sqlx::query("DELETE FROM usage_records")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -665,10 +680,7 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
         let rec1 = record_usage_to_pool(
             &pool,
@@ -684,18 +696,10 @@ mod tests {
         .unwrap();
         assert_eq!(rec1.total_tokens, 1150);
 
-        let rec2 = record_usage_to_pool(
-            &pool,
-            "codex",
-            "gpt-5-codex",
-            2000,
-            0,
-            300,
-            800,
-            "success",
-        )
-        .await
-        .unwrap();
+        let rec2 =
+            record_usage_to_pool(&pool, "codex", "gpt-5-codex", 2000, 0, 300, 800, "success")
+                .await
+                .unwrap();
         assert_eq!(rec2.total_tokens, 2300);
 
         let summary = get_usage_summary_from_pool(&pool, None, None).await;
@@ -750,6 +754,10 @@ mod tests {
         reap_stale_test_dbs();
         let survived = path.exists();
         let _ = std::fs::remove_file(&path);
-        assert!(survived, "reaper removed a live test database: {}", path.display());
+        assert!(
+            survived,
+            "reaper removed a live test database: {}",
+            path.display()
+        );
     }
 }

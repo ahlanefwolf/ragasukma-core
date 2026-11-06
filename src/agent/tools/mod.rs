@@ -4,7 +4,7 @@ pub mod fs;
 pub mod search;
 pub mod tags;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::fs as std_fs;
 use std::path::Path;
@@ -12,10 +12,11 @@ use std::path::Path;
 pub use dialogs::{open_path_in_file_manager, pick_folder_dialog};
 pub use editor::apply_resilient_edit;
 pub use fs::{
-    create_workspace_command, ensure_git_and_gitignore, ensure_git_and_gitignore_opt, generate_file_outline,
-    generate_smart_gitignore, resolve_allowed_path, to_workspace_folder_path,
+    create_workspace_command, ensure_git_and_gitignore, ensure_git_and_gitignore_opt,
+    generate_file_outline, generate_smart_gitignore, resolve_allowed_path,
+    to_workspace_folder_path,
 };
-pub use search::{list_workspace_files, run_workspace_grep, WorkspaceFileInfo};
+pub use search::{WorkspaceFileInfo, list_workspace_files, run_workspace_grep};
 pub use tags::expand_file_tags;
 
 /// Smartly truncates output keeping both the head and tail, omitting the middle.
@@ -46,7 +47,9 @@ pub fn is_read_only_tool(name: &str) -> bool {
 /// Returns dynamic tool definitions combining built-in workspace tools with project MCP tools.
 /// Specialized tools (workspace inspection/editing and active MCP tools) are prioritized FIRST,
 /// while `workspace_run_command` (terminal fallback) is placed LAST.
-pub fn get_dynamic_agent_tools_schema(mcp_tools: &[crate::agent::mcp::ActiveMcpTool]) -> Vec<serde_json::Value> {
+pub fn get_dynamic_agent_tools_schema(
+    mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
+) -> Vec<serde_json::Value> {
     let mut schema = Vec::new();
 
     // 1. Core workspace structural tools
@@ -196,7 +199,10 @@ pub fn get_dynamic_agent_tools_schema(mcp_tools: &[crate::agent::mcp::ActiveMcpT
         let desc = format!(
             "[Dedicated Tool from {}] {}",
             tool.server_name,
-            tool.definition.description.as_deref().unwrap_or("Active MCP tool")
+            tool.definition
+                .description
+                .as_deref()
+                .unwrap_or("Active MCP tool")
         );
         schema.push(json!({
             "type": "function",
@@ -245,7 +251,11 @@ pub fn get_dynamic_agent_tools_schema(mcp_tools: &[crate::agent::mcp::ActiveMcpT
 /// Execute a tool call safely
 /// Normalizes terminal commands by stripping redundant root folder prefixes in `cd` calls.
 /// e.g. when `work_dir` is `/home/user/scenario`, `cd scenario/backend` is automatically normalized to `cd backend`.
-pub fn normalize_workspace_command(command: &str, work_dir: &Path, allowed_roots: &[String]) -> String {
+pub fn normalize_workspace_command(
+    command: &str,
+    work_dir: &Path,
+    allowed_roots: &[String],
+) -> String {
     let mut normalized = command.to_string();
 
     let mut root_folder_names = Vec::new();
@@ -255,9 +265,10 @@ pub fn normalize_workspace_command(command: &str, work_dir: &Path, allowed_roots
     for root in allowed_roots {
         let p = Path::new(root);
         if let Some(name) = p.file_name().and_then(|n| n.to_str())
-            && !root_folder_names.contains(&name.to_string()) {
-                root_folder_names.push(name.to_string());
-            }
+            && !root_folder_names.contains(&name.to_string())
+        {
+            root_folder_names.push(name.to_string());
+        }
     }
 
     for folder_name in root_folder_names {
@@ -270,8 +281,10 @@ pub fn normalize_workspace_command(command: &str, work_dir: &Path, allowed_roots
             let pat3 = format!("cd {}", folder_name);
             let pat4 = format!("cd ./{}", folder_name);
             for delim in &[" ", ";", "&&", ")", "\n"] {
-                normalized = normalized.replace(&format!("{}{}", pat4, delim), &format!("cd .{}", delim));
-                normalized = normalized.replace(&format!("{}{}", pat3, delim), &format!("cd .{}", delim));
+                normalized =
+                    normalized.replace(&format!("{}{}", pat4, delim), &format!("cd .{}", delim));
+                normalized =
+                    normalized.replace(&format!("{}{}", pat3, delim), &format!("cd .{}", delim));
             }
             if normalized.trim() == pat3 || normalized.trim() == pat4 {
                 normalized = "cd .".to_string();
@@ -303,7 +316,10 @@ pub fn validate_safe_command(command: &str) -> Result<()> {
     ];
     for pat in &dangerous_rm {
         if trimmed.contains(pat) {
-            bail!("Operation blocked: Destructive command pattern '{}' is not permitted.", pat);
+            bail!(
+                "Operation blocked: Destructive command pattern '{}' is not permitted.",
+                pat
+            );
         }
     }
 
@@ -320,7 +336,10 @@ pub fn validate_safe_command(command: &str) -> Result<()> {
     ];
     for pat in &block_dev_patterns {
         if trimmed.contains(pat) {
-            bail!("Operation blocked: Potential raw disk write or format pattern '{}' is not permitted.", pat);
+            bail!(
+                "Operation blocked: Potential raw disk write or format pattern '{}' is not permitted.",
+                pat
+            );
         }
     }
 
@@ -338,17 +357,16 @@ pub fn validate_safe_command(command: &str) -> Result<()> {
         for token in trimmed.split([';', '&', '|', '\n']) {
             let token_trim = token.trim();
             if token_trim == *pat || token_trim.starts_with(&format!("{} ", pat)) {
-                bail!("Operation blocked: System power control command '{}' is not permitted.", pat);
+                bail!(
+                    "Operation blocked: System power control command '{}' is not permitted.",
+                    pat
+                );
             }
         }
     }
 
     // Block direct edits/tampering with node_modules or .git via shell commands
-    let node_modules_write_patterns = [
-        "node_modules/",
-        "node_modules ",
-        ".git/",
-    ];
+    let node_modules_write_patterns = ["node_modules/", "node_modules ", ".git/"];
     let is_write_like = trimmed.contains("> ")
         || trimmed.contains(">>")
         || trimmed.contains("rm ")
@@ -359,7 +377,10 @@ pub fn validate_safe_command(command: &str) -> Result<()> {
     if is_write_like {
         for pat in &node_modules_write_patterns {
             if trimmed.contains(pat) {
-                bail!("Operation blocked: Direct modification or tampering of internal '{}' via terminal commands is not permitted. Apply fixes directly to project application source code instead.", pat);
+                bail!(
+                    "Operation blocked: Direct modification or tampering of internal '{}' via terminal commands is not permitted. Apply fixes directly to project application source code instead.",
+                    pat
+                );
             }
         }
     }
@@ -374,10 +395,7 @@ pub async fn execute_tool_call(
 ) -> Result<String> {
     match name {
         "workspace_list_dir" => {
-            let path_str = args
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             let resolved = resolve_allowed_path(path_str, allowed_roots)?;
 
             if !resolved.exists() {
@@ -449,7 +467,12 @@ pub async fn execute_tool_call(
                         })
                         .unwrap_or(0);
 
-                    entries.push(format!("{}/ ({} item{})", rel_display, child_count, if child_count == 1 { "" } else { "s" }));
+                    entries.push(format!(
+                        "{}/ ({} item{})",
+                        rel_display,
+                        child_count,
+                        if child_count == 1 { "" } else { "s" }
+                    ));
                 } else {
                     total_files += 1;
                     entries.push(rel_display);
@@ -462,7 +485,8 @@ pub async fn execute_tool_call(
                 "total_files": total_files,
                 "total_dirs": total_dirs,
                 "entries": entries
-            }).to_string())
+            })
+            .to_string())
         }
 
         "workspace_read_file" => {
@@ -493,8 +517,13 @@ pub async fn execute_tool_call(
             let start = parse_line("start_line");
             let end = parse_line("end_line");
             let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("");
-            let is_explicit_outline = mode == "outline" || args.get("outline").and_then(|v| v.as_bool()).unwrap_or(false);
-            let is_explicit_full = mode == "full" || args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_explicit_outline = mode == "outline"
+                || args
+                    .get("outline")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            let is_explicit_full =
+                mode == "full" || args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
 
             if start.is_some() || end.is_some() {
                 let lines: Vec<&str> = content.lines().collect();
@@ -542,26 +571,34 @@ pub async fn execute_tool_call(
                 "status": "success",
                 "bytes_written": content.len(),
                 "file_path": file_path,
-            }).to_string())
+            })
+            .to_string())
         }
         "workspace_rollback" => {
             let file_path = args.get("file_path").and_then(|v| v.as_str());
             if let Some(fp) = file_path {
                 let resolved = resolve_allowed_path(fp, allowed_roots)?;
-                let restored = crate::agent::snapshot::WorkspaceSnapshot::global().rollback_file(&resolved)?;
+                let restored =
+                    crate::agent::snapshot::WorkspaceSnapshot::global().rollback_file(&resolved)?;
                 Ok(json!({
                     "status": "success",
                     "restored": restored,
                     "file_path": fp
-                }).to_string())
+                })
+                .to_string())
             } else {
-                let restored = crate::agent::snapshot::WorkspaceSnapshot::global().rollback_all()?;
-                let paths: Vec<String> = restored.into_iter().map(|p| p.to_string_lossy().to_string()).collect();
+                let restored =
+                    crate::agent::snapshot::WorkspaceSnapshot::global().rollback_all()?;
+                let paths: Vec<String> = restored
+                    .into_iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect();
                 Ok(json!({
                     "status": "success",
                     "restored_count": paths.len(),
                     "restored_files": paths
-                }).to_string())
+                })
+                .to_string())
             }
         }
         "workspace_edit_file" => {
@@ -634,7 +671,10 @@ pub async fn execute_tool_call(
 
             // Format into token-efficient tabular grep format for LLM context
             let matches = grep_result.get("results").and_then(|r| r.as_array());
-            let truncated = grep_result.get("truncated").and_then(|t| t.as_bool()).unwrap_or(false);
+            let truncated = grep_result
+                .get("truncated")
+                .and_then(|t| t.as_bool())
+                .unwrap_or(false);
             if let Some(list) = matches {
                 if list.is_empty() {
                     Ok(format!("No matches found for query '{}'", query))
@@ -643,7 +683,11 @@ pub async fn execute_tool_call(
                         "Found {} match(es) for query '{}'{}:\n",
                         list.len(),
                         query,
-                        if truncated { " (truncated at limit)" } else { "" }
+                        if truncated {
+                            " (truncated at limit)"
+                        } else {
+                            ""
+                        }
                     );
                     for item in list {
                         let file = item.get("file").and_then(|f| f.as_str()).unwrap_or("");
@@ -663,17 +707,15 @@ pub async fn execute_tool_call(
                 .get("command")
                 .and_then(|v| v.as_str())
                 .context("Parameter 'command' is required")?;
-            let sub_path = args
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let sub_path = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
             let work_dir = resolve_allowed_path(sub_path, allowed_roots)?;
 
             if !work_dir.exists() || !work_dir.is_dir() {
                 bail!("Working directory '{}' not found", sub_path);
             }
 
-            let effective_command = normalize_workspace_command(command_str, &work_dir, allowed_roots);
+            let effective_command =
+                normalize_workspace_command(command_str, &work_dir, allowed_roots);
             validate_safe_command(&effective_command)?;
 
             let std_proc = create_workspace_command(&effective_command);
@@ -702,7 +744,10 @@ pub async fn execute_tool_call(
                 Err(_) => {
                     let mut res_map = serde_json::Map::new();
                     res_map.insert("command".to_string(), serde_json::json!(command_str));
-                    res_map.insert("cwd".to_string(), serde_json::json!(work_dir.display().to_string()));
+                    res_map.insert(
+                        "cwd".to_string(),
+                        serde_json::json!(work_dir.display().to_string()),
+                    );
                     res_map.insert("exit_code".to_string(), serde_json::json!(-1));
                     res_map.insert("success".to_string(), serde_json::json!(false));
                     res_map.insert("status".to_string(), serde_json::json!("TIMEOUT"));
@@ -728,7 +773,10 @@ pub async fn execute_tool_call(
 
             let mut res_map = serde_json::Map::new();
             res_map.insert("command".to_string(), serde_json::json!(command_str));
-            res_map.insert("cwd".to_string(), serde_json::json!(work_dir.display().to_string()));
+            res_map.insert(
+                "cwd".to_string(),
+                serde_json::json!(work_dir.display().to_string()),
+            );
             res_map.insert("exit_code".to_string(), serde_json::json!(exit_code));
             res_map.insert("success".to_string(), serde_json::json!(success));
 
@@ -744,11 +792,16 @@ pub async fn execute_tool_call(
                     combined_output.push_str(&stderr);
                 }
 
-                let diags = crate::agent::diagnostics::extract_command_diagnostics(&combined_output);
+                let diags =
+                    crate::agent::diagnostics::extract_command_diagnostics(&combined_output);
                 let banner = if !diags.is_empty() {
                     format!(
                         "❌ COMMAND FAILED with exit code {exit_code}.\nIdentified Errors:\n{}\n\nReview the stdout/stderr below, edit the offending files, and re-run verification.",
-                        diags.iter().map(|d| format!("  - {}", d)).collect::<Vec<_>>().join("\n")
+                        diags
+                            .iter()
+                            .map(|d| format!("  - {}", d))
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     )
                 } else {
                     format!(
@@ -781,7 +834,13 @@ mod tests {
 
     #[test]
     fn test_generate_smart_gitignore_node() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_test_node_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_test_node_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let _ = fs::write(temp_dir.join("package.json"), "{}");
 
@@ -796,7 +855,13 @@ mod tests {
 
     #[test]
     fn test_generate_smart_gitignore_rust() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_test_rust_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_test_rust_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let _ = fs::write(temp_dir.join("Cargo.toml"), "[package]\nname = \"foo\"");
 
@@ -809,7 +874,13 @@ mod tests {
 
     #[test]
     fn test_generate_smart_gitignore_python() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_test_py_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_test_py_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let _ = fs::write(temp_dir.join("requirements.txt"), "flask==2.0.0");
 
@@ -822,7 +893,13 @@ mod tests {
 
     #[test]
     fn test_ensure_git_and_gitignore_initializes() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_test_init_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_test_init_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let _ = fs::write(temp_dir.join("package.json"), "{}");
 
@@ -839,7 +916,13 @@ mod tests {
 
     #[test]
     fn test_run_workspace_grep_line_truncation() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_test_grep_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_test_grep_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let long_line = format!("const TARGET_STRING = '{}';", "A".repeat(1200));
         let test_file = temp_dir.join("sample.js");
@@ -868,14 +951,26 @@ mod tests {
 
     #[test]
     fn test_normalize_workspace_command() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_cmd_norm_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_cmd_norm_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = fs::create_dir_all(&temp_dir);
         let roots = vec![temp_dir.to_string_lossy().to_string()];
         let folder_name = temp_dir.file_name().unwrap().to_str().unwrap();
 
-        let cmd = format!("(cd {}/backend && cargo test) && (cd {}/frontend && npm test)", folder_name, folder_name);
+        let cmd = format!(
+            "(cd {}/backend && cargo test) && (cd {}/frontend && npm test)",
+            folder_name, folder_name
+        );
         let normalized = normalize_workspace_command(&cmd, &temp_dir, &roots);
-        assert_eq!(normalized, "(cd backend && cargo test) && (cd frontend && npm test)");
+        assert_eq!(
+            normalized,
+            "(cd backend && cargo test) && (cd frontend && npm test)"
+        );
 
         let single_cmd = format!("cd {} && cargo test", folder_name);
         let normalized_single = normalize_workspace_command(&single_cmd, &temp_dir, &roots);
@@ -934,10 +1029,19 @@ mod tests {
     #[test]
     fn test_apply_resilient_edit_diagnostic_hint() {
         let content = "line 1\nline 2\nconst specialFeature = true;\nline 4\nline 5";
-        let err = apply_resilient_edit(content, "function completelyDifferentNonExistentFeature() {\n  return 999;\n}", "new", "test.ts").unwrap_err();
+        let err = apply_resilient_edit(
+            content,
+            "function completelyDifferentNonExistentFeature() {\n  return 999;\n}",
+            "new",
+            "test.ts",
+        )
+        .unwrap_err();
         let err_msg = err.to_string();
         assert!(err_msg.contains("'old_text' not found"));
-        assert!(err_msg.contains("Use `workspace_read_file`") || err_msg.contains("Closest actual content in 'test.ts'"));
+        assert!(
+            err_msg.contains("Use `workspace_read_file`")
+                || err_msg.contains("Closest actual content in 'test.ts'")
+        );
     }
 
     #[test]
@@ -972,7 +1076,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_read_file_slice_and_outline() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_read_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_read_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std_fs::create_dir_all(&temp_dir);
 
         let mut lines = Vec::new();
@@ -996,7 +1106,9 @@ mod tests {
             "workspace_read_file",
             &serde_json::json!({ "file_path": "large_file.src" }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert!(out_default.contains("# File outline for"));
         assert!(out_default.contains("initialize_core"));
         assert!(out_default.contains("terminate_core"));
@@ -1010,7 +1122,9 @@ mod tests {
                 "end_line": 12
             }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert!(out_slice.contains("pub fn initialize_core"));
         assert_eq!(out_slice.lines().count(), 4);
 
@@ -1022,7 +1136,9 @@ mod tests {
                 "mode": "full"
             }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         assert_eq!(out_full.lines().count(), 300);
 
         let _ = std_fs::remove_dir_all(&temp_dir);
@@ -1030,7 +1146,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_list_dir_shallow_with_counts() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_listdir_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_listdir_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let sub_dir = temp_dir.join("subfolder");
         let _ = std_fs::create_dir_all(&sub_dir);
 
@@ -1044,7 +1166,9 @@ mod tests {
             "workspace_list_dir",
             &serde_json::json!({ "path": "." }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&res_raw).unwrap();
         let entries = parsed.get("entries").and_then(|e| e.as_array()).unwrap();
@@ -1052,7 +1176,8 @@ mod tests {
         assert_eq!(parsed["total_files"], 1);
 
         let has_child_count = entries.iter().any(|e| {
-            e.as_str().map_or(false, |s| s.contains("subfolder/ (2 items)"))
+            e.as_str()
+                .map_or(false, |s| s.contains("subfolder/ (2 items)"))
         });
         assert!(has_child_count);
 
@@ -1061,7 +1186,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_write_file_compact_metadata() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_write_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_write_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std_fs::create_dir_all(&temp_dir);
 
         let roots = vec![temp_dir.to_string_lossy().to_string()];
@@ -1072,7 +1203,9 @@ mod tests {
                 "content": "Line A\nLine B\nLine C"
             }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&out_json_str).unwrap();
         assert_eq!(parsed["status"], "success");
@@ -1085,18 +1218,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_grep_compact_tabular_format() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_grep_tab_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_grep_tab_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std_fs::create_dir_all(&temp_dir);
 
         let test_file = temp_dir.join("logic.rs");
-        let _ = std_fs::write(&test_file, "pub fn calculate_price() {\n    let discount = 10;\n}\n");
+        let _ = std_fs::write(
+            &test_file,
+            "pub fn calculate_price() {\n    let discount = 10;\n}\n",
+        );
 
         let roots = vec![temp_dir.to_string_lossy().to_string()];
         let grep_out = execute_tool_call(
             "workspace_grep",
             &serde_json::json!({ "query": "calculate_price" }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert!(grep_out.contains("Found 1 match(es) for query 'calculate_price'"));
         assert!(grep_out.contains("logic.rs:1: pub fn calculate_price() {"));
@@ -1106,7 +1250,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_workspace_grep_with_folder_arg_and_edit_file_schema() {
-        let temp_dir = std::env::temp_dir().join(format!("ragasukma_grep_folder_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ragasukma_grep_folder_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let sub_folder = temp_dir.join("backend");
         let _ = std_fs::create_dir_all(&sub_folder);
 
@@ -1120,7 +1270,10 @@ mod tests {
         let has_edit = dynamic_schema.iter().any(|s| {
             s.pointer("/function/name").and_then(|n| n.as_str()) == Some("workspace_edit_file")
         });
-        assert!(has_edit, "workspace_edit_file must be exposed in dynamic agent tools schema");
+        assert!(
+            has_edit,
+            "workspace_edit_file must be exposed in dynamic agent tools schema"
+        );
 
         // Every write/edit backs up the file first, so the revert tool must actually be
         // callable. A backup nobody can roll back is dead weight, which is exactly what
@@ -1128,7 +1281,10 @@ mod tests {
         let has_rollback = dynamic_schema.iter().any(|s| {
             s.pointer("/function/name").and_then(|n| n.as_str()) == Some("workspace_rollback")
         });
-        assert!(has_rollback, "workspace_rollback must be exposed so backups can be undone");
+        assert!(
+            has_rollback,
+            "workspace_rollback must be exposed so backups can be undone"
+        );
 
         // 2. Validate workspace_grep with 'folder' parameter resolves subfolder cleanly
         let grep_out = execute_tool_call(
@@ -1138,7 +1294,9 @@ mod tests {
                 "query": "start_doku_payment"
             }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert!(grep_out.contains("start_doku_payment"));
         assert!(grep_out.contains("server.rs"));
@@ -1152,7 +1310,9 @@ mod tests {
                 "new_text": "start_jokul_doku_payment"
             }),
             &roots,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
         assert!(edit_out.contains("\"status\":\"ok\""));
         let updated_code = std_fs::read_to_string(&test_file).unwrap();

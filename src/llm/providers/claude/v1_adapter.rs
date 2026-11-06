@@ -1,6 +1,6 @@
 use super::constants::*;
 use crate::llm::types::ChatMessage;
-use crate::llm::v1_engine::{extract_text_content, generate_v1_uuid, V1ChatRequest, V1StreamEvent};
+use crate::llm::v1_engine::{V1ChatRequest, V1StreamEvent, extract_text_content, generate_v1_uuid};
 use serde_json::json;
 
 pub fn build_claude_payload_from_messages(
@@ -70,7 +70,10 @@ pub fn is_claude_thinking_model(model: &str) -> bool {
         || trimmed.contains("claude-3.8")
         || trimmed.contains("claude-3-9")
         || trimmed.contains("claude-3.9")
-        || (trimmed.contains("claude-") && !trimmed.contains("claude-3") && !trimmed.contains("claude-2") && !trimmed.contains("claude-1"))
+        || (trimmed.contains("claude-")
+            && !trimmed.contains("claude-3")
+            && !trimmed.contains("claude-2")
+            && !trimmed.contains("claude-1"))
 }
 
 /// Resolve thinking budget tokens based on model name tags or defaults
@@ -156,23 +159,24 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
         }
 
         if msg.role == "assistant"
-            && let Some(tool_calls) = &msg.tool_calls {
-                for tc in tool_calls {
-                    let name = tc.function.name.trim();
-                    if name.is_empty() {
-                        continue;
-                    }
-                    let args_json: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or_else(|_| json!({}));
-
-                    content_blocks.push(json!({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": name,
-                        "input": args_json
-                    }));
+            && let Some(tool_calls) = &msg.tool_calls
+        {
+            for tc in tool_calls {
+                let name = tc.function.name.trim();
+                if name.is_empty() {
+                    continue;
                 }
+                let args_json: serde_json::Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+
+                content_blocks.push(json!({
+                    "type": "tool_use",
+                    "id": tc.id,
+                    "name": name,
+                    "input": args_json
+                }));
             }
+        }
 
         if content_blocks.is_empty() {
             continue;
@@ -213,10 +217,20 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
         let mut claude_tools = Vec::new();
         for tool in tools {
             if let Some(func) = tool.get("function") {
-                let name = func.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+                let name = func
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
                 if !name.is_empty() {
-                    let desc = func.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let params = func.get("parameters").cloned().unwrap_or_else(|| json!({"type": "object", "properties": {}}));
+                    let desc = func
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let params = func
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
                     claude_tools.push(json!({
                         "name": name,
                         "description": desc,
@@ -224,9 +238,10 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                     }));
                 }
             } else if let Some(name) = tool.get("name").and_then(|v| v.as_str())
-                && !name.trim().is_empty() {
-                    claude_tools.push(tool.clone());
-                }
+                && !name.trim().is_empty()
+            {
+                claude_tools.push(tool.clone());
+            }
         }
         if !claude_tools.is_empty() {
             payload["tools"] = json!(claude_tools);
@@ -287,8 +302,14 @@ impl ClaudeSseParserState {
                 if let Some(block) = parsed.get("content_block") {
                     let b_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if b_type == "tool_use" {
-                        let id = block.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                        let name = block.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let id = block
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let name = block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         let tool_idx = self.current_tool_index;
                         self.current_tool_index += 1;
                         self.block_index_to_tool_index.insert(block_idx, tool_idx);
@@ -311,28 +332,38 @@ impl ClaudeSseParserState {
                     let d_type = delta.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if d_type == "text_delta" {
                         if let Some(text) = delta.get("text").and_then(|v| v.as_str())
-                            && !text.is_empty() {
-                                events.push(V1StreamEvent::ContentDelta(text.to_string()));
-                            }
+                            && !text.is_empty()
+                        {
+                            events.push(V1StreamEvent::ContentDelta(text.to_string()));
+                        }
                     } else if d_type == "thinking_delta" {
                         if let Some(th) = delta.get("thinking").and_then(|v| v.as_str())
-                            && !th.is_empty() {
-                                events.push(V1StreamEvent::ThoughtDelta(th.to_string()));
-                            }
-                    } else if d_type == "input_json_delta"
-                        && let Some(pj) = delta.get("partial_json").and_then(|v| v.as_str()) {
-                            let tool_idx = self.block_index_to_tool_index.get(&block_idx).copied().unwrap_or(0);
-                            events.push(V1StreamEvent::ToolCallDelta {
-                                index: tool_idx,
-                                id: self.current_call_id.clone(),
-                                name: self.current_call_name.clone(),
-                                arguments: pj.to_string(),
-                            });
+                            && !th.is_empty()
+                        {
+                            events.push(V1StreamEvent::ThoughtDelta(th.to_string()));
                         }
+                    } else if d_type == "input_json_delta"
+                        && let Some(pj) = delta.get("partial_json").and_then(|v| v.as_str())
+                    {
+                        let tool_idx = self
+                            .block_index_to_tool_index
+                            .get(&block_idx)
+                            .copied()
+                            .unwrap_or(0);
+                        events.push(V1StreamEvent::ToolCallDelta {
+                            index: tool_idx,
+                            id: self.current_call_id.clone(),
+                            name: self.current_call_name.clone(),
+                            arguments: pj.to_string(),
+                        });
+                    }
                 }
             }
             "message_delta" => {
-                if let Some(stop_reason) = parsed.pointer("/delta/stop_reason").and_then(|v| v.as_str()) {
+                if let Some(stop_reason) = parsed
+                    .pointer("/delta/stop_reason")
+                    .and_then(|v| v.as_str())
+                {
                     let finish = match stop_reason {
                         "tool_use" => "tool_calls",
                         "max_tokens" => "length",

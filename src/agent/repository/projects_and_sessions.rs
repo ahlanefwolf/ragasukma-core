@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::agent::models::{McpServer, Project, Session};
 use super::{generate_id, now_secs};
+use crate::agent::models::{McpServer, Project, Session};
+use anyhow::Result;
 
 // ============================================================================
 // PROJECTS REPOSITORY
@@ -230,19 +230,23 @@ pub async fn delete_session(id: &str) -> Result<()> {
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM goal_evidence WHERE goal_id IN (SELECT id FROM goals WHERE session_id = ?1)")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM goal_evidence WHERE goal_id IN (SELECT id FROM goals WHERE session_id = ?1)",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     // 2. Clean up goals belonging to this session
     sqlx::query("DELETE FROM goals WHERE session_id = ?1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
     // 3. Purge orphaned evidence_cache entries no longer attached to any active goal
-    sqlx::query("DELETE FROM evidence_cache WHERE id NOT IN (SELECT evidence_id FROM goal_evidence)")
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "DELETE FROM evidence_cache WHERE id NOT IN (SELECT evidence_id FROM goal_evidence)",
+    )
+    .execute(&mut *tx)
+    .await?;
     // 4. Delete the session itself (messages cascade via foreign key)
     sqlx::query("DELETE FROM sessions WHERE id = ?1")
         .bind(id)
@@ -382,13 +386,12 @@ pub async fn get_project_active_mcp_servers(project_id: &str) -> Result<Vec<McpS
     let pool = super::pool().await;
 
     // Check if this project has any explicit rows configured in project_mcp_servers
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM project_mcp_servers WHERE project_id = ?1",
-    )
-    .bind(project_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM project_mcp_servers WHERE project_id = ?1")
+            .bind(project_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
 
     if count == 0 {
         // Default: Return all globally enabled MCP servers
@@ -435,7 +438,11 @@ pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[Stri
         .await?;
 
     for s in all_servers {
-        let is_active = if active_server_ids.contains(&s.id) { 1 } else { 0 };
+        let is_active = if active_server_ids.contains(&s.id) {
+            1
+        } else {
+            0
+        };
         let _ = sqlx::query(
             "INSERT INTO project_mcp_servers (project_id, server_id, is_enabled) \
              VALUES (?1, ?2, ?3)",

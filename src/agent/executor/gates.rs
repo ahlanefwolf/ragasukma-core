@@ -50,7 +50,8 @@ fn turn_reached_a_conclusion(state: &TurnState, final_content: &str) -> bool {
     }
 
     // Sentence terminators are language-agnostic punctuation; count them.
-    let terminators = trimmed.matches('.')
+    let terminators = trimmed
+        .matches('.')
         .chain(trimmed.matches('!'))
         .chain(trimmed.matches('?'))
         .chain(trimmed.matches('\u{2026}'))
@@ -110,7 +111,8 @@ pub fn evaluate_turn_gates(
     // Only require code edits if there was a local code/compiler failure or tool execution error.
     // If the failure was purely an external environment, network, port, or missing binary issue
     // and no workspace code files are broken, allow the agent to explain the environment problem.
-    let is_pure_env_failure = state.last_command_is_environment_error && state.pending_error_files.is_empty();
+    let is_pure_env_failure =
+        state.last_command_is_environment_error && state.pending_error_files.is_empty();
     let must_apply_changes = (state.last_command_had_error || state.last_tool_had_error)
         && !is_pure_env_failure
         && !state.circuit_breaker_triggered
@@ -118,7 +120,11 @@ pub fn evaluate_turn_gates(
 
     let has_substantive_response = final_content.trim().len() >= 40;
 
-    if must_apply_changes && state.modified_files.is_empty() && !has_substantive_response && state.iteration < state.max_safety_iterations - 2 {
+    if must_apply_changes
+        && state.modified_files.is_empty()
+        && !has_substantive_response
+        && state.iteration < state.max_safety_iterations - 2
+    {
         state.ephemeral_directive = Some(
             "Unresolved code error: A command or tool reported errors and no files were modified. If a fix is needed, apply it using `workspace_edit_file` or `workspace_write_file`. If explaining the issue, provide your complete analysis to the user.".to_string()
         );
@@ -126,11 +132,16 @@ pub fn evaluate_turn_gates(
     }
 
     // 3. Hard Verification Enforcement Gate:
-    let has_failing_checks = (!state.circuit_breaker_triggered && !state.force_final_text_only) && (
-        (!state.has_passed_verification && state.verification_attempts > 0 && !is_pure_env_failure)
-            || (!is_pure_env_failure && (state.last_command_had_error || state.last_tool_had_error))
-    );
-    if has_failing_checks && !has_substantive_response && state.iteration < state.max_safety_iterations - 2 {
+    let has_failing_checks = (!state.circuit_breaker_triggered && !state.force_final_text_only)
+        && ((!state.has_passed_verification
+            && state.verification_attempts > 0
+            && !is_pure_env_failure)
+            || (!is_pure_env_failure
+                && (state.last_command_had_error || state.last_tool_had_error)));
+    if has_failing_checks
+        && !has_substantive_response
+        && state.iteration < state.max_safety_iterations - 2
+    {
         state.ephemeral_directive = Some(
             "Failing checks or unresolved errors remain. Inspect the error messages and fix the code using `workspace_edit_file` or `workspace_write_file`, or explain the findings to the user.".to_string()
         );
@@ -143,17 +154,26 @@ pub fn evaluate_turn_gates(
     // b) Automated verification commands are actually available in the project,
     // c) The modified files are not exclusively non-executable assets (e.g. docs, configs, markup).
     let has_detected_verifiers = detected_verifier.is_some() || {
-        let relevant = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
+        let relevant = crate::agent::languages::detect_verifiers_for_modified_files(
+            allowed_folders,
+            &state.modified_files,
+        );
         !relevant.is_empty()
     };
 
     let is_task_or_checklist_file = |path: &str| -> bool {
         let lower = path.to_lowercase();
         (lower.ends_with(".md") || lower.ends_with(".txt"))
-            && (lower.contains("task") || lower.contains("todo") || lower.contains("checklist") || lower.contains("plan"))
+            && (lower.contains("task")
+                || lower.contains("todo")
+                || lower.contains("checklist")
+                || lower.contains("plan"))
     };
 
-    let has_task_or_checklist_mod = state.modified_files.iter().any(|f| is_task_or_checklist_file(f));
+    let has_task_or_checklist_mod = state
+        .modified_files
+        .iter()
+        .any(|f| is_task_or_checklist_file(f));
 
     let are_all_docs_or_configs = !state.modified_files.is_empty()
         && !has_task_or_checklist_mod
@@ -183,9 +203,15 @@ pub fn evaluate_turn_gates(
         && state.iteration < state.max_safety_iterations - 1
     {
         state.verification_prompted = true;
-        let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
+        let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(
+            allowed_folders,
+            &state.modified_files,
+        );
         let verifier_hint = if !relevant_verifiers.is_empty() {
-            format!("run verification (`{}`) and ", relevant_verifiers.join(" && "))
+            format!(
+                "run verification (`{}`) and ",
+                relevant_verifiers.join(" && ")
+            )
         } else if let Some(pv) = detected_verifier {
             format!("run verification (`{}`) and ", pv)
         } else {
@@ -209,7 +235,10 @@ pub fn evaluate_turn_gates(
         && state.iteration < state.max_safety_iterations - 1
     {
         state.verification_prompted = true;
-        let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
+        let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(
+            allowed_folders,
+            &state.modified_files,
+        );
         let verifier_hint = if !relevant_verifiers.is_empty() {
             relevant_verifiers.join(" && ")
         } else if let Some(pv) = detected_verifier {
@@ -258,7 +287,9 @@ pub fn compose_final_turn_content(
     // Only if final_content is empty, construct a fallback based on execution state
     let is_unresolved = (state.last_command_had_error && !state.last_command_is_environment_error)
         || state.last_tool_had_error
-        || (state.verification_attempts > 0 && !state.has_passed_verification && !state.last_command_is_environment_error);
+        || (state.verification_attempts > 0
+            && !state.has_passed_verification
+            && !state.last_command_is_environment_error);
 
     if is_unresolved {
         let error_details = if state.last_command_had_error {
@@ -280,7 +311,9 @@ pub fn compose_final_turn_content(
             (false, None) => trimmed_content.to_string(),
             (true, Some(summary)) => summary.clone(),
             (true, None) if !final_thought.trim().is_empty() => final_thought.trim().to_string(),
-            (true, None) => "I have completed the operations and workspace inspection as requested.".to_string(),
+            (true, None) => {
+                "I have completed the operations and workspace inspection as requested.".to_string()
+            }
         }
     }
 }
@@ -290,17 +323,31 @@ pub async fn handle_iteration_limit_fallback(
     state: &TurnState,
 ) -> Result<String> {
     // Check if there are recent assistant messages with substantive partial answers/findings
-    let recent_findings = repository::list_messages(session_id).await.ok().and_then(|msgs| {
-        msgs.into_iter()
-            .rev()
-            .find(|m| m.role == "assistant" && m.content.as_ref().map(|c| c.trim().len() >= 40).unwrap_or(false))
-            .and_then(|m| m.content)
-    });
+    let recent_findings = repository::list_messages(session_id)
+        .await
+        .ok()
+        .and_then(|msgs| {
+            msgs.into_iter()
+                .rev()
+                .find(|m| {
+                    m.role == "assistant"
+                        && m.content
+                            .as_ref()
+                            .map(|c| c.trim().len() >= 40)
+                            .unwrap_or(false)
+                })
+                .and_then(|m| m.content)
+        });
 
     let fallback_summary = if !state.modified_files.is_empty() {
         format!(
             "### ⚠️ Iteration Limit Reached — Partial Changes Applied\n\nThe following files were updated in this turn:\n{}\n\nSome sections or files may still need further modifications. Please review the current workspace changes or prompt me to continue with the remaining parts.",
-            state.modified_files.iter().map(|f| format!("- `{}`", f)).collect::<Vec<_>>().join("\n")
+            state
+                .modified_files
+                .iter()
+                .map(|f| format!("- `{}`", f))
+                .collect::<Vec<_>>()
+                .join("\n")
         )
     } else if let Some(ref findings) = recent_findings {
         format!(
@@ -310,7 +357,11 @@ pub async fn handle_iteration_limit_fallback(
     } else {
         format!(
             "### ⚠️ Iteration Limit Reached\n\nCompleted workspace inspection and operations without modifying files.\n- Commands executed: {}\n\nPlease provide specific instructions if there are components or lines you want to change.",
-            if state.executed_commands.is_empty() { "None".to_string() } else { state.executed_commands.join(", ") }
+            if state.executed_commands.is_empty() {
+                "None".to_string()
+            } else {
+                state.executed_commands.join(", ")
+            }
         )
     };
 
@@ -338,7 +389,9 @@ pub async fn handle_iteration_limit_fallback(
         crate::agent::orchestrator::GoalState::Failed
     };
     let orch = crate::agent::orchestrator::GoalOrchestrator::new(&state.goal_id, "default");
-    let _ = orch.conclude_with_status(final_fallback_status, &fallback_summary).await;
+    let _ = orch
+        .conclude_with_status(final_fallback_status, &fallback_summary)
+        .await;
 
     broadcast_session_event(
         session_id,
@@ -364,7 +417,7 @@ pub async fn handle_iteration_limit_fallback(
 
 #[cfg(test)]
 mod tests {
-    use super::{turn_reached_a_conclusion, GateResult};
+    use super::{GateResult, turn_reached_a_conclusion};
     use crate::agent::executor::state::TurnState;
 
     fn idle_state() -> TurnState {
@@ -404,7 +457,10 @@ mod tests {
         ] {
             let mut state = idle_state();
             let result = super::evaluate_turn_gates(&mut state, msg, &[], None);
-            assert!(matches!(result, GateResult::Continue), "should nudge: {msg}");
+            assert!(
+                matches!(result, GateResult::Continue),
+                "should nudge: {msg}"
+            );
         }
     }
 

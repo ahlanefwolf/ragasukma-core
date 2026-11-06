@@ -1,6 +1,6 @@
+use super::fs::{resolve_allowed_path, to_workspace_folder_path};
 use std::fs;
 use std::sync::OnceLock;
-use super::fs::{resolve_allowed_path, to_workspace_folder_path};
 
 /// Automatically parse `@file` or `@file:start-end` tags in user messages
 /// and append the referenced file snippet lines directly to the turn prompt.
@@ -11,9 +11,8 @@ pub fn expand_file_tags(text: &str, allowed_roots: &[String]) -> String {
 
     // Match @filepath or @filepath:start or @filepath:start-end (cached regex)
     static FILE_TAG_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    let re_opt = FILE_TAG_RE.get_or_init(|| {
-        regex::Regex::new(r#"@([a-zA-Z0-9_\-\./\\]+)(?::(\d+)(?:-(\d+))?)?"#).ok()
-    });
+    let re_opt = FILE_TAG_RE
+        .get_or_init(|| regex::Regex::new(r#"@([a-zA-Z0-9_\-\./\\]+)(?::(\d+)(?:-(\d+))?)?"#).ok());
 
     let re = match re_opt.as_ref() {
         Some(r) => r,
@@ -139,7 +138,10 @@ pub fn expand_file_tags(text: &str, allowed_roots: &[String]) -> String {
                 (Some(s), None) => {
                     let s_idx = s.saturating_sub(1);
                     if s_idx < total {
-                        (format!("{:4} | {}", s, lines[s_idx]), format!("(line {})", s))
+                        (
+                            format!("{:4} | {}", s, lines[s_idx]),
+                            format!("(line {})", s),
+                        )
                     } else {
                         (String::new(), format!("(line {})", s))
                     }

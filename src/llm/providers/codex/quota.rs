@@ -24,7 +24,9 @@ pub fn fetch_account_quota(
         req = req.header("ChatGPT-Account-ID", act_id.as_str());
     }
 
-    let res = req.send().context("Failed to send usage request to Codex WHAM endpoint")?;
+    let res = req
+        .send()
+        .context("Failed to send usage request to Codex WHAM endpoint")?;
 
     if !res.status().is_success() {
         let status = res.status();
@@ -69,12 +71,14 @@ pub fn fetch_account_quota(
 
     let parse_window = |val: Option<&serde_json::Value>| -> Option<CodexQuotaWindow> {
         let v = val?;
-        let used = v.get("used_percent")
+        let used = v
+            .get("used_percent")
             .or_else(|| v.get("percent_used"))
             .and_then(|p| p.as_f64())
             .unwrap_or(0.0)
             .clamp(0.0, 100.0);
-        let reset_at = v.get("reset_at")
+        let reset_at = v
+            .get("reset_at")
             .or_else(|| v.get("resets_at"))
             .and_then(|s| s.as_str())
             .map(String::from);
@@ -87,15 +91,17 @@ pub fn fetch_account_quota(
     };
 
     let session_quota = parse_window(
-        rate_limit.get("primary_window")
+        rate_limit
+            .get("primary_window")
             .or_else(|| rate_limit.get("primary"))
-            .or_else(|| json.get("primary_window"))
+            .or_else(|| json.get("primary_window")),
     );
 
     let weekly_quota = parse_window(
-        rate_limit.get("secondary_window")
+        rate_limit
+            .get("secondary_window")
             .or_else(|| rate_limit.get("secondary"))
-            .or_else(|| json.get("secondary_window"))
+            .or_else(|| json.get("secondary_window")),
     );
 
     let reset_credits = json

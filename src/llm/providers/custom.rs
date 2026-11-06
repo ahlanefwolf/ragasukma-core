@@ -26,9 +26,10 @@ pub fn load_accounts() -> Vec<CustomLlmAccount> {
     let paths = crate::assets::find_all_file_candidates("api_llm_accounts.json");
     for path in paths {
         if let Ok(bytes) = std::fs::read(path)
-            && let Ok(accounts) = serde_json::from_slice(&bytes) {
-                return accounts;
-            }
+            && let Ok(accounts) = serde_json::from_slice(&bytes)
+        {
+            return accounts;
+        }
     }
     std::fs::read(accounts_path())
         .ok()
@@ -44,15 +45,21 @@ pub fn save_accounts(accounts: &[CustomLlmAccount]) -> anyhow::Result<()> {
             let mut acc = incoming.clone();
             let key = acc.api_key.trim();
             if (key.is_empty() || key.chars().all(|c| c == '*'))
-                && let Some(old) = existing.iter().find(|e| e.prefix.eq_ignore_ascii_case(&acc.prefix)) {
-                    acc.api_key = old.api_key.clone();
-                }
+                && let Some(old) = existing
+                    .iter()
+                    .find(|e| e.prefix.eq_ignore_ascii_case(&acc.prefix))
+            {
+                acc.api_key = old.api_key.clone();
+            }
             acc
         })
         .collect();
 
     let paths = crate::assets::find_all_file_candidates("api_llm_accounts.json");
-    let path = paths.into_iter().find(|path| path.exists()).unwrap_or_else(accounts_path);
+    let path = paths
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(accounts_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -81,9 +88,15 @@ pub fn fetch_models() -> Vec<(String, String)> {
         if !account.api_key.trim().is_empty() {
             request = request.bearer_auth(account.api_key.trim());
         }
-        let Ok(response) = request.send() else { continue };
-        let Ok(body) = response.error_for_status() else { continue };
-        let Ok(value) = body.json::<serde_json::Value>() else { continue };
+        let Ok(response) = request.send() else {
+            continue;
+        };
+        let Ok(body) = response.error_for_status() else {
+            continue;
+        };
+        let Ok(value) = body.json::<serde_json::Value>() else {
+            continue;
+        };
         if let Some(items) = value.get("data").and_then(serde_json::Value::as_array) {
             for item in items {
                 if let Some(id) = item.get("id").and_then(serde_json::Value::as_str) {
@@ -92,10 +105,9 @@ pub fn fetch_models() -> Vec<(String, String)> {
                         continue;
                     }
                     let prefix = account.prefix.trim();
-                    let model_id = if id
-                        .split_once('/')
-                        .is_some_and(|(existing_prefix, _)| existing_prefix.eq_ignore_ascii_case(prefix))
-                    {
+                    let model_id = if id.split_once('/').is_some_and(|(existing_prefix, _)| {
+                        existing_prefix.eq_ignore_ascii_case(prefix)
+                    }) {
                         id.to_string()
                     } else {
                         format!("{prefix}/{id}")
@@ -131,11 +143,16 @@ mod tests {
 pub fn validate_account(account: &CustomLlmAccount) -> anyhow::Result<()> {
     let prefix = account.prefix.trim();
     if prefix.is_empty()
-        || !prefix.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        || !prefix
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
         anyhow::bail!("Prefix must contain only letters, numbers, '-' or '_'");
     }
-    if ["ag", "cx", "cc"].iter().any(|reserved| prefix.eq_ignore_ascii_case(reserved)) {
+    if ["ag", "cx", "cc"]
+        .iter()
+        .any(|reserved| prefix.eq_ignore_ascii_case(reserved))
+    {
         anyhow::bail!("Prefix '{prefix}' is reserved");
     }
     if account.name.trim().is_empty() || account.base_url.trim().is_empty() {
@@ -196,10 +213,15 @@ impl CustomProvider {
                 }
             })
             .ok_or_else(|| {
-                anyhow::anyhow!("No enabled custom provider found matching model prefix for '{model}'")
+                anyhow::anyhow!(
+                    "No enabled custom provider found matching model prefix for '{model}'"
+                )
             })?;
 
-        let endpoint = format!("{}/chat/completions", account.base_url.trim_end_matches('/'));
+        let endpoint = format!(
+            "{}/chat/completions",
+            account.base_url.trim_end_matches('/')
+        );
         let payload = serde_json::json!({
             "model": stripped_model,
             "messages": messages,
@@ -214,7 +236,10 @@ impl CustomProvider {
             .header("Content-Type", "application/json");
 
         if !account.api_key.trim().is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", account.api_key.trim()));
+            req = req.header(
+                "Authorization",
+                format!("Bearer {}", account.api_key.trim()),
+            );
         }
 
         let resp = req
@@ -251,13 +276,13 @@ impl CustomProvider {
                         .pointer("/choices/0/delta/content")
                         .or_else(|| val.pointer("/choices/0/message/content"))
                         .and_then(|v| v.as_str())
-                    {
-                        if delta.is_empty() {
-                            continue;
-                        }
-                        full_reply.push_str(delta);
-                        on_delta(delta)?;
+                {
+                    if delta.is_empty() {
+                        continue;
                     }
+                    full_reply.push_str(delta);
+                    on_delta(delta)?;
+                }
             }
         }
 
@@ -307,7 +332,10 @@ impl CustomProvider {
 
         let mut body = serde_json::to_value(req)?;
         if let Some(obj) = body.as_object_mut() {
-            obj.insert("model".to_string(), serde_json::Value::String(stripped_model));
+            obj.insert(
+                "model".to_string(),
+                serde_json::Value::String(stripped_model),
+            );
             obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         }
 
@@ -367,51 +395,63 @@ impl CustomProvider {
                         .get("reasoning_content")
                         .or_else(|| delta.get("thought"))
                         .and_then(|t| t.as_str())
-                        && !thought.is_empty() {
-                            final_thought.push_str(thought);
-                            callback(V1StreamEvent::ThoughtDelta(thought.to_string()))?;
-                        }
+                        && !thought.is_empty()
+                    {
+                        final_thought.push_str(thought);
+                        callback(V1StreamEvent::ThoughtDelta(thought.to_string()))?;
+                    }
 
                     if let Some(content) = delta.get("content").and_then(|c| c.as_str())
-                        && !content.is_empty() {
-                            final_content.push_str(content);
-                            callback(V1StreamEvent::ContentDelta(content.to_string()))?;
-                        }
+                        && !content.is_empty()
+                    {
+                        final_content.push_str(content);
+                        callback(V1StreamEvent::ContentDelta(content.to_string()))?;
+                    }
 
                     if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tc_val in tcs {
-                            let idx = tc_val.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                            let entry = tool_calls_map.entry(idx).or_insert_with(|| {
-                                V1ToolCall {
-                                    id: format!("call_{}", idx),
-                                    call_type: "function".to_string(),
-                                    function: V1ToolCallFunction {
-                                        name: String::new(),
-                                        arguments: String::new(),
-                                    },
-                                    thought_signature: None,
-                                    extra_content: None,
-                                    provider_specific_fields: None,
-                                }
+                            let idx =
+                                tc_val.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
+                            let entry = tool_calls_map.entry(idx).or_insert_with(|| V1ToolCall {
+                                id: format!("call_{}", idx),
+                                call_type: "function".to_string(),
+                                function: V1ToolCallFunction {
+                                    name: String::new(),
+                                    arguments: String::new(),
+                                },
+                                thought_signature: None,
+                                extra_content: None,
+                                provider_specific_fields: None,
                             });
 
-                            let id = tc_val.get("id").and_then(|s| s.as_str()).map(|s| s.to_string());
+                            let id = tc_val
+                                .get("id")
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string());
                             let func = tc_val.get("function");
-                            let name = func.and_then(|f| f.get("name")).and_then(|s| s.as_str()).map(|s| s.to_string());
-                            let args = func.and_then(|f| f.get("arguments")).and_then(|s| s.as_str()).unwrap_or("");
+                            let name = func
+                                .and_then(|f| f.get("name"))
+                                .and_then(|s| s.as_str())
+                                .map(|s| s.to_string());
+                            let args = func
+                                .and_then(|f| f.get("arguments"))
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("");
 
                             if let Some(ref tc_id) = id
-                                && !tc_id.trim().is_empty() {
-                                    entry.id = tc_id.clone();
-                                }
+                                && !tc_id.trim().is_empty()
+                            {
+                                entry.id = tc_id.clone();
+                            }
                             // DeepSeek (via 9Router) sends `"name": ""` on every delta
                             // after the first one. Only a non-blank name may overwrite,
                             // otherwise the tool call ends up unnamed and the agent
                             // fails with `Unknown tool ''`.
                             if let Some(ref tc_name) = name
-                                && !tc_name.trim().is_empty() {
-                                    entry.function.name = tc_name.clone();
-                                }
+                                && !tc_name.trim().is_empty()
+                            {
+                                entry.function.name = tc_name.clone();
+                            }
                             // Arguments are streamed in fragments; the empty-string
                             // re-sends carry no information, so skip them.
                             if !args.is_empty() {

@@ -9,7 +9,10 @@ pub fn truncate_smart(s: &str, max_head: usize, max_tail: usize) -> String {
         return s.to_string();
     }
     let head: String = s.chars().take(max_head).collect();
-    let tail: String = s.chars().skip(char_count.saturating_sub(max_tail)).collect();
+    let tail: String = s
+        .chars()
+        .skip(char_count.saturating_sub(max_tail))
+        .collect();
     let omitted = char_count.saturating_sub(max_head + max_tail);
     format!("{head}\n\n[... {omitted} characters omitted to preserve token budget ...]\n\n{tail}")
 }
@@ -23,7 +26,9 @@ pub fn estimate_message_tokens(msg: &Message) -> usize {
     if let Some(ref tc) = msg.tool_calls {
         // If the message has tool calls with large arguments (like workspace_write_file or edit),
         // in historical context those arguments are compacted to a lightweight summary (~200 chars).
-        let tc_len = if tc.len() > 1_000 && (tc.contains("workspace_write_file") || tc.contains("workspace_edit_file")) {
+        let tc_len = if tc.len() > 1_000
+            && (tc.contains("workspace_write_file") || tc.contains("workspace_edit_file"))
+        {
             1_000
         } else {
             tc.len()
@@ -47,7 +52,10 @@ pub fn summarize_evicted_messages(evicted: &[&Message]) -> String {
             if let Some(ref c) = msg.content {
                 let trimmed = c.trim();
                 // Filter out synthetic or tool-injected eviction summaries
-                if !trimmed.is_empty() && !trimmed.starts_with("### 🧠") && !trimmed.starts_with("VERIFICATION") {
+                if !trimmed.is_empty()
+                    && !trimmed.starts_with("### 🧠")
+                    && !trimmed.starts_with("VERIFICATION")
+                {
                     let first_line = trimmed.lines().next().unwrap_or(trimmed);
                     let short: String = first_line.chars().take(120).collect();
                     if !user_goals.contains(&short) {
@@ -67,48 +75,86 @@ pub fn summarize_evicted_messages(evicted: &[&Message]) -> String {
                 }
             }
             if let Some(ref tc_raw) = msg.tool_calls
-                && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw) {
-                    for call in calls {
-                        if let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments) {
-                            if call.function.name == "workspace_edit_file" || call.function.name == "workspace_write_file" {
-                                if let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str())
-                                    && !modified_files.contains(&p.to_string()) {
-                                        modified_files.push(p.to_string());
-                                    }
-                            } else if call.function.name == "workspace_run_command" {
-                                if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-                                    let clean_cmd = cmd.trim().to_string();
-                                    if !executed_cmds.contains(&clean_cmd) {
-                                        executed_cmds.push(clean_cmd);
-                                    }
+                && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw)
+            {
+                for call in calls {
+                    if let Ok(args) =
+                        serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    {
+                        if call.function.name == "workspace_edit_file"
+                            || call.function.name == "workspace_write_file"
+                        {
+                            if let Some(p) = args
+                                .get("file_path")
+                                .or_else(|| args.get("path"))
+                                .and_then(|v| v.as_str())
+                                && !modified_files.contains(&p.to_string())
+                            {
+                                modified_files.push(p.to_string());
+                            }
+                        } else if call.function.name == "workspace_run_command" {
+                            if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                                let clean_cmd = cmd.trim().to_string();
+                                if !executed_cmds.contains(&clean_cmd) {
+                                    executed_cmds.push(clean_cmd);
                                 }
-                            } else if call.function.name == "workspace_read_file"
-                                && let Some(p) = args.get("file_path").or_else(|| args.get("path")).and_then(|v| v.as_str())
-                                    && !key_read_files.contains(&p.to_string()) {
-                                        key_read_files.push(p.to_string());
-                                    }
+                            }
+                        } else if call.function.name == "workspace_read_file"
+                            && let Some(p) = args
+                                .get("file_path")
+                                .or_else(|| args.get("path"))
+                                .and_then(|v| v.as_str())
+                            && !key_read_files.contains(&p.to_string())
+                        {
+                            key_read_files.push(p.to_string());
                         }
                     }
                 }
+            }
         }
     }
 
     let mut summary = String::new();
     summary.push_str("### 🧠 Hierarchical Memory Distillation (Earlier Evicted Turns):\n");
     if !user_goals.is_empty() {
-        summary.push_str(&format!("- **User Directives**: {}\n", user_goals.join(" | ")));
+        summary.push_str(&format!(
+            "- **User Directives**: {}\n",
+            user_goals.join(" | ")
+        ));
     }
     if !modified_files.is_empty() {
-        summary.push_str(&format!("- **Files Modified**: {}\n", modified_files.join(", ")));
+        summary.push_str(&format!(
+            "- **Files Modified**: {}\n",
+            modified_files.join(", ")
+        ));
     }
     if !executed_cmds.is_empty() {
-        summary.push_str(&format!("- **Key Commands**: {}\n", executed_cmds.iter().take(4).cloned().collect::<Vec<_>>().join(" && ")));
+        summary.push_str(&format!(
+            "- **Key Commands**: {}\n",
+            executed_cmds
+                .iter()
+                .take(4)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" && ")
+        ));
     }
     if !key_read_files.is_empty() {
-        summary.push_str(&format!("- **Inspected Files**: {}\n", key_read_files.iter().take(5).cloned().collect::<Vec<_>>().join(", ")));
+        summary.push_str(&format!(
+            "- **Inspected Files**: {}\n",
+            key_read_files
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if !decisions.is_empty() {
-        summary.push_str(&format!("- **Prior Reasoning & Decisions**: {}\n", decisions.join(" | ")));
+        summary.push_str(&format!(
+            "- **Prior Reasoning & Decisions**: {}\n",
+            decisions.join(" | ")
+        ));
     }
     summary.push_str("- Retain this context and build directly upon it without repeating earlier operations.\n\n");
     summary
@@ -120,7 +166,14 @@ pub fn summarize_evicted_messages(evicted: &[&Message]) -> String {
 pub fn sanitize_tool_output_for_db(content: &str) -> String {
     if content.len() > 32_000 {
         let prefix: String = content.chars().take(16_000).collect();
-        let suffix: String = content.chars().rev().take(8_000).collect::<Vec<_>>().into_iter().rev().collect();
+        let suffix: String = content
+            .chars()
+            .rev()
+            .take(8_000)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         format!(
             "{}\n\n[... Output truncated for database efficiency ({} total bytes) ...]\n\n{}",
             prefix,
@@ -166,7 +219,10 @@ pub fn compact_tool_output(content: &str, is_recent_tail: bool) -> String {
 /// In particular, historical `workspace_write_file` or `workspace_edit_file` calls that have
 /// already completed on disk do not need to repeat thousands of characters of file content
 /// in every subsequent turn.
-pub fn compact_assistant_tool_calls_smart(calls: &mut [crate::llm::v1_engine::V1ToolCall], is_recent_tail: bool) {
+pub fn compact_assistant_tool_calls_smart(
+    calls: &mut [crate::llm::v1_engine::V1ToolCall],
+    is_recent_tail: bool,
+) {
     if is_recent_tail {
         return;
     }
@@ -174,13 +230,20 @@ pub fn compact_assistant_tool_calls_smart(calls: &mut [crate::llm::v1_engine::V1
         let name = tc.function.name.as_str();
         if name == "workspace_write_file" {
             if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
-                let file_path = val.get("file_path").and_then(|p| p.as_str()).unwrap_or("file").to_string();
-                let content_len = val.get("content").and_then(|c| c.as_str()).map(|s| s.len()).unwrap_or(0);
+                let file_path = val
+                    .get("file_path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("file")
+                    .to_string();
+                let content_len = val
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
                 if content_len > 200 {
                     val["content"] = serde_json::json!(format!(
                         "[Content omitted: {} chars written to `{}`]",
-                        content_len,
-                        file_path
+                        content_len, file_path
                     ));
                     if let Ok(compacted_args) = serde_json::to_string(&val) {
                         tc.function.arguments = compacted_args;
@@ -188,35 +251,56 @@ pub fn compact_assistant_tool_calls_smart(calls: &mut [crate::llm::v1_engine::V1
                 }
             }
         } else if name == "workspace_edit_file"
-            && let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
-                let file_path = val.get("file_path").and_then(|p| p.as_str()).unwrap_or("file").to_string();
-                let (should_compact, edits_count, total_chars) = if let Some(edits) = val.get("edits").and_then(|e| e.as_array()) {
-                    let total_chars: usize = edits.iter().map(|e| {
-                        let old_len = e.get("old_text").and_then(|t| t.as_str()).map(|t| t.len()).unwrap_or(0);
-                        let new_len = e.get("new_text").and_then(|t| t.as_str()).map(|t| t.len()).unwrap_or(0);
-                        old_len + new_len
-                    }).sum();
+            && let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+        {
+            let file_path = val
+                .get("file_path")
+                .and_then(|p| p.as_str())
+                .unwrap_or("file")
+                .to_string();
+            let (should_compact, edits_count, total_chars) =
+                if let Some(edits) = val.get("edits").and_then(|e| e.as_array()) {
+                    let total_chars: usize = edits
+                        .iter()
+                        .map(|e| {
+                            let old_len = e
+                                .get("old_text")
+                                .and_then(|t| t.as_str())
+                                .map(|t| t.len())
+                                .unwrap_or(0);
+                            let new_len = e
+                                .get("new_text")
+                                .and_then(|t| t.as_str())
+                                .map(|t| t.len())
+                                .unwrap_or(0);
+                            old_len + new_len
+                        })
+                        .sum();
                     (total_chars > 300, edits.len(), total_chars)
                 } else {
                     (false, 0, 0)
                 };
 
-                if should_compact {
-                    val["edits"] = serde_json::json!([
-                        {
-                            "summary": format!("[{} edit hunk(s) applied to `{}` ({} chars)]", edits_count, file_path, total_chars)
-                        }
-                    ]);
-                    if let Ok(compacted_args) = serde_json::to_string(&val) {
-                        tc.function.arguments = compacted_args;
+            if should_compact {
+                val["edits"] = serde_json::json!([
+                    {
+                        "summary": format!("[{} edit hunk(s) applied to `{}` ({} chars)]", edits_count, file_path, total_chars)
                     }
+                ]);
+                if let Ok(compacted_args) = serde_json::to_string(&val) {
+                    tc.function.arguments = compacted_args;
                 }
             }
+        }
     }
 }
 
 /// Context-aware tool output compactor that differentiates by tool type.
-pub fn compact_tool_output_smart(content: &str, tool_name: Option<&str>, is_recent_tail: bool) -> String {
+pub fn compact_tool_output_smart(
+    content: &str,
+    tool_name: Option<&str>,
+    is_recent_tail: bool,
+) -> String {
     // 1. Preserve compiler/test error diagnostics up to 12,000 chars so actionable error messages are never lost
     if is_command_output_error(content) {
         if content.len() > 12_000 {
@@ -365,7 +449,10 @@ mod tests {
 
     #[test]
     fn test_compact_tool_output_caps_large_error_diagnostics() {
-        let huge_error = format!("❌ COMMAND FAILED with exit code 1\n{}", "error: type mismatch\n".repeat(2_000));
+        let huge_error = format!(
+            "❌ COMMAND FAILED with exit code 1\n{}",
+            "error: type mismatch\n".repeat(2_000)
+        );
         assert!(huge_error.len() > 30_000);
         let compacted = compact_tool_output(&huge_error, true);
         assert!(compacted.len() <= 15_000);
@@ -373,27 +460,36 @@ mod tests {
 
     #[test]
     fn test_compact_successful_command_output() {
-        let successful_build = format!("Compiling crates...\n{}Finished release [optimized] target(s) in 12.3s", "   Compiling dep v0.1\n".repeat(600));
+        let successful_build = format!(
+            "Compiling crates...\n{}Finished release [optimized] target(s) in 12.3s",
+            "   Compiling dep v0.1\n".repeat(600)
+        );
         assert!(successful_build.len() > 10_000);
 
         // Recent tail preserves up to 6,000 chars
-        let tail_compacted = compact_tool_output_smart(&successful_build, Some("workspace_run_command"), true);
+        let tail_compacted =
+            compact_tool_output_smart(&successful_build, Some("workspace_run_command"), true);
         assert!(tail_compacted.len() <= 7_000);
         assert!(tail_compacted.contains("characters omitted to preserve token budget"));
 
         // Historical turn retains up to 3,000 chars
-        let hist_compacted = compact_tool_output_smart(&successful_build, Some("workspace_run_command"), false);
+        let hist_compacted =
+            compact_tool_output_smart(&successful_build, Some("workspace_run_command"), false);
         assert!(hist_compacted.len() <= 3_500);
         assert!(hist_compacted.contains("characters omitted to preserve token budget"));
     }
 
     #[test]
     fn test_compact_historical_file_reads() {
-        let file_content = format!("// Header\n{}", "fn do_something() { println!(\"hello\"); }\n".repeat(200));
+        let file_content = format!(
+            "// Header\n{}",
+            "fn do_something() { println!(\"hello\"); }\n".repeat(200)
+        );
         assert!(file_content.len() > 8_000);
 
         // Historical file read preserves code context (up to 4,000 chars) instead of a 1-line tombstone
-        let hist_compacted = compact_tool_output_smart(&file_content, Some("workspace_read_file"), false);
+        let hist_compacted =
+            compact_tool_output_smart(&file_content, Some("workspace_read_file"), false);
         assert!(hist_compacted.len() <= 4_500);
         assert!(hist_compacted.contains("fn do_something()"));
         assert!(hist_compacted.contains("characters omitted to preserve token budget"));
@@ -412,7 +508,8 @@ mod tests {
                     arguments: serde_json::json!({
                         "file_path": "src/App.tsx",
                         "content": "A".repeat(10_000)
-                    }).to_string(),
+                    })
+                    .to_string(),
                 },
                 thought_signature: None,
                 extra_content: None,
@@ -428,7 +525,8 @@ mod tests {
                         "edits": [
                             {"old_text": "B".repeat(200), "new_text": "C".repeat(200)}
                         ]
-                    }).to_string(),
+                    })
+                    .to_string(),
                 },
                 thought_signature: None,
                 extra_content: None,
@@ -444,7 +542,17 @@ mod tests {
         // Historical call is compacted
         compact_assistant_tool_calls_smart(&mut calls, false);
         assert!(!calls[0].function.arguments.contains(&"A".repeat(500)));
-        assert!(calls[0].function.arguments.contains("[Content omitted: 10000 chars written to `src/App.tsx`]"));
-        assert!(calls[1].function.arguments.contains("[1 edit hunk(s) applied to `src/index.ts`"));
+        assert!(
+            calls[0]
+                .function
+                .arguments
+                .contains("[Content omitted: 10000 chars written to `src/App.tsx`]")
+        );
+        assert!(
+            calls[1]
+                .function
+                .arguments
+                .contains("[1 edit hunk(s) applied to `src/index.ts`")
+        );
     }
 }

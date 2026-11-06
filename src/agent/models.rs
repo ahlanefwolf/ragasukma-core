@@ -53,7 +53,9 @@ impl McpServer {
 
     pub fn command(&self) -> Option<String> {
         let v = self.config_value();
-        v.get("command").and_then(|c| c.as_str()).map(|s| s.to_string())
+        v.get("command")
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string())
     }
 
     pub fn url(&self) -> Option<String> {
@@ -144,8 +146,8 @@ pub struct Goal {
     pub success_criteria: String, // JSON Array
     pub constraints: String,      // JSON Array
     pub phase: String,            // 'discovery', 'action', 'verification', 'concluded'
-    pub status: String,           // 'in_progress', 'completed' (verified), 'completed_unverified', 'failed'
-    pub target_files: String,     // JSON Array of locked target files
+    pub status: String, // 'in_progress', 'completed' (verified), 'completed_unverified', 'failed'
+    pub target_files: String, // JSON Array of locked target files
     pub discovery_count: i64,
     pub conclusion: Option<String>,
     pub created_at: i64,

@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Open native OS folder selection dialog (File Manager)
 pub fn pick_folder_dialog(initial_path: Option<&str>) -> Result<Option<String>> {
@@ -38,7 +38,11 @@ pub fn pick_folder_dialog(initial_path: Option<&str>) -> Result<Option<String>> 
                 return Ok(None);
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                tracing::warn!("[pick_folder_dialog] Zenity non-zero exit ({:?}): {}", output.status.code(), stderr);
+                tracing::warn!(
+                    "[pick_folder_dialog] Zenity non-zero exit ({:?}): {}",
+                    output.status.code(),
+                    stderr
+                );
             }
         }
 
@@ -98,7 +102,9 @@ except Exception:
             return Ok(None);
         }
 
-        bail!("Unable to open file manager dialog (zenity, kdialog, or tkinter). Ensure GUI is available or enter the folder path manually.")
+        bail!(
+            "Unable to open file manager dialog (zenity, kdialog, or tkinter). Ensure GUI is available or enter the folder path manually."
+        )
     }
 
     #[cfg(target_os = "windows")]
@@ -166,13 +172,15 @@ end tell"#,
                 r#"tell current application
 activate
 return POSIX path of (choose folder with prompt "Select Workspace Folder")
-end tell"#.to_string()
+end tell"#
+                    .to_string()
             }
         } else {
             r#"tell current application
 activate
 return POSIX path of (choose folder with prompt "Select Workspace Folder")
-end tell"#.to_string()
+end tell"#
+                .to_string()
         };
         let mut cmd = std::process::Command::new("osascript");
         crate::agent::engine::configure_subprocess(&mut cmd);

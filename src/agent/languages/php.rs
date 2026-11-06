@@ -1,5 +1,5 @@
-use std::path::Path;
 use super::{LanguageDetector, ProjectLanguageInfo};
+use std::path::Path;
 
 pub struct PhpDetector;
 
@@ -15,7 +15,10 @@ impl LanguageDetector for PhpDetector {
         let (primary, secondaries) = if has_artisan {
             (
                 "php artisan test".to_string(),
-                vec!["./vendor/bin/phpunit".to_string(), "composer test".to_string()],
+                vec![
+                    "./vendor/bin/phpunit".to_string(),
+                    "composer test".to_string(),
+                ],
             )
         } else if root.join("vendor/bin/phpunit").exists() {
             (
@@ -25,7 +28,10 @@ impl LanguageDetector for PhpDetector {
         } else {
             (
                 "composer test".to_string(),
-                vec!["./vendor/bin/pest".to_string(), "./vendor/bin/phpunit".to_string()],
+                vec![
+                    "./vendor/bin/pest".to_string(),
+                    "./vendor/bin/phpunit".to_string(),
+                ],
             )
         };
 

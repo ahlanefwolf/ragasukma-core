@@ -1,9 +1,13 @@
 use super::constants::*;
 use super::oauth::refresh_account_token;
 use super::quota::fetch_account_quota;
-use super::types::{ClaudeAccount, ClaudeAccountInfo, ClaudeModelInfo, ClaudeQuotaResponse, current_timestamp_secs};
-use super::v1_adapter::{build_claude_payload_from_messages, build_claude_payload_from_v1, ClaudeSseParserState};
-use anyhow::{bail, Context, Result};
+use super::types::{
+    ClaudeAccount, ClaudeAccountInfo, ClaudeModelInfo, ClaudeQuotaResponse, current_timestamp_secs,
+};
+use super::v1_adapter::{
+    ClaudeSseParserState, build_claude_payload_from_messages, build_claude_payload_from_v1,
+};
+use anyhow::{Context, Result, bail};
 use std::io::BufRead;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex};
@@ -45,7 +49,8 @@ impl ClaudeProvider {
     }
 
     pub fn new() -> Self {
-        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
+        static SHARED_CLIENT: std::sync::OnceLock<reqwest::blocking::Client> =
+            std::sync::OnceLock::new();
         let client = SHARED_CLIENT
             .get_or_init(|| {
                 reqwest::blocking::Client::builder()
@@ -83,8 +88,12 @@ impl ClaudeProvider {
             return Ok(());
         }
 
-        let mut loaded: Vec<ClaudeAccount> = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse Claude accounts JSON from {:?}", self.config_file))?;
+        let mut loaded: Vec<ClaudeAccount> = serde_json::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse Claude accounts JSON from {:?}",
+                self.config_file
+            )
+        })?;
 
         let now = current_timestamp_secs();
         let mut dirty = false;
@@ -94,18 +103,18 @@ impl ClaudeProvider {
                 continue;
             }
             if (acc.access_token.is_none() || acc.expires_at <= now)
-                && refresh_account_token(&self.client, acc).is_ok() {
-                    dirty = true;
-                }
+                && refresh_account_token(&self.client, acc).is_ok()
+            {
+                dirty = true;
+            }
         }
 
         self.accounts = loaded;
-        if dirty
-            && let Ok(json) = serde_json::to_string_pretty(&self.accounts) {
-                for path in crate::assets::find_all_file_candidates("claude_accounts.json") {
-                    let _ = std::fs::write(path, &json);
-                }
+        if dirty && let Ok(json) = serde_json::to_string_pretty(&self.accounts) {
+            for path in crate::assets::find_all_file_candidates("claude_accounts.json") {
+                let _ = std::fs::write(path, &json);
             }
+        }
 
         Ok(())
     }
@@ -155,7 +164,12 @@ impl ClaudeProvider {
         Ok(id)
     }
 
-    pub fn add_account(&mut self, refresh_token: &str, email: Option<String>, org_id: Option<String>) -> Result<String> {
+    pub fn add_account(
+        &mut self,
+        refresh_token: &str,
+        email: Option<String>,
+        org_id: Option<String>,
+    ) -> Result<String> {
         let clean_token = refresh_token.trim().to_string();
         if clean_token.is_empty() {
             bail!("Refresh token cannot be empty");
@@ -285,7 +299,10 @@ impl ClaudeProvider {
                 .header("Accept", "application/json")
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header("anthropic-beta", "oauth-2025-04-20")
-                .header("User-Agent", format!("claude-cli/{CLAUDE_CLI_VERSION} (external, sdk-cli)"));
+                .header(
+                    "User-Agent",
+                    format!("claude-cli/{CLAUDE_CLI_VERSION} (external, sdk-cli)"),
+                );
 
             match req.send() {
                 Ok(res) => {
@@ -333,7 +350,9 @@ impl ClaudeProvider {
                         }
                     } else {
                         let err_text = res.text().unwrap_or_default();
-                        last_err = Some(anyhow::anyhow!("Claude Models API returned HTTP {status}: {err_text}"));
+                        last_err = Some(anyhow::anyhow!(
+                            "Claude Models API returned HTTP {status}: {err_text}"
+                        ));
                     }
                 }
                 Err(e) => {
@@ -400,9 +419,15 @@ impl ClaudeProvider {
             self.current_index = (acc_idx + 1) % total;
 
             let now = current_timestamp_secs();
-            if self.accounts[acc_idx].access_token.is_none() || self.accounts[acc_idx].expires_at <= now {
+            if self.accounts[acc_idx].access_token.is_none()
+                || self.accounts[acc_idx].expires_at <= now
+            {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    tracing::warn!("[Claude] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
+                    tracing::warn!(
+                        "[Claude] Token refresh error for account {}: {}",
+                        self.accounts[acc_idx].id,
+                        e
+                    );
                     continue;
                 }
                 let _ = self.save_accounts();
@@ -413,7 +438,8 @@ impl ClaudeProvider {
                 None => continue,
             };
 
-            let payload = build_claude_payload_from_messages(model, messages, temperature, max_tokens);
+            let payload =
+                build_claude_payload_from_messages(model, messages, temperature, max_tokens);
 
             match self.execute_claude_stream(&access_token, &payload, &mut on_delta) {
                 Ok(reply) => {
@@ -423,7 +449,11 @@ impl ClaudeProvider {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    tracing::error!("[Claude] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
+                    tracing::error!(
+                        "[Claude] Stream error on account {}: {}",
+                        self.accounts[acc_idx].id,
+                        err_str
+                    );
 
                     let now = current_timestamp_secs();
                     if err_str.contains("429") || err_str.to_lowercase().contains("rate_limit") {
@@ -469,9 +499,15 @@ impl ClaudeProvider {
             self.current_index = (acc_idx + 1) % total;
 
             let now = current_timestamp_secs();
-            if self.accounts[acc_idx].access_token.is_none() || self.accounts[acc_idx].expires_at <= now {
+            if self.accounts[acc_idx].access_token.is_none()
+                || self.accounts[acc_idx].expires_at <= now
+            {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
-                    tracing::warn!("[Claude V1] Token refresh error for account {}: {}", self.accounts[acc_idx].id, e);
+                    tracing::warn!(
+                        "[Claude V1] Token refresh error for account {}: {}",
+                        self.accounts[acc_idx].id,
+                        e
+                    );
                     continue;
                 }
                 let _ = self.save_accounts();
@@ -501,7 +537,11 @@ impl ClaudeProvider {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    tracing::error!("[Claude V1] Stream error on account {}: {}", self.accounts[acc_idx].id, err_str);
+                    tracing::error!(
+                        "[Claude V1] Stream error on account {}: {}",
+                        self.accounts[acc_idx].id,
+                        err_str
+                    );
 
                     let now = current_timestamp_secs();
                     if err_str.contains("429") || err_str.to_lowercase().contains("rate_limit") {
@@ -537,10 +577,16 @@ impl ClaudeProvider {
             .header("Anthropic-Version", ANTHROPIC_VERSION)
             .header("Anthropic-Beta", ANTHROPIC_BETA)
             .header("Anthropic-Dangerous-Direct-Browser-Access", "true")
-            .header("User-Agent", format!("claude-cli/{CLAUDE_CLI_VERSION} (external, sdk-cli)"))
+            .header(
+                "User-Agent",
+                format!("claude-cli/{CLAUDE_CLI_VERSION} (external, sdk-cli)"),
+            )
             .header("X-App", "cli");
 
-        let res = req.json(payload).send().context("Failed to connect to Claude Messages API")?;
+        let res = req
+            .json(payload)
+            .send()
+            .context("Failed to connect to Claude Messages API")?;
 
         let status = res.status();
         if !status.is_success() {
@@ -561,7 +607,12 @@ impl ClaudeProvider {
                     crate::llm::v1_engine::V1StreamEvent::ContentDelta(c) => {
                         full_content.push_str(c);
                     }
-                    crate::llm::v1_engine::V1StreamEvent::ToolCallDelta { index, id, name, arguments } => {
+                    crate::llm::v1_engine::V1StreamEvent::ToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        arguments,
+                    } => {
                         let idx = *index;
                         if idx >= collected_tool_calls.len() {
                             collected_tool_calls.resize(
@@ -583,10 +634,14 @@ impl ClaudeProvider {
                             collected_tool_calls[idx].id = tc_id.clone();
                         }
                         if let Some(tc_name) = name
-                            && !tc_name.is_empty() {
-                                collected_tool_calls[idx].function.name = tc_name.clone();
-                            }
-                        collected_tool_calls[idx].function.arguments.push_str(arguments);
+                            && !tc_name.is_empty()
+                        {
+                            collected_tool_calls[idx].function.name = tc_name.clone();
+                        }
+                        collected_tool_calls[idx]
+                            .function
+                            .arguments
+                            .push_str(arguments);
                     }
                     _ => {}
                 }

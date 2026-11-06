@@ -240,7 +240,10 @@ fn test_embedded_thought_signature_in_tool_call_id() {
     let embedded_id = format!("{base_id}__thought__{raw_sig}");
 
     // resolve_call_signature should parse and sanitize the signature from embedded id
-    assert_eq!(resolve_call_signature(&embedded_id), Some(raw_sig.to_string()));
+    assert_eq!(
+        resolve_call_signature(&embedded_id),
+        Some(raw_sig.to_string())
+    );
 
     let req = V1ChatRequest {
         model: "gemini-3.8-flash-high".to_string(),
@@ -301,9 +304,10 @@ fn test_embedded_thought_signature_in_tool_call_id() {
     );
 
     // Verify user turn with functionResponse has clean id matching base_id
-    let user_tool_turn = contents.iter().find(|c| {
-        c["role"] == "user" && c["parts"][0].get("functionResponse").is_some()
-    }).unwrap();
+    let user_tool_turn = contents
+        .iter()
+        .find(|c| c["role"] == "user" && c["parts"][0].get("functionResponse").is_some())
+        .unwrap();
     let fr = &user_tool_turn["parts"][0]["functionResponse"];
     assert_eq!(fr["id"].as_str().unwrap(), base_id);
     assert_eq!(fr["name"].as_str().unwrap(), "read_file");
@@ -320,15 +324,33 @@ fn test_thought_signature_model_family_scoping() {
     store_thought_signature_scoped(gemini_call, gemini_sig, Some("gemini"));
 
     // Scoped lookup prevents cross-pollination
-    assert_eq!(get_thought_signature_scoped(claude_call, Some("claude")), Some(claude_sig.to_string()));
-    assert_eq!(get_thought_signature_scoped(claude_call, Some("gemini")), None);
+    assert_eq!(
+        get_thought_signature_scoped(claude_call, Some("claude")),
+        Some(claude_sig.to_string())
+    );
+    assert_eq!(
+        get_thought_signature_scoped(claude_call, Some("gemini")),
+        None
+    );
 
-    assert_eq!(get_thought_signature_scoped(gemini_call, Some("gemini")), Some(gemini_sig.to_string()));
-    assert_eq!(get_thought_signature_scoped(gemini_call, Some("claude")), None);
+    assert_eq!(
+        get_thought_signature_scoped(gemini_call, Some("gemini")),
+        Some(gemini_sig.to_string())
+    );
+    assert_eq!(
+        get_thought_signature_scoped(gemini_call, Some("claude")),
+        None
+    );
 
     // Unscoped lookup fallback
-    assert_eq!(get_thought_signature(claude_call), Some(claude_sig.to_string()));
-    assert_eq!(get_thought_signature(gemini_call), Some(gemini_sig.to_string()));
+    assert_eq!(
+        get_thought_signature(claude_call),
+        Some(claude_sig.to_string())
+    );
+    assert_eq!(
+        get_thought_signature(gemini_call),
+        Some(gemini_sig.to_string())
+    );
 }
 
 #[test]
@@ -416,19 +438,58 @@ fn test_gemini_thinking_config_auto_enabled() {
 fn test_gemini_thinking_budget_resolution() {
     use crate::llm::providers::antigravity::v1_adapter::resolve_gemini_thinking_budget;
 
-    assert_eq!(resolve_gemini_thinking_budget("ag/gemini-3.8-flash-low"), (1024, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-low"), (1024, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash(low)"), (1024, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-minimal"), (512, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-medium"), (4096, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash(medium)"), (4096, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash"), (4096, true));
-    assert_eq!(resolve_gemini_thinking_budget("ag/gemini-3.8-flash-high"), (-1, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-high"), (-1, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash(high)"), (-1, true));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-none"), (0, false));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash(none)"), (0, false));
-    assert_eq!(resolve_gemini_thinking_budget("gemini-3.8-flash-off"), (0, false));
+    assert_eq!(
+        resolve_gemini_thinking_budget("ag/gemini-3.8-flash-low"),
+        (1024, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-low"),
+        (1024, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash(low)"),
+        (1024, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-minimal"),
+        (512, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-medium"),
+        (4096, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash(medium)"),
+        (4096, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash"),
+        (4096, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("ag/gemini-3.8-flash-high"),
+        (-1, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-high"),
+        (-1, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash(high)"),
+        (-1, true)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-none"),
+        (0, false)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash(none)"),
+        (0, false)
+    );
+    assert_eq!(
+        resolve_gemini_thinking_budget("gemini-3.8-flash-off"),
+        (0, false)
+    );
 }
 
 #[test]
@@ -453,7 +514,10 @@ fn test_gemini_thinking_config_tiered_payloads() {
     let tc_low = &payload_low["request"]["generationConfig"]["thinkingConfig"];
     assert_eq!(tc_low["thinkingBudget"].as_i64().unwrap(), 1024);
     assert_eq!(tc_low["includeThoughts"].as_bool().unwrap(), true);
-    assert_eq!(payload_low["model"].as_str().unwrap(), "gemini-3.8-flash-low");
+    assert_eq!(
+        payload_low["model"].as_str().unwrap(),
+        "gemini-3.8-flash-low"
+    );
 
     let req_none = V1ChatRequest {
         model: "ag/gemini-3.8-flash-none".to_string(),
@@ -496,5 +560,8 @@ fn test_gemini_thinking_config_tiered_payloads() {
     let tc_paren = &payload_paren["request"]["generationConfig"]["thinkingConfig"];
     assert_eq!(tc_paren["thinkingBudget"].as_i64().unwrap(), 1024);
     assert_eq!(tc_paren["includeThoughts"].as_bool().unwrap(), true);
-    assert_eq!(payload_paren["model"].as_str().unwrap(), "gemini-3.8-flash-low");
+    assert_eq!(
+        payload_paren["model"].as_str().unwrap(),
+        "gemini-3.8-flash-low"
+    );
 }

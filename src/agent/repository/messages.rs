@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::agent::models::Message;
 use super::{generate_id, now_secs};
+use crate::agent::models::Message;
+use anyhow::Result;
 
 // ============================================================================
 // MESSAGES REPOSITORY
@@ -161,7 +161,13 @@ mod tests {
         let _guard = crate::agent::repository::testsupport::db_test_lock().await;
         let pool = super::super::pool().await;
         // Prepare test session
-        let test_session_id = format!("test_session_seq_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let test_session_id = format!(
+            "test_session_seq_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         // Timestamps must reflect "now": a retroactively old `updated_at` makes these rows
         // look expired to the retention sweep running concurrently in another test.
         let now = super::super::now_secs();
@@ -179,13 +185,49 @@ mod tests {
             .await
             .unwrap();
 
-        let m1 = create_message(&test_session_id, "user", Some("Hello"), None, None, None, "success", None, None).await.unwrap();
+        let m1 = create_message(
+            &test_session_id,
+            "user",
+            Some("Hello"),
+            None,
+            None,
+            None,
+            "success",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(m1.sequence_num, 1);
 
-        let m2 = create_message(&test_session_id, "assistant", Some("Hi"), None, None, None, "success", None, None).await.unwrap();
+        let m2 = create_message(
+            &test_session_id,
+            "assistant",
+            Some("Hi"),
+            None,
+            None,
+            None,
+            "success",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(m2.sequence_num, 2);
 
-        let m3 = create_message(&test_session_id, "tool", Some("output"), None, None, Some("call_1"), "success", None, None).await.unwrap();
+        let m3 = create_message(
+            &test_session_id,
+            "tool",
+            Some("output"),
+            None,
+            None,
+            Some("call_1"),
+            "success",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(m3.sequence_num, 3);
 
         let listed = list_messages(&test_session_id).await.unwrap();

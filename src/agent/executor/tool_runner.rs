@@ -89,7 +89,8 @@ pub async fn execute_turn_tool_calls(
                 if name != raw_name {
                     tracing::warn!(
                         "[Agent Tool Guard] Recovered empty tool name as '{}' for call {}",
-                        name, tc.id
+                        name,
+                        tc.id
                     );
                 }
                 name
@@ -104,14 +105,19 @@ pub async fn execute_turn_tool_calls(
                     );
                 }
 
-                audit_tool_call(session_id, &state.goal_id, ToolAudit {
-                    tool_name: "<empty>",
-                    target_path: None,
-                    command: None,
-                    status: "failed",
-                    reason: Some("Tool call rejected: empty tool name"),
-                    duration_ms: Some(0),
-                }).await;
+                audit_tool_call(
+                    session_id,
+                    &state.goal_id,
+                    ToolAudit {
+                        tool_name: "<empty>",
+                        target_path: None,
+                        command: None,
+                        status: "failed",
+                        reason: Some("Tool call rejected: empty tool name"),
+                        duration_ms: Some(0),
+                    },
+                )
+                .await;
 
                 let tool_msg = repository::create_message(
                     session_id,
@@ -123,7 +129,8 @@ pub async fn execute_turn_tool_calls(
                     "error",
                     None,
                     None,
-                ).await?;
+                )
+                .await?;
                 db_messages.push(tool_msg);
                 continue;
             }
@@ -138,15 +145,24 @@ pub async fn execute_turn_tool_calls(
             },
         );
 
-        let is_edit_op = tool_name == "workspace_write_file"
-            || tool_name == "workspace_edit_file";
+        let is_edit_op = tool_name == "workspace_write_file" || tool_name == "workspace_edit_file";
 
         let is_inspection = tool_name == "workspace_read_file"
             || tool_name == "workspace_grep"
             || tool_name == "workspace_list_dir"
             || (tool_name == "workspace_run_command" && {
-                let cmd = args_val.get("command").and_then(|c| c.as_str()).unwrap_or("").trim().to_lowercase();
-                cmd.starts_with("cat ") || cmd.starts_with("ls") || cmd.starts_with("head ") || cmd.starts_with("tail ") || cmd.starts_with("grep ") || cmd.starts_with("find ")
+                let cmd = args_val
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_lowercase();
+                cmd.starts_with("cat ")
+                    || cmd.starts_with("ls")
+                    || cmd.starts_with("head ")
+                    || cmd.starts_with("tail ")
+                    || cmd.starts_with("grep ")
+                    || cmd.starts_with("find ")
             });
 
         let target_arg_file = args_val
@@ -155,24 +171,32 @@ pub async fn execute_turn_tool_calls(
             .and_then(|p| p.as_str())
             .map(|s| s.to_string());
 
-        if is_edit_op
-            && let Some(ref path) = target_arg_file {
-                let clean = path.trim_start_matches("./").to_string();
-                crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &clean);
-            }
+        if is_edit_op && let Some(ref path) = target_arg_file {
+            let clean = path.trim_start_matches("./").to_string();
+            crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &clean);
+        }
 
-        let is_target_in_error_list = target_arg_file.as_ref().map(|p| {
-            let clean = p.trim_start_matches("./");
-            state.pending_error_files.iter().any(|ef| ef == clean || clean.ends_with(ef) || ef.ends_with(clean))
-        }).unwrap_or(false);
-
-        let is_accessing_unmodified_target = target_arg_file.as_ref().map(|p| {
-            let clean = p.trim_start_matches("./");
-            !state.modified_files.iter().any(|mf| {
-                let mf_clean = mf.trim_start_matches("./");
-                mf_clean == clean || mf_clean.ends_with(clean) || clean.ends_with(mf_clean)
+        let is_target_in_error_list = target_arg_file
+            .as_ref()
+            .map(|p| {
+                let clean = p.trim_start_matches("./");
+                state
+                    .pending_error_files
+                    .iter()
+                    .any(|ef| ef == clean || clean.ends_with(ef) || ef.ends_with(clean))
             })
-        }).unwrap_or(false);
+            .unwrap_or(false);
+
+        let is_accessing_unmodified_target = target_arg_file
+            .as_ref()
+            .map(|p| {
+                let clean = p.trim_start_matches("./");
+                !state.modified_files.iter().any(|mf| {
+                    let mf_clean = mf.trim_start_matches("./");
+                    mf_clean == clean || mf_clean.ends_with(clean) || clean.ends_with(mf_clean)
+                })
+            })
+            .unwrap_or(false);
 
         let is_work_on_new_target = (tool_name == "workspace_read_file"
             || tool_name == "workspace_edit_file"
@@ -180,29 +204,49 @@ pub async fn execute_turn_tool_calls(
             && is_accessing_unmodified_target;
 
         // Multi-component awareness: Check if accessing a file in a different subproject/folder
-        let is_accessing_different_component = target_arg_file.as_ref().map(|p| {
-            let clean = p.trim_start_matches("./");
-            let components: Vec<&str> = clean.split('/').collect();
-            if components.len() >= 2 {
-                let subdir = components[0];
-                !state.verified_subdirs.contains(subdir) && !state.verified_subdirs.is_empty()
-            } else {
-                false
-            }
-        }).unwrap_or(false);
+        let is_accessing_different_component = target_arg_file
+            .as_ref()
+            .map(|p| {
+                let clean = p.trim_start_matches("./");
+                let components: Vec<&str> = clean.split('/').collect();
+                if components.len() >= 2 {
+                    let subdir = components[0];
+                    !state.verified_subdirs.contains(subdir) && !state.verified_subdirs.is_empty()
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
 
         let is_post_verification_terminal_command = state.has_passed_verification
             && !state.last_command_had_error
             && state.pending_error_files.is_empty()
             && tool_name == "workspace_run_command"
             && {
-                let cmd = args_val.get("command").and_then(|c| c.as_str()).unwrap_or("").trim().to_lowercase();
-                cmd.starts_with("git ") || cmd.contains("git commit") || cmd.contains("git add") || state.executed_commands.iter().any(|ec| ec.contains(&cmd) || cmd.contains(ec))
+                let cmd = args_val
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_lowercase();
+                cmd.starts_with("git ")
+                    || cmd.contains("git commit")
+                    || cmd.contains("git add")
+                    || state
+                        .executed_commands
+                        .iter()
+                        .any(|ec| ec.contains(&cmd) || cmd.contains(ec))
             };
 
         let is_repeated_command = tool_name == "workspace_run_command" && {
-            let cmd = args_val.get("command").and_then(|c| c.as_str()).unwrap_or("").trim();
-            !cmd.is_empty() && state.last_executed_command.as_deref() == Some(cmd) && state.consecutive_command_count >= 1
+            let cmd = args_val
+                .get("command")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .trim();
+            !cmd.is_empty()
+                && state.last_executed_command.as_deref() == Some(cmd)
+                && state.consecutive_command_count >= 1
         };
 
         let tool_start_instant = std::time::Instant::now();
@@ -213,63 +257,106 @@ pub async fn execute_turn_tool_calls(
         let tool_output = if state.circuit_breaker_triggered || state.force_final_text_only {
             is_breaker_trip = true;
             let msg = "Tool execution rejected: Tool calling is closed for this turn. Conclude your turn immediately and provide your summary to the user now.".to_string();
-            audit_tool_call(session_id, &state.goal_id, ToolAudit {
+            audit_tool_call(
+                session_id,
+                &state.goal_id,
+                ToolAudit {
                     tool_name: &tool_name,
                     target_path: target_arg_file.as_deref(),
                     command: cmd_param,
                     status: "denied",
                     reason: Some("circuit_breaker_triggered"),
                     duration_ms: Some(0),
-                }).await;
+                },
+            )
+            .await;
             msg
-        } else if state.has_passed_verification && !state.last_command_had_error && state.pending_error_files.is_empty() && !is_work_on_new_target && !is_accessing_different_component && (tool_name != "workspace_run_command" || is_post_verification_terminal_command) {
+        } else if state.has_passed_verification
+            && !state.last_command_had_error
+            && state.pending_error_files.is_empty()
+            && !is_work_on_new_target
+            && !is_accessing_different_component
+            && (tool_name != "workspace_run_command" || is_post_verification_terminal_command)
+        {
             is_breaker_trip = true;
             let msg = "Verification has already succeeded with 0 errors. All active errors resolved. Tool calling is now closed. Conclude your turn immediately and provide your summary to the user now.".to_string();
-            audit_tool_call(session_id, &state.goal_id, ToolAudit {
+            audit_tool_call(
+                session_id,
+                &state.goal_id,
+                ToolAudit {
                     tool_name: &tool_name,
                     target_path: target_arg_file.as_deref(),
                     command: cmd_param,
                     status: "denied",
                     reason: Some("verification_already_passed"),
                     duration_ms: Some(0),
-                }).await;
+                },
+            )
+            .await;
             msg
         } else if is_repeated_command {
             is_breaker_trip = true;
-            let cmd = args_val.get("command").and_then(|c| c.as_str()).unwrap_or("").trim();
+            let cmd = args_val
+                .get("command")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .trim();
             let msg = format!(
                 "Command repetition limit reached for `{cmd}`. This command was already executed without subsequent file modifications. Tool calling is now closed. Conclude your turn now and report the results directly to the user."
             );
-            audit_tool_call(session_id, &state.goal_id, ToolAudit {
+            audit_tool_call(
+                session_id,
+                &state.goal_id,
+                ToolAudit {
                     tool_name: &tool_name,
                     target_path: target_arg_file.as_deref(),
                     command: Some(cmd),
                     status: "denied",
                     reason: Some("repeated_command_without_progress"),
                     duration_ms: Some(0),
-                }).await;
+                },
+            )
+            .await;
             msg
-        } else if is_inspection && !is_target_in_error_list && state.global_inspection_streak >= 20 {
+        } else if is_inspection && !is_target_in_error_list && state.global_inspection_streak >= 20
+        {
             is_breaker_trip = true;
             let msg = format!(
                 "Inspection budget reached ({} consecutive reads without code modifications). Tool calling is closed to prevent unproductive wandering. Conclude your turn now and provide your findings, answers, or plan directly to the user.",
                 state.global_inspection_streak
             );
-            audit_tool_call(session_id, &state.goal_id, ToolAudit {
+            audit_tool_call(
+                session_id,
+                &state.goal_id,
+                ToolAudit {
                     tool_name: &tool_name,
                     target_path: target_arg_file.as_deref(),
                     command: cmd_param,
                     status: "denied",
                     reason: Some("inspection_budget_exhausted"),
                     duration_ms: Some(0),
-                }).await;
+                },
+            )
+            .await;
             msg
         } else if tool_name == "workspace_read_file" && {
             let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
             let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
             let path = target_arg_file.clone().unwrap_or_default();
-            let is_exact_duplicate = state.recent_read_slices.contains(&(path.clone(), start_line, end_line));
-            let same_file_count = target_arg_file.as_ref().map(|p| state.consecutive_read_same_file.get(p).copied().unwrap_or(0)).unwrap_or(0);
+            let is_exact_duplicate =
+                state
+                    .recent_read_slices
+                    .contains(&(path.clone(), start_line, end_line));
+            let same_file_count = target_arg_file
+                .as_ref()
+                .map(|p| {
+                    state
+                        .consecutive_read_same_file
+                        .get(p)
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
             is_exact_duplicate && same_file_count >= 5
         } {
             let path = target_arg_file.as_deref().unwrap_or("target");
@@ -278,80 +365,95 @@ pub async fn execute_turn_tool_calls(
             )
         } else if tool_name.starts_with("mcp__") {
             // Dispatch to active MCP server
-            match crate::agent::mcp::call_active_mcp_tool(
-                mcp_tools,
-                &tool_name,
-                args_val.clone(),
-            )
-            .await
+            match crate::agent::mcp::call_active_mcp_tool(mcp_tools, &tool_name, args_val.clone())
+                .await
             {
                 Ok(out) => {
                     let dur = tool_start_instant.elapsed().as_millis() as i64;
-                    audit_tool_call(session_id, &state.goal_id, ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: None,
-                    command: None,
-                    status: "executed",
-                    reason: None,
-                    duration_ms: Some(dur),
-                }).await;
+                    audit_tool_call(
+                        session_id,
+                        &state.goal_id,
+                        ToolAudit {
+                            tool_name: &tool_name,
+                            target_path: None,
+                            command: None,
+                            status: "executed",
+                            reason: None,
+                            duration_ms: Some(dur),
+                        },
+                    )
+                    .await;
                     out
                 }
                 Err(e) => {
                     let dur = tool_start_instant.elapsed().as_millis() as i64;
                     let err_str = e.to_string();
-                    audit_tool_call(session_id, &state.goal_id, ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: None,
-                    command: None,
-                    status: "failed",
-                    reason: Some(&err_str),
-                    duration_ms: Some(dur),
-                }).await;
+                    audit_tool_call(
+                        session_id,
+                        &state.goal_id,
+                        ToolAudit {
+                            tool_name: &tool_name,
+                            target_path: None,
+                            command: None,
+                            status: "failed",
+                            reason: Some(&err_str),
+                            duration_ms: Some(dur),
+                        },
+                    )
+                    .await;
                     format!("MCP execution error: {}", err_str)
                 }
             }
         } else {
-            match execute_tool_call(
-                &tool_name,
-                &args_val,
-                allowed_folders,
-            ).await {
+            match execute_tool_call(&tool_name, &args_val, allowed_folders).await {
                 Ok(out) => {
                     let dur = tool_start_instant.elapsed().as_millis() as i64;
-                    audit_tool_call(session_id, &state.goal_id, ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: target_arg_file.as_deref(),
-                    command: cmd_param,
-                    status: "executed",
-                    reason: None,
-                    duration_ms: Some(dur),
-                }).await;
+                    audit_tool_call(
+                        session_id,
+                        &state.goal_id,
+                        ToolAudit {
+                            tool_name: &tool_name,
+                            target_path: target_arg_file.as_deref(),
+                            command: cmd_param,
+                            status: "executed",
+                            reason: None,
+                            duration_ms: Some(dur),
+                        },
+                    )
+                    .await;
 
                     if tool_name == "workspace_read_file"
-                        && let Some(ref p) = target_arg_file {
-                            let clean = p.trim_start_matches("./").to_string();
-                            let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
-                            let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
-                            let is_outline = out.starts_with("# File outline for");
-                            if start_line.is_none() && end_line.is_none() && !is_outline {
-                                state.files_read_in_full.insert(clean);
-                            }
-                            state.recent_read_slices.insert((p.clone(), start_line, end_line));
+                        && let Some(ref p) = target_arg_file
+                    {
+                        let clean = p.trim_start_matches("./").to_string();
+                        let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
+                        let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
+                        let is_outline = out.starts_with("# File outline for");
+                        if start_line.is_none() && end_line.is_none() && !is_outline {
+                            state.files_read_in_full.insert(clean);
                         }
+                        state
+                            .recent_read_slices
+                            .insert((p.clone(), start_line, end_line));
+                    }
                     out
                 }
                 Err(e) => {
                     let dur = tool_start_instant.elapsed().as_millis() as i64;
                     let err_str = e.to_string();
-                    audit_tool_call(session_id, &state.goal_id, ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: target_arg_file.as_deref(),
-                    command: cmd_param,
-                    status: "failed",
-                    reason: Some(&err_str),
-                    duration_ms: Some(dur),
-                }).await;
+                    audit_tool_call(
+                        session_id,
+                        &state.goal_id,
+                        ToolAudit {
+                            tool_name: &tool_name,
+                            target_path: target_arg_file.as_deref(),
+                            command: cmd_param,
+                            status: "failed",
+                            reason: Some(&err_str),
+                            duration_ms: Some(dur),
+                        },
+                    )
+                    .await;
                     format!("Tool execution error: {}", err_str)
                 }
             }
@@ -360,7 +462,9 @@ pub async fn execute_turn_tool_calls(
         // Track consecutive/repeated tool failures so a broken tool surface cannot
         // silently burn the whole iteration budget. A different error message or a
         // successful call resets the streak.
-        if tool_output.starts_with("Tool execution error") || tool_output.starts_with("MCP execution error") {
+        if tool_output.starts_with("Tool execution error")
+            || tool_output.starts_with("MCP execution error")
+        {
             state.consecutive_tool_errors += 1;
             let signature = tool_output
                 .lines()
@@ -397,14 +501,14 @@ pub async fn execute_turn_tool_calls(
         if is_inspection {
             state.global_inspection_streak += 1;
             if state.current_phase == "discovery"
-                && let Some(ref path) = target_arg_file {
-                    let is_dir_inspection = tool_name == "workspace_list_dir"
-                        || path.ends_with('/')
-                        || !path.contains('.');
-                    if !is_dir_inspection && !state.locked_targets.contains(path) {
-                        state.locked_targets.push(path.clone());
-                    }
+                && let Some(ref path) = target_arg_file
+            {
+                let is_dir_inspection =
+                    tool_name == "workspace_list_dir" || path.ends_with('/') || !path.contains('.');
+                if !is_dir_inspection && !state.locked_targets.contains(path) {
+                    state.locked_targets.push(path.clone());
                 }
+            }
         }
 
         // Auto-invalidation and tracking on file modification
@@ -429,23 +533,26 @@ pub async fn execute_turn_tool_calls(
                     let _ = repository::mark_evidence_stale_by_file(project_id, path).await;
                 }
 
-                let targets_json = serde_json::to_string(&state.locked_targets).unwrap_or_else(|_| "[]".to_string());
+                let targets_json = serde_json::to_string(&state.locked_targets)
+                    .unwrap_or_else(|_| "[]".to_string());
                 let _ = repository::lock_goal_targets(&state.goal_id, &targets_json).await;
                 let _ = repository::update_goal_phase(&state.goal_id, "verification").await;
 
-                let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
+                let relevant_verifiers =
+                    crate::agent::languages::detect_verifiers_for_modified_files(
+                        allowed_folders,
+                        &state.modified_files,
+                    );
                 let primary_verify = if !relevant_verifiers.is_empty() {
                     relevant_verifiers.join(" && ")
                 } else {
                     crate::agent::languages::detect_primary_verification_command(allowed_folders)
                         .unwrap_or_else(|| "test/build runner".to_string())
                 };
-                state.ephemeral_directive = Some(
-                    format!(
-                        "ACTION EXECUTED: Target file updated successfully. You are now in VERIFICATION phase. Run the verification command using `workspace_run_command` (e.g. `{}`) to verify your changes.",
-                        primary_verify
-                    )
-                );
+                state.ephemeral_directive = Some(format!(
+                    "ACTION EXECUTED: Target file updated successfully. You are now in VERIFICATION phase. Run the verification command using `workspace_run_command` (e.g. `{}`) to verify your changes.",
+                    primary_verify
+                ));
             }
         } else if tool_name == "workspace_run_command" {
             state.global_inspection_streak = 0;
@@ -469,7 +576,10 @@ pub async fn execute_turn_tool_calls(
                     state.has_passed_verification = false;
 
                     let (grouped_diags, general_errs) = group_diagnostics_by_file(&tool_output);
-                    let is_env_err = crate::agent::diagnostics::is_environment_error(&tool_output, &grouped_diags);
+                    let is_env_err = crate::agent::diagnostics::is_environment_error(
+                        &tool_output,
+                        &grouped_diags,
+                    );
                     state.last_command_is_environment_error = is_env_err;
 
                     if !is_env_err {
@@ -479,7 +589,8 @@ pub async fn execute_turn_tool_calls(
                     }
 
                     // Populate deterministic Diagnostic Queue in RAM for this session
-                    let parsed_items = crate::agent::diagnostics::parse_diagnostic_items_from_output(&tool_output);
+                    let parsed_items =
+                        crate::agent::diagnostics::parse_diagnostic_items_from_output(&tool_output);
                     if !parsed_items.is_empty() {
                         crate::agent::diagnostics::set_session_diagnostic_queue(
                             session_id,
@@ -488,23 +599,32 @@ pub async fn execute_turn_tool_calls(
                         );
                     }
 
-                    let raw_compiler_head: String = tool_output
-                        .lines()
-                        .take(45)
-                        .collect::<Vec<_>>()
-                        .join("\n");
+                    let raw_compiler_head: String =
+                        tool_output.lines().take(45).collect::<Vec<_>>().join("\n");
 
                     let mut diag_bulletin = String::new();
 
                     if !grouped_diags.is_empty() {
-                        diag_bulletin.push_str("\n\n🚨 TARGET FILES WITH COMPILER ERRORS (Batch-edit these files):\n");
+                        diag_bulletin.push_str(
+                            "\n\n🚨 TARGET FILES WITH COMPILER ERRORS (Batch-edit these files):\n",
+                        );
                         for g in grouped_diags.iter().take(12) {
                             let lines_str = if !g.lines.is_empty() {
-                                format!(" (lines: {})", g.lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(", "))
+                                format!(
+                                    " (lines: {})",
+                                    g.lines
+                                        .iter()
+                                        .map(|l| l.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
                             } else {
                                 String::new()
                             };
-                            diag_bulletin.push_str(&format!("- `{}` -> {} error(s){}\n", g.file_path, g.error_count, lines_str));
+                            diag_bulletin.push_str(&format!(
+                                "- `{}` -> {} error(s){}\n",
+                                g.file_path, g.error_count, lines_str
+                            ));
                             for s in &g.sample_messages {
                                 diag_bulletin.push_str(&format!("    * {}\n", s));
                             }
@@ -514,7 +634,11 @@ pub async fn execute_turn_tool_calls(
                         if !extracted_diags.is_empty() {
                             diag_bulletin.push_str(&format!(
                                 "\n\n🚨 EXTRACTED COMPILER / RUNTIME DIAGNOSTICS:\n{}\n",
-                                extracted_diags.iter().map(|d| format!("- {}", d)).collect::<Vec<_>>().join("\n")
+                                extracted_diags
+                                    .iter()
+                                    .map(|d| format!("- {}", d))
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
                             ));
                         }
                     }
@@ -544,7 +668,8 @@ pub async fn execute_turn_tool_calls(
                 }
 
                 if crate::agent::languages::is_verification_command(cmd) {
-                    let was_rejected = is_breaker_trip || tool_output.starts_with("Tool execution rejected");
+                    let was_rejected =
+                        is_breaker_trip || tool_output.starts_with("Tool execution rejected");
                     let is_passed = !is_err && !was_rejected;
                     state.verification_attempts += 1;
 
@@ -558,10 +683,18 @@ pub async fn execute_turn_tool_calls(
                     // a lost verification row would let the goal conclude with no evidence.
                     let conclude_on_pass = is_passed && {
                         let cmd_lower = trimmed_cmd.to_lowercase();
-                        let all_detectable_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
-                        all_detectable_verifiers
-                            .into_iter()
-                            .all(|v| cmd_lower.contains(&v.to_lowercase()) || state.executed_commands.iter().any(|ec| ec.to_lowercase().contains(&v.to_lowercase())))
+                        let all_detectable_verifiers =
+                            crate::agent::languages::detect_verifiers_for_modified_files(
+                                allowed_folders,
+                                &state.modified_files,
+                            );
+                        all_detectable_verifiers.into_iter().all(|v| {
+                            cmd_lower.contains(&v.to_lowercase())
+                                || state
+                                    .executed_commands
+                                    .iter()
+                                    .any(|ec| ec.to_lowercase().contains(&v.to_lowercase()))
+                        })
                     };
 
                     let next_status: Option<&str> = if conclude_on_pass {
@@ -580,17 +713,33 @@ pub async fn execute_turn_tool_calls(
                         is_passed,
                         if is_passed { None } else { Some(&tool_output) },
                         next_status,
-                    ).await {
-                        crate::term_err!("[Verification] Failed to persist verification for goal {}: {}", state.goal_id, e);
+                    )
+                    .await
+                    {
+                        crate::term_err!(
+                            "[Verification] Failed to persist verification for goal {}: {}",
+                            state.goal_id,
+                            e
+                        );
                     }
 
                     if is_passed {
                         // Track which subdirectory was verified
                         let cmd_lower = trimmed_cmd.to_lowercase();
-                        let all_detectable_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(allowed_folders, &state.modified_files);
+                        let all_detectable_verifiers =
+                            crate::agent::languages::detect_verifiers_for_modified_files(
+                                allowed_folders,
+                                &state.modified_files,
+                            );
                         let remaining_unverified: Vec<String> = all_detectable_verifiers
                             .into_iter()
-                            .filter(|v| !cmd_lower.contains(&v.to_lowercase()) && !state.executed_commands.iter().any(|ec| ec.to_lowercase().contains(&v.to_lowercase())))
+                            .filter(|v| {
+                                !cmd_lower.contains(&v.to_lowercase())
+                                    && !state
+                                        .executed_commands
+                                        .iter()
+                                        .any(|ec| ec.to_lowercase().contains(&v.to_lowercase()))
+                            })
                             .collect();
 
                         if let Some(cwd) = args_val.get("cwd").and_then(|v| v.as_str()) {
@@ -629,7 +778,10 @@ pub async fn execute_turn_tool_calls(
                         if !grouped_diags.is_empty() {
                             diag_bulletin.push_str("\n\n🚨 VERIFICATION FAILURE TARGET FILES:\n");
                             for g in grouped_diags.iter().take(10) {
-                                diag_bulletin.push_str(&format!("- `{}` ({} errors at lines {:?})\n", g.file_path, g.error_count, g.lines));
+                                diag_bulletin.push_str(&format!(
+                                    "- `{}` ({} errors at lines {:?})\n",
+                                    g.file_path, g.error_count, g.lines
+                                ));
                             }
                         }
 
@@ -670,33 +822,45 @@ pub async fn execute_turn_tool_calls(
             );
         }
 
-        let is_file_inspection = tool_name == "workspace_read_file" || tool_name == "workspace_grep";
-        if is_file_inspection
-            && let Some(path) = target_arg_file.as_deref() {
-                let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
-                let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
-                let is_exact_dup = state.recent_read_slices.contains(&(path.to_string(), start_line, end_line));
-                if is_exact_dup || (start_line.is_none() && end_line.is_none()) {
-                    let count = state.consecutive_read_same_file.entry(path.to_string()).or_insert(0);
-                    *count += 1;
-                    if *count >= 5 {
-                        state.ephemeral_directive = Some(format!(
-                            "Notice: You have inspected `{path}` {count} times this turn. If your task requires code modifications, call `workspace_edit_file` now. If answering a question, respond directly to the user."
-                        ));
-                    }
+        let is_file_inspection =
+            tool_name == "workspace_read_file" || tool_name == "workspace_grep";
+        if is_file_inspection && let Some(path) = target_arg_file.as_deref() {
+            let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
+            let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
+            let is_exact_dup =
+                state
+                    .recent_read_slices
+                    .contains(&(path.to_string(), start_line, end_line));
+            if is_exact_dup || (start_line.is_none() && end_line.is_none()) {
+                let count = state
+                    .consecutive_read_same_file
+                    .entry(path.to_string())
+                    .or_insert(0);
+                *count += 1;
+                if *count >= 5 {
+                    state.ephemeral_directive = Some(format!(
+                        "Notice: You have inspected `{path}` {count} times this turn. If your task requires code modifications, call `workspace_edit_file` now. If answering a question, respond directly to the user."
+                    ));
                 }
             }
+        }
 
         // Auto-cache discovered file contents into Evidence Cache with true SHA-256 version
         if tool_name == "workspace_read_file" && !tool_output.starts_with("Tool execution error") {
             if let Some(file_path) = target_arg_file.as_deref() {
                 let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
                 let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
-                let preview_summary = format!("Read {} (lines {:?}-{:?})", file_path, start_line.unwrap_or(1), end_line.unwrap_or(0));
-                let file_ver = crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
-                    .ok()
-                    .and_then(|p| crate::agent::context_builder::compute_file_version(&p).ok())
-                    .unwrap_or_else(|| "live_mtime".to_string());
+                let preview_summary = format!(
+                    "Read {} (lines {:?}-{:?})",
+                    file_path,
+                    start_line.unwrap_or(1),
+                    end_line.unwrap_or(0)
+                );
+                let file_ver =
+                    crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
+                        .ok()
+                        .and_then(|p| crate::agent::context_builder::compute_file_version(&p).ok())
+                        .unwrap_or_else(|| "live_mtime".to_string());
                 let snippet: String = tool_output.chars().take(1500).collect();
                 // A read is context, not proof of work, so it ranks below any edited file.
                 // Freshly observed, so age is zero; recency decay is applied at read time.
@@ -714,36 +878,43 @@ pub async fn execute_turn_tool_calls(
                     &preview_summary,
                     Some(&snippet),
                     Some((&state.goal_id, score, true)),
-                ).await {
+                )
+                .await
+                {
                     crate::term_err!("[Evidence] Failed to cache read of {}: {}", file_path, e);
                 }
             }
-        } else if is_edit_op && !tool_output.starts_with("Tool execution error")
-            && let Some(file_path) = target_arg_file.as_deref() {
-                let preview_summary = format!("Modified/Created file {}", file_path);
-                let file_ver = crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
+        } else if is_edit_op
+            && !tool_output.starts_with("Tool execution error")
+            && let Some(file_path) = target_arg_file.as_deref()
+        {
+            let preview_summary = format!("Modified/Created file {}", file_path);
+            let file_ver =
+                crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
                     .ok()
                     .and_then(|p| crate::agent::context_builder::compute_file_version(&p).ok())
                     .unwrap_or_else(|| "live_mtime".to_string());
-                // An edited/created file is part of the solution, so it ranks at the top.
-                let score = crate::agent::evidence_ranking::rank_evidence(
-                    crate::agent::evidence_ranking::EvidenceOrigin::Modified,
-                    0,
-                );
-                if let Err(e) = repository::save_evidence_and_link(
-                    project_id,
-                    file_path,
-                    &file_ver,
-                    None,
-                    None,
-                    None,
-                    &preview_summary,
-                    None,
-                    Some((&state.goal_id, score, true)),
-                ).await {
-                    crate::term_err!("[Evidence] Failed to cache edit of {}: {}", file_path, e);
-                }
+            // An edited/created file is part of the solution, so it ranks at the top.
+            let score = crate::agent::evidence_ranking::rank_evidence(
+                crate::agent::evidence_ranking::EvidenceOrigin::Modified,
+                0,
+            );
+            if let Err(e) = repository::save_evidence_and_link(
+                project_id,
+                file_path,
+                &file_ver,
+                None,
+                None,
+                None,
+                &preview_summary,
+                None,
+                Some((&state.goal_id, score, true)),
+            )
+            .await
+            {
+                crate::term_err!("[Evidence] Failed to cache edit of {}: {}", file_path, e);
             }
+        }
 
         // Sanitize large command/terminal output before DB persistence (avoid truncating source code reads)
         let is_cmd_run = tool_name == "workspace_run_command";
@@ -828,19 +999,23 @@ fn extract_modified_paths_from_command(cmd: &str) -> Vec<String> {
         for part in cmd.split("open(") {
             let trimmed = part.trim_start();
             if (trimmed.starts_with('\'') || trimmed.starts_with('"'))
-                && let Some(quote) = trimmed.chars().next() {
-                    let rest = &trimmed[1..];
-                    if let Some((p, post)) = rest.split_once(quote)
-                        && (post.contains("'w'") || post.contains("\"w\"")
-                            || post.contains("'a'") || post.contains("\"a\"")
-                            || post.contains("'wb'") || post.contains("\"wb\""))
-                        {
-                            let clean = p.trim_start_matches("./").trim();
-                            if !clean.is_empty() && !paths.contains(&clean.to_string()) {
-                                paths.push(clean.to_string());
-                            }
-                        }
+                && let Some(quote) = trimmed.chars().next()
+            {
+                let rest = &trimmed[1..];
+                if let Some((p, post)) = rest.split_once(quote)
+                    && (post.contains("'w'")
+                        || post.contains("\"w\"")
+                        || post.contains("'a'")
+                        || post.contains("\"a\"")
+                        || post.contains("'wb'")
+                        || post.contains("\"wb\""))
+                {
+                    let clean = p.trim_start_matches("./").trim();
+                    if !clean.is_empty() && !paths.contains(&clean.to_string()) {
+                        paths.push(clean.to_string());
+                    }
                 }
+            }
         }
     }
 
@@ -870,12 +1045,33 @@ mod tests {
 
     #[test]
     fn test_infer_from_arguments_shape() {
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"command": "cargo test"})).as_deref(), Some("workspace_run_command"));
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"old_text": "a", "new_text": "b"})).as_deref(), Some("workspace_edit_file"));
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"file_path": "a.rs", "content": "x"})).as_deref(), Some("workspace_write_file"));
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"pattern": "fn main"})).as_deref(), Some("workspace_grep"));
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"path": "a.rs", "start_line": 1})).as_deref(), Some("workspace_read_file"));
-        assert_eq!(infer_tool_name_from_call("call_x", &json!({"path": "src", "depth": 2})).as_deref(), Some("workspace_list_dir"));
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"command": "cargo test"})).as_deref(),
+            Some("workspace_run_command")
+        );
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"old_text": "a", "new_text": "b"}))
+                .as_deref(),
+            Some("workspace_edit_file")
+        );
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"file_path": "a.rs", "content": "x"}))
+                .as_deref(),
+            Some("workspace_write_file")
+        );
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"pattern": "fn main"})).as_deref(),
+            Some("workspace_grep")
+        );
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"path": "a.rs", "start_line": 1}))
+                .as_deref(),
+            Some("workspace_read_file")
+        );
+        assert_eq!(
+            infer_tool_name_from_call("call_x", &json!({"path": "src", "depth": 2})).as_deref(),
+            Some("workspace_list_dir")
+        );
     }
 
     #[test]
