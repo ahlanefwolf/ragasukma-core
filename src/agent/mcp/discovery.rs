@@ -54,13 +54,13 @@ pub fn build_discovery_prompt(
         server.name, server.config
     );
 
-    if let Some(tools) = raw_tools {
-        if !tools.is_empty() {
-            prompt.push_str("Raw Tools Discovered via Native MCP Handshake (tools/list):\n```json\n");
-            let json_str = serde_json::to_string_pretty(tools).unwrap_or_else(|_| "[]".to_string());
-            prompt.push_str(&json_str);
-            prompt.push_str("\n```\n\n");
-        }
+    if let Some(tools) = raw_tools
+        && !tools.is_empty()
+    {
+        prompt.push_str("Raw Tools Discovered via Native MCP Handshake (tools/list):\n```json\n");
+        let json_str = serde_json::to_string_pretty(tools).unwrap_or_else(|_| "[]".to_string());
+        prompt.push_str(&json_str);
+        prompt.push_str("\n```\n\n");
     }
 
     prompt.push_str("Please extract and generate the Markdown specification for every tool provided above.");
@@ -292,12 +292,12 @@ pub async fn discover_tools(
     }
 
     // 3. Fallback: If native tools exist, convert them to Markdown specifications
-    if let Some(tools) = raw_tools {
-        if !tools.is_empty() {
-            let converted: Vec<DiscoveredTool> =
-                tools.iter().map(tool_definition_to_markdown).collect();
-            return Ok(converted);
-        }
+    if let Some(tools) = raw_tools
+        && !tools.is_empty()
+    {
+        let converted: Vec<DiscoveredTool> =
+            tools.iter().map(tool_definition_to_markdown).collect();
+        return Ok(converted);
     }
 
     // 4. Fallback: Parse tools directly from the server markdown content

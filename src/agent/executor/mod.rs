@@ -84,8 +84,8 @@ pub async fn execute_session_turn(
     // 4. Resolve the model first: the system prompt adapts to what the provider
     //    can actually do (e.g. native hidden reasoning vs. inline <thought> tags).
     let (model, is_codex) = state::resolve_model(&session, model_override).await;
-    let family = state::detect_provider_family(&model);
-    let capabilities = state::model_capabilities(family);
+    let _family = state::detect_provider_family(&model);
+    let capabilities = state::resolve_model_capabilities_async(&model).await;
 
     let system_prompt = prompt::build_system_prompt(prompt::AgentPromptContext {
         project: &project,
@@ -152,54 +152,50 @@ pub async fn execute_session_turn(
             capabilities.history_token_budget,
         );
 
-        // Stream from provider
-        // 7. Stream LLM with automatic retry for transient endpoint glitches
-        let mut retry_count = 0;
-        let max_stream_retries = 2;
-        let turn_res = loop {
-            match stream::execute_model_stream(
-                session_id,
-                &model,
-                is_codex,
-                session.temperature,
-                v1_messages.clone(),
-                dynamic_tools_schema.clone(),
-                state.force_final_text_only,
-                state.iteration,
-            )
-            .await
-            {
-                Ok(res) => break Ok(res),
-                Err(e) => {
-                    let err_str = e.to_string();
-                    let is_transient_glitch = err_str.contains("stream endpoint")
-                        || err_str.contains("Failed to send request")
-                        || err_str.contains("timeout")
-                        || err_str.contains("connection reset")
-                        || err_str.contains("broken pipe")
-                        || err_str.contains("502")
-                        || err_str.contains("503")
-                        || err_str.contains("504");
+        // Request context accounting: calculate and log total token breakdown
+        let sys_tokens = estimate_tokens(&system_prompt);
+        let msg_tokens = v1_messages
+            .iter()
+            .map(|m| {
+                m.content
+                    .as_ref()
+                    .and_then(|v| v.as_str())
+                    .map(estimate_tokens)
+                    .unwrap_or(0)
+            })
+            .sum::<usize>();
+        let tool_tokens = estimate_tokens(
+            &serde_json::to_string(&dynamic_tools_schema).unwrap_or_default(),
+        );
+        let total_est_tokens = sys_tokens + msg_tokens + tool_tokens;
 
-                    if is_transient_glitch && retry_count < max_stream_retries {
-                        retry_count += 1;
-                        tracing::warn!(
-                            "[Agent Stream Retry] Transient error on iteration {}: {}. Retrying attempt {}/{}...",
-                            state.iteration,
-                            err_str,
-                            retry_count,
-                            max_stream_retries
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(
-                            1500 * retry_count as u64,
-                        ))
-                        .await;
-                        continue;
-                    }
-                    break Err(e);
-                }
-            }
-        };
+        tracing::info!(
+            model = %model,
+            iteration = state.iteration,
+            sys_tokens,
+            msg_tokens,
+            tool_tokens,
+            total_est_tokens,
+            history_budget = capabilities.history_token_budget,
+            native_reasoning = capabilities.native_reasoning,
+            "Agent iteration request context accounting"
+        );
+
+        // 7. Stream from provider.
+        // Retries for transient failures (429/5xx/timeouts/connection drops) live in exactly one
+        // place: `stream::execute_model_stream`. Wrapping it in a second retry loop here used to
+        // multiply attempts (3 x 3 = 9 requests per failure) and amplify rate limiting.
+        let turn_res = stream::execute_model_stream(
+            session_id,
+            &model,
+            is_codex,
+            session.temperature,
+            v1_messages.clone(),
+            dynamic_tools_schema.clone(),
+            state.force_final_text_only,
+            state.iteration,
+        )
+        .await;
 
         let turn_res = match turn_res {
             Ok(res) => res,

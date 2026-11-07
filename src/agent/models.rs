@@ -42,12 +42,12 @@ pub struct McpServerTool {
 fn extract_execution_block(content: &str) -> Option<&str> {
     let trimmed = content.trim();
     // 1. Check YAML frontmatter (starts with ---)
-    if let Some(rest) = trimmed.strip_prefix("---") {
-        if let Some(idx) = rest.find("\n---") {
-            let fm = &rest[..idx];
-            if !fm.trim().is_empty() {
-                return Some(fm.trim());
-            }
+    if let Some(rest) = trimmed.strip_prefix("---")
+        && let Some(idx) = rest.find("\n---")
+    {
+        let fm = &rest[..idx];
+        if !fm.trim().is_empty() {
+            return Some(fm.trim());
         }
     }
 
@@ -74,10 +74,10 @@ fn parse_yaml_or_json_value(text: &str) -> serde_json::Value {
     }
 
     // Try parsing as JSON first
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        if val.is_object() {
-            return val;
-        }
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && val.is_object()
+    {
+        return val;
     }
 
     // Parse simple YAML lines
@@ -147,15 +147,11 @@ fn parse_yaml_or_json_value(text: &str) -> serde_json::Value {
                 if key_str == "env" {
                     is_in_map = true;
                 }
-            } else if val_str.starts_with('[') && val_str.ends_with(']') {
-                if let Ok(parsed_arr) = serde_json::from_str::<serde_json::Value>(val_str) {
-                    root.insert(key_str, parsed_arr);
-                } else {
-                    root.insert(key_str, serde_json::Value::String(val_str.to_string()));
-                }
-            } else if val_str.starts_with('{') && val_str.ends_with('}') {
-                if let Ok(parsed_obj) = serde_json::from_str::<serde_json::Value>(val_str) {
-                    root.insert(key_str, parsed_obj);
+            } else if (val_str.starts_with('[') && val_str.ends_with(']'))
+                || (val_str.starts_with('{') && val_str.ends_with('}'))
+            {
+                if let Ok(parsed_json) = serde_json::from_str::<serde_json::Value>(val_str) {
+                    root.insert(key_str, parsed_json);
                 } else {
                     root.insert(key_str, serde_json::Value::String(val_str.to_string()));
                 }
@@ -182,12 +178,11 @@ impl McpServer {
     pub fn config_value(&self) -> serde_json::Value {
         let trimmed = self.config.trim();
         // 1. Direct JSON (legacy / backward-compatible)
-        if trimmed.starts_with('{') {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                if val.is_object() {
-                    return val;
-                }
-            }
+        if trimmed.starts_with('{')
+            && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && val.is_object()
+        {
+            return val;
         }
 
         // 2. Extract execution block from Markdown

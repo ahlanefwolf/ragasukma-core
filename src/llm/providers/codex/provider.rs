@@ -542,10 +542,21 @@ impl CodexProvider {
                     return Ok(full_reply);
                 }
                 Err(e) => {
-                    let err_str = e.to_string();
-                    let is_rate_limit = err_str.contains("429")
-                        || err_str.to_lowercase().contains("rate limit")
-                        || err_str.to_lowercase().contains("capacity");
+                    let http_err = e.downcast_ref::<crate::llm::types::LlmHttpError>();
+                    let is_rate_limit = http_err
+                        .map(|h| h.status_code == 429)
+                        .unwrap_or_else(|| {
+                            let s = e.to_string().to_lowercase();
+                            s.contains("rate limit") || s.contains("capacity")
+                        });
+
+                    let is_auth_error = http_err
+                        .map(|h| h.status_code == 401)
+                        .unwrap_or_else(|| {
+                            let s = e.to_string();
+                            s.contains("token_revoked")
+                                || s.contains("invalidated oauth token")
+                        });
 
                     if is_rate_limit {
                         let cooldown = 60;
@@ -559,10 +570,7 @@ impl CodexProvider {
                             self.accounts[acc_idx].id,
                             model
                         );
-                    } else if err_str.contains("401")
-                        || err_str.contains("token_revoked")
-                        || err_str.contains("invalidated oauth token")
-                    {
+                    } else if is_auth_error {
                         crate::term_err!(
                             "[Codex] Account {} access token revoked or expired (401). Invalidating access token for refresh...",
                             self.accounts[acc_idx].id
@@ -721,10 +729,12 @@ impl CodexProvider {
             .send()
             .context("Failed to connect to Codex Responses API")?;
 
-        let status = res.status();
-        if !status.is_success() {
-            let err_body = res.text().unwrap_or_default();
-            bail!("Codex Responses API returned HTTP {}: {}", status, err_body);
+        if !res.status().is_success() {
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Codex Responses API",
+                res,
+            )
+            .into());
         }
 
         let mut full_content = String::new();
@@ -820,10 +830,12 @@ impl CodexProvider {
             .send()
             .context("Failed to connect to Codex Responses API")?;
 
-        let status = res.status();
-        if !status.is_success() {
-            let err_body = res.text().unwrap_or_default();
-            bail!("Codex Responses API returned HTTP {}: {}", status, err_body);
+        if !res.status().is_success() {
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Codex Responses API",
+                res,
+            )
+            .into());
         }
 
         let mut full_content = String::new();

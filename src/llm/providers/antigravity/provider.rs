@@ -472,10 +472,17 @@ impl AntigravityProvider {
                     return Ok(reply);
                 }
                 Err(err) => {
-                    let err_str = err.to_string();
-                    let is_rate_limit = err_str.contains("429")
-                        || err_str.to_lowercase().contains("resource_exhausted")
-                        || err_str.to_lowercase().contains("quota");
+                    let http_err = err.downcast_ref::<crate::llm::types::LlmHttpError>();
+                    let is_rate_limit = http_err
+                        .map(|h| h.status_code == 429)
+                        .unwrap_or_else(|| {
+                            let s = err.to_string().to_lowercase();
+                            s.contains("resource_exhausted") || s.contains("quota")
+                        });
+
+                    let is_auth_error = http_err
+                        .map(|h| h.status_code == 401 || h.status_code == 403)
+                        .unwrap_or(false);
 
                     if is_rate_limit {
                         let cooldown = 15 * 60;
@@ -488,13 +495,13 @@ impl AntigravityProvider {
                         );
                         let _ = self.save_accounts();
                         continue;
-                    } else if err_str.contains("401") || err_str.contains("403") {
+                    } else if is_auth_error {
                         self.accounts[acc_idx].access_token = None;
                         self.accounts[acc_idx].expires_at = 0;
                         crate::term_err!(
                             "[Antigravity] Account {} auth error: {}. Retrying next...",
                             self.accounts[acc_idx].id,
-                            err_str
+                            err
                         );
                         let _ = self.save_accounts();
                         continue;
@@ -586,10 +593,12 @@ impl AntigravityProvider {
             .send()
             .context("Failed to send request to Antigravity stream endpoint")?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let err_text = response.text().unwrap_or_default();
-            bail!("Antigravity HTTP error {status}: {err_text}");
+        if !response.status().is_success() {
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Antigravity",
+                response,
+            )
+            .into());
         }
 
         let reader = std::io::BufReader::new(response);
@@ -718,10 +727,17 @@ impl AntigravityProvider {
                     return Ok(reply);
                 }
                 Err(err) => {
-                    let err_str = err.to_string();
-                    let is_rate_limit = err_str.contains("429")
-                        || err_str.to_lowercase().contains("resource_exhausted")
-                        || err_str.to_lowercase().contains("quota");
+                    let http_err = err.downcast_ref::<crate::llm::types::LlmHttpError>();
+                    let is_rate_limit = http_err
+                        .map(|h| h.status_code == 429)
+                        .unwrap_or_else(|| {
+                            let s = err.to_string().to_lowercase();
+                            s.contains("resource_exhausted") || s.contains("quota")
+                        });
+
+                    let is_auth_error = http_err
+                        .map(|h| h.status_code == 401 || h.status_code == 403)
+                        .unwrap_or(false);
 
                     if is_rate_limit {
                         let cooldown = 15 * 60;
@@ -738,13 +754,13 @@ impl AntigravityProvider {
                         );
                         let _ = self.save_accounts();
                         continue;
-                    } else if err_str.contains("401") || err_str.contains("403") {
+                    } else if is_auth_error {
                         self.accounts[acc_idx].access_token = None;
                         self.accounts[acc_idx].expires_at = 0;
                         crate::term_err!(
                             "[Antigravity] Account {} auth error: {}. Retrying next...",
                             self.accounts[acc_idx].id,
-                            err_str
+                            err
                         );
                         let _ = self.save_accounts();
                         continue;

@@ -22,7 +22,7 @@ fn default_tts_volume() -> f32 {
     1.6
 }
 
-fn default_model() -> String {
+pub fn default_model() -> String {
     "openai/gpt-4o".to_string()
 }
 

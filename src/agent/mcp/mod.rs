@@ -478,9 +478,10 @@ pub async fn resolve_active_mcp_tools(
 
         // 1. First attempt to load tools from `mcp_server_tools` table
         let mut loaded_from_db = false;
-        if let Ok(db_tools) = crate::agent::repository::list_mcp_server_tools(&s.id).await {
-            if !db_tools.is_empty() {
-                for tool in db_tools {
+        if let Ok(db_tools) = crate::agent::repository::list_mcp_server_tools(&s.id).await
+            && !db_tools.is_empty()
+        {
+            for tool in db_tools {
                     let namespaced = format!("mcp__{}", tool.name);
                     // Synthesize definition from markdown spec
                     let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
@@ -496,9 +497,8 @@ pub async fn resolve_active_mcp_tools(
                 }
                 loaded_from_db = true;
             }
-        }
 
-        // 2. Fallback to live JSON-RPC list_tools if DB had no tools
+            // 2. Fallback to live JSON-RPC list_tools if DB had no tools
         if !loaded_from_db {
             let client = McpClient::new(config.clone());
             match client.list_tools().await {
@@ -545,10 +545,10 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
             continue;
         } else if in_json && trimmed.starts_with("```") {
             in_json = false;
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_buf) {
-                if let Some(params) = v.get("parameters").or_else(|| v.get("inputSchema")) {
-                    schema = params.clone();
-                }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_buf)
+                && let Some(params) = v.get("parameters").or_else(|| v.get("inputSchema"))
+            {
+                schema = params.clone();
             }
             continue;
         }

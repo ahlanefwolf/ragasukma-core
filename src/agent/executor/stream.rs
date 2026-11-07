@@ -23,16 +23,44 @@ const MAX_STREAM_ATTEMPTS: u32 = 3;
 /// First backoff step; later steps grow exponentially from here.
 const BASE_RETRY_DELAY_MS: u64 = 800;
 
-/// Ceiling for a single backoff sleep, applied after `Retry-After` is considered.
+/// Ceiling for our own exponential backoff (used when the server gives no `Retry-After`).
 const MAX_RETRY_DELAY_MS: u64 = 30_000;
+
+/// Longest server-requested `Retry-After` we are willing to sleep for. Anything longer means
+/// the quota window will not reset soon, so retrying early would only burn another request
+/// and earn another 429 — we fail fast with a clear message instead.
+const MAX_SERVER_RETRY_AFTER_MS: u64 = 120_000;
+
+/// Granularity of the retry sleep, so a user cancellation interrupts a long wait promptly.
+const RETRY_SLEEP_SLICE_MS: u64 = 250;
+
+/// What to do after a retryable failure.
+#[derive(Debug, PartialEq, Eq)]
+enum RetryDecision {
+    /// Sleep for the given duration, then retry.
+    Wait(std::time::Duration),
+    /// The server asked us to wait longer than `MAX_SERVER_RETRY_AFTER_MS`; do not retry.
+    GiveUp { server_wait: std::time::Duration },
+}
 
 /// Computes how long to wait before retry number `attempt` (1-based).
 ///
-/// Honours a server-provided `Retry-After` when present, otherwise applies exponential
-/// backoff with full jitter so parallel sessions do not retry in lockstep.
-fn retry_delay(attempt: u32, err_str: &str) -> std::time::Duration {
-    if let Some(server_ms) = parse_retry_after_ms(err_str) {
-        return std::time::Duration::from_millis(server_ms.min(MAX_RETRY_DELAY_MS));
+/// When a structured `LlmHttpError` is available, its `retry_after_header` is used directly.
+/// Otherwise, the error string is scanned for a `Retry-After` hint.
+/// Without either, exponential backoff with full jitter is applied so parallel sessions
+/// do not retry in lockstep.
+fn retry_delay(attempt: u32, err_str: &str, retry_after_header: Option<&str>) -> RetryDecision {
+    // Prefer the structured header value when available.
+    let server_ms = retry_after_header
+        .and_then(parse_retry_after_header_value)
+        .or_else(|| parse_retry_after_ms(err_str));
+
+    if let Some(ms) = server_ms {
+        let wait = std::time::Duration::from_millis(ms);
+        if ms > MAX_SERVER_RETRY_AFTER_MS {
+            return RetryDecision::GiveUp { server_wait: wait };
+        }
+        return RetryDecision::Wait(wait);
     }
 
     let exp = BASE_RETRY_DELAY_MS.saturating_mul(1u64 << attempt.saturating_sub(1).min(10));
@@ -42,28 +70,109 @@ fn retry_delay(attempt: u32, err_str: &str) -> std::time::Duration {
     let jitter_seed = jitter_seed();
     let half = capped / 2;
     let delay = half + (jitter_seed % half.max(1));
-    std::time::Duration::from_millis(delay)
+    RetryDecision::Wait(std::time::Duration::from_millis(delay))
+}
+
+/// Parses a raw `Retry-After` header value (delta-seconds, possibly fractional).
+fn parse_retry_after_header_value(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    let secs: f64 = trimmed.parse().ok()?;
+    if !secs.is_finite() || secs < 0.0 {
+        return None;
+    }
+    Some((secs * 1000.0).ceil().min(u64::MAX as f64) as u64)
 }
 
 /// Extracts a `Retry-After` hint from an error string, in milliseconds.
-/// Accepts both delta-seconds (`Retry-After: 5`) and structured JSON fields.
+///
+/// Supported forms (case-insensitive):
+/// - `Retry-After: 5` / `"retry-after": "5"` — delta-seconds (fractions like `1.5` allowed)
+/// - `retry-after-ms: 500` — milliseconds (sent by OpenAI/Azure-style APIs)
+///
+/// The value must directly follow the header name (only `:`, `=`, quotes and whitespace may sit
+/// in between), so unrelated numbers later in the message are never mistaken for a delay.
+/// HTTP-date values are not parsed and yield `None`, falling back to exponential backoff.
 fn parse_retry_after_ms(err_str: &str) -> Option<u64> {
     let lower = err_str.to_ascii_lowercase();
-    let idx = lower.find("retry-after")?;
-    let rest = &err_str[idx..];
+    let mut search_from = 0;
 
-    let digits: String = rest
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    while let Some(rel) = lower[search_from..].find("retry-after") {
+        let name_end = search_from + rel + "retry-after".len();
+        search_from = name_end;
 
-    if digits.is_empty() {
-        return None;
+        let (rest, is_millis) = match lower[name_end..].strip_prefix("-ms") {
+            Some(r) => (r, true),
+            None => (&lower[name_end..], false),
+        };
+
+        let value_str = rest.trim_start_matches(|c: char| {
+            c == ':' || c == '=' || c == '"' || c == '\'' || c.is_whitespace()
+        });
+        let number: String = value_str
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+
+        let Ok(value) = number.parse::<f64>() else {
+            continue;
+        };
+        if !value.is_finite() || value < 0.0 {
+            continue;
+        }
+
+        let ms = if is_millis { value } else { value * 1000.0 };
+        return Some(ms.ceil().min(u64::MAX as f64) as u64);
     }
 
-    let secs: u64 = digits.parse().ok()?;
-    Some(secs.saturating_mul(1000))
+    None
+}
+
+/// Returns true if `code` appears in `haystack` as a standalone number (not part of a longer
+/// digit run), e.g. matches "HTTP 429" but not "14290 tokens".
+fn contains_status_code(haystack: &str, code: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    haystack.match_indices(code).any(|(idx, _)| {
+        let before_ok = idx == 0 || !bytes[idx - 1].is_ascii_digit();
+        let end = idx + code.len();
+        let after_ok = end >= bytes.len() || !bytes[end].is_ascii_digit();
+        before_ok && after_ok
+    })
+}
+
+/// Single source of truth for which upstream failures are worth retrying.
+fn is_retryable_error(err_str: &str) -> bool {
+    let lower = err_str.to_ascii_lowercase();
+
+    ["429", "500", "502", "503", "504", "529"]
+        .iter()
+        .any(|code| contains_status_code(&lower, code))
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("overloaded")
+        || lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("connection closed")
+        || lower.contains("connection reset")
+        || lower.contains("broken pipe")
+        || lower.contains("failed to send request")
+        || lower.contains("stream endpoint")
+}
+
+/// Sleeps for `total`, waking every `RETRY_SLEEP_SLICE_MS` to check for cancellation.
+/// Returns `false` if the session was cancelled during the wait.
+fn cancellable_sleep(total: std::time::Duration, cancelled: &std::sync::atomic::AtomicBool) -> bool {
+    let deadline = std::time::Instant::now() + total;
+    loop {
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        let slice = (deadline - now).min(std::time::Duration::from_millis(RETRY_SLEEP_SLICE_MS));
+        std::thread::sleep(slice);
+    }
 }
 
 /// Cheap, dependency-free pseudo-random value used only to de-synchronise retries.
@@ -546,16 +655,44 @@ pub async fn execute_model_stream(
                         return Err(e);
                     }
 
-                    let is_retryable = err_str.contains("429")
-                        || err_str.contains("503")
-                        || err_str.contains("502")
-                        || err_str.contains("timeout")
-                        || err_str.contains("connection closed")
-                        || err_str.contains("broken pipe");
+                    // Try to extract structured HTTP error info via downcast.
+                    let (is_retryable, retry_after_hdr) =
+                        if let Some(http_err) = e.downcast_ref::<crate::llm::types::LlmHttpError>()
+                        {
+                            (
+                                http_err.is_retryable(),
+                                http_err.retry_after_header.clone(),
+                            )
+                        } else {
+                            // Fallback: parse the error string (for non-HTTP errors like
+                            // connection resets, timeouts, etc.)
+                            (is_retryable_error(&err_str), None)
+                        };
 
                     last_err = Some(e);
                     if attempt < MAX_STREAM_ATTEMPTS && is_retryable {
-                        let delay = retry_delay(attempt, err_str.as_str());
+                        let delay = match retry_delay(
+                            attempt,
+                            err_str.as_str(),
+                            retry_after_hdr.as_deref(),
+                        ) {
+                            RetryDecision::Wait(d) => d,
+                            RetryDecision::GiveUp { server_wait } => {
+                                let original = last_err
+                                    .take()
+                                    .map(|e| e.to_string())
+                                    .unwrap_or_default();
+                                return Err(anyhow::anyhow!(
+                                    "Provider rate limit: server asked to wait {}s before retrying \
+                                     (longer than the {}s retry ceiling), so the request was not \
+                                     retried. Try again later or switch model/provider. \
+                                     Original error: {}",
+                                    server_wait.as_secs(),
+                                    MAX_SERVER_RETRY_AFTER_MS / 1000,
+                                    original
+                                ));
+                            }
+                        };
                         broadcast_session_event(
                             &sess_id_clone,
                             AgentSessionEvent::StepInfo {
@@ -569,7 +706,9 @@ pub async fn execute_model_stream(
                                 )),
                             },
                         );
-                        std::thread::sleep(delay);
+                        if !cancellable_sleep(delay, &cancellation_flag) {
+                            anyhow::bail!("Session cancelled by user");
+                        }
                         continue;
                     } else {
                         break;
@@ -690,7 +829,10 @@ pub async fn execute_model_stream(
 #[cfg(test)]
 mod tests {
     use super::accumulate_tool_call_delta;
-    use super::{MAX_RETRY_DELAY_MS, parse_retry_after_ms, retry_delay};
+    use super::{
+        MAX_RETRY_DELAY_MS, RetryDecision, cancellable_sleep, is_retryable_error,
+        parse_retry_after_ms, retry_delay,
+    };
     use crate::llm::v1_engine::V1ToolCall;
     use std::collections::HashMap;
 
@@ -913,22 +1055,40 @@ mod tests {
         assert!(collected[0].function.name.is_empty());
     }
 
+    fn wait_of(decision: RetryDecision) -> std::time::Duration {
+        match decision {
+            RetryDecision::Wait(d) => d,
+            other => panic!("expected Wait, got {other:?}"),
+        }
+    }
+
     #[test]
     fn retry_delay_honours_retry_after_header() {
-        let d = retry_delay(1, "429 Too Many Requests, Retry-After: 4");
+        let d = wait_of(retry_delay(1, "429 Too Many Requests, Retry-After: 4", None));
         assert_eq!(d, std::time::Duration::from_millis(4_000));
     }
 
     #[test]
-    fn retry_delay_is_capped_by_ceiling() {
-        let d = retry_delay(1, "503 Retry-After: 99999");
-        assert_eq!(d, std::time::Duration::from_millis(MAX_RETRY_DELAY_MS));
+    fn retry_delay_honours_server_wait_above_backoff_cap() {
+        // 60s > MAX_RETRY_DELAY_MS (30s) but within the server ceiling: must NOT be shortened.
+        let d = wait_of(retry_delay(1, "429 Retry-After: 60", None));
+        assert_eq!(d, std::time::Duration::from_secs(60));
+    }
+
+    #[test]
+    fn retry_delay_gives_up_when_server_wait_too_long() {
+        assert_eq!(
+            retry_delay(1, "503 Retry-After: 99999", None),
+            RetryDecision::GiveUp {
+                server_wait: std::time::Duration::from_secs(99_999)
+            }
+        );
     }
 
     #[test]
     fn retry_delay_backs_off_and_never_exceeds_cap() {
         for attempt in 1..=6 {
-            let d = retry_delay(attempt, "503 service unavailable");
+            let d = wait_of(retry_delay(attempt, "503 service unavailable", None));
             assert!(d.as_millis() > 0, "attempt {attempt} must wait");
             assert!(
                 d.as_millis() <= MAX_RETRY_DELAY_MS as u128,
@@ -941,7 +1101,7 @@ mod tests {
     fn retry_delay_jitters_between_calls() {
         // Full jitter: repeated calls at the same attempt should not be byte-identical.
         let samples: Vec<u128> = (0..16)
-            .map(|_| retry_delay(3, "502 bad gateway").as_millis())
+            .map(|_| wait_of(retry_delay(3, "502 bad gateway", None)).as_millis())
             .collect();
         assert!(
             samples.windows(2).any(|w| w[0] != w[1]),
@@ -950,7 +1110,64 @@ mod tests {
     }
 
     #[test]
+    fn retry_delay_uses_structured_retry_after_header() {
+        // When a structured Retry-After header value is provided, it takes precedence
+        // over any value parsed from the error string.
+        let d = wait_of(retry_delay(1, "429 Too Many Requests", Some("10")));
+        assert_eq!(d, std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn retry_delay_structured_header_fractional() {
+        let d = wait_of(retry_delay(1, "429", Some("2.5")));
+        assert_eq!(d, std::time::Duration::from_millis(2_500));
+    }
+
+    #[test]
     fn parse_retry_after_ignores_absent_header() {
         assert_eq!(parse_retry_after_ms("connection closed"), None);
+    }
+
+    #[test]
+    fn parse_retry_after_supports_common_formats() {
+        assert_eq!(parse_retry_after_ms("Retry-After: 5"), Some(5_000));
+        assert_eq!(parse_retry_after_ms(r#"{"retry-after": "7"}"#), Some(7_000));
+        assert_eq!(parse_retry_after_ms("retry-after=1.5"), Some(1_500));
+        assert_eq!(parse_retry_after_ms("Retry-After-Ms: 500"), Some(500));
+    }
+
+    #[test]
+    fn parse_retry_after_does_not_grab_unrelated_numbers() {
+        // HTTP-date is unsupported -> None, rather than picking up "21" or "2015".
+        assert_eq!(
+            parse_retry_after_ms("Retry-After: Wed, 21 Oct 2015 07:28:00 GMT, 14290 tokens"),
+            None
+        );
+        // Header name with no value must not consume a later number.
+        assert_eq!(parse_retry_after_ms("retry-after missing; used 8000 tokens"), None);
+    }
+
+    #[test]
+    fn retryable_error_matches_status_codes_as_whole_numbers() {
+        assert!(is_retryable_error("HTTP 429 Too Many Requests"));
+        assert!(is_retryable_error("status: 503"));
+        assert!(is_retryable_error("Anthropic 529 overloaded_error"));
+        assert!(is_retryable_error("Failed to send request: connection reset"));
+        assert!(is_retryable_error("Error reading stream endpoint"));
+        // Numbers that merely contain a status code must not trigger a retry.
+        assert!(!is_retryable_error("prompt is 14290 tokens, max is 8192"));
+        assert!(!is_retryable_error("HTTP 400 Bad Request: invalid tool schema"));
+        assert!(!is_retryable_error("401 Unauthorized"));
+    }
+
+    #[test]
+    fn cancellable_sleep_stops_on_cancel() {
+        let flag = std::sync::atomic::AtomicBool::new(true);
+        let start = std::time::Instant::now();
+        assert!(!cancellable_sleep(std::time::Duration::from_secs(30), &flag));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        assert!(cancellable_sleep(std::time::Duration::from_millis(10), &flag));
     }
 }

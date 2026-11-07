@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, RwLock};
 
 use crate::agent::models::{Message, Project, Session};
 use crate::agent::repository;
@@ -264,7 +265,7 @@ pub async fn resolve_model(session: &Session, model_override: Option<&str>) -> (
             if !u.llm_model.trim().is_empty() {
                 u.llm_model
             } else {
-                "ag/gemini-2.5-flash".to_string()
+                crate::config::default_model()
             }
         });
 
@@ -291,7 +292,7 @@ const STANDARD_CONTEXT_HISTORY_BUDGET: usize = 12_000;
 /// What the selected provider can do natively. Derived from the provider family,
 /// never from a hardcoded model name, so new models inherit the right behaviour
 /// automatically.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelCapabilities {
     /// The provider emits a separate hidden reasoning channel (e.g.
     /// `reasoning_content`), so the prompt must NOT ask for `<thought>` tags.
@@ -362,6 +363,152 @@ pub fn model_capabilities(family: ModelProviderFamily) -> ModelCapabilities {
     }
 }
 
+/// In-memory RAM cache for resolved model capabilities.
+/// Thread-safe (RwLock) allowing concurrent read access across multiple parallel sessions.
+static MODEL_CAPABILITIES_CACHE: LazyLock<RwLock<HashMap<String, ModelCapabilities>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Returns cached model capabilities from RAM if already resolved.
+pub fn get_cached_capabilities(model: &str) -> Option<ModelCapabilities> {
+    MODEL_CAPABILITIES_CACHE.read().ok()?.get(model).copied()
+}
+
+/// Sets cached model capabilities into RAM.
+pub fn set_cached_capabilities(model: &str, capabilities: ModelCapabilities) {
+    if let Ok(mut cache) = MODEL_CAPABILITIES_CACHE.write() {
+        cache.insert(model.to_string(), capabilities);
+    }
+}
+
+/// Clears the in-memory RAM cache of model capabilities.
+pub fn clear_capabilities_cache() {
+    if let Ok(mut cache) = MODEL_CAPABILITIES_CACHE.write() {
+        cache.clear();
+    }
+}
+
+/// Resolves model capabilities dynamically and agnostically based on model identifier,
+/// prefix, discovered endpoint metadata in RAM, account settings, or heuristic architecture hints.
+/// Cached in RAM for concurrent $O(1)$ access across parallel sessions (same or different models).
+pub fn resolve_model_capabilities(model: &str) -> ModelCapabilities {
+    if let Some(cached) = get_cached_capabilities(model) {
+        return cached;
+    }
+
+    let caps = compute_model_capabilities(model);
+    set_cached_capabilities(model, caps);
+    caps
+}
+
+fn compute_model_capabilities(model: &str) -> ModelCapabilities {
+    let family = detect_provider_family(model);
+    match family {
+        ModelProviderFamily::Antigravity
+        | ModelProviderFamily::Claude
+        | ModelProviderFamily::Codex => {
+            let history_token_budget = LARGE_CONTEXT_HISTORY_BUDGET;
+            ModelCapabilities {
+                native_reasoning: true,
+                parallel_tool_calls: true,
+                history_token_budget,
+                evidence_prompt_limit: evidence_prompt_limit_for(history_token_budget),
+            }
+        }
+        ModelProviderFamily::Custom => {
+            // Check for explicit custom account configuration first
+            let prefix = model.split('/').next().unwrap_or("");
+            let custom_accounts = crate::llm::providers::custom::load_accounts();
+            let account = custom_accounts
+                .iter()
+                .find(|a| a.prefix.eq_ignore_ascii_case(prefix));
+
+            // Check discovered metadata in RAM (from /models discovery or endpoint introspection)
+            let discovered_meta = crate::llm::providers::custom::get_discovered_meta(model);
+
+            // 1. Resolve native reasoning capability
+            // Priority: Explicit Account Config > Discovered Metadata in RAM > Generic Capability Keywords
+            let native_reasoning = if let Some(Some(nr)) = account.map(|a| a.native_reasoning) {
+                nr
+            } else if let Some(Some(nr)) = discovered_meta.as_ref().map(|m| m.native_reasoning) {
+                nr
+            } else {
+                detect_generic_reasoning(model)
+            };
+
+            // 2. Resolve history token budget (context window scaling)
+            // Priority: Explicit Account Config > Discovered Metadata in RAM > Generic Context Window Suffix > Baseline Standard
+            let parsed_cw = parse_generic_context_window(model);
+            let history_token_budget = if let Some(Some(cw)) = account.map(|a| a.context_window) {
+                budget_for_context_window(cw)
+            } else if let Some(Some(cw)) = discovered_meta.as_ref().map(|m| m.context_window) {
+                budget_for_context_window(cw)
+            } else if let Some(cw) = parsed_cw {
+                budget_for_context_window(cw)
+            } else {
+                STANDARD_CONTEXT_HISTORY_BUDGET
+            };
+
+            ModelCapabilities {
+                native_reasoning,
+                parallel_tool_calls: true,
+                history_token_budget,
+                evidence_prompt_limit: evidence_prompt_limit_for(history_token_budget),
+            }
+        }
+    }
+}
+
+/// Extracts generic context window size (in tokens) from universal suffix patterns
+/// like "128k", "64k", "32k", "8k", "1m", "200k" without relying on brand names.
+fn parse_generic_context_window(model: &str) -> Option<usize> {
+    let lower = model.to_ascii_lowercase();
+    for part in lower.split(|c: char| !c.is_alphanumeric()) {
+        if let Some(num_str) = part.strip_suffix('k')
+            && let Ok(num) = num_str.parse::<usize>()
+            && (1..=4096).contains(&num)
+        {
+            return Some(num * 1024);
+        } else if let Some(num_str) = part.strip_suffix('m')
+            && let Ok(num) = num_str.parse::<usize>()
+            && (1..=32).contains(&num)
+        {
+            return Some(num * 1024 * 1024);
+        }
+    }
+    None
+}
+
+/// Dynamically scales history token budget based on context window size.
+fn budget_for_context_window(cw: usize) -> usize {
+    if cw <= 16_000 {
+        (cw * 60 / 100).max(4_000)
+    } else {
+        (cw * 60 / 100).clamp(STANDARD_CONTEXT_HISTORY_BUDGET, 96_000)
+    }
+}
+
+/// Detects if model identifier contains universal reasoning capability keywords
+/// without hardcoding specific vendor/model brands.
+fn detect_generic_reasoning(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.contains("reason") || lower.contains("think") || lower.contains("thought")
+}
+
+/// Asynchronously discovers and resolves model capabilities.
+/// If not already in RAM, it discovers provider metadata with a fast timeout, caches the result in RAM,
+/// and returns immediately. Safe for parallel sessions running different or identical models concurrently.
+pub async fn resolve_model_capabilities_async(model: &str) -> ModelCapabilities {
+    if let Some(cached) = get_cached_capabilities(model) {
+        return cached;
+    }
+
+    if detect_provider_family(model) == ModelProviderFamily::Custom {
+        let _ = crate::llm::providers::custom::discover_model_meta(model).await;
+    }
+
+    resolve_model_capabilities(model)
+}
+
 pub fn detect_provider_family(model: &str) -> ModelProviderFamily {
     if model.starts_with("cc/") {
         ModelProviderFamily::Claude
@@ -424,6 +571,108 @@ mod capability_tests {
         let a = model_capabilities(detect_provider_family("9r/cbai/deepseek-v4.1-flash"));
         let b = model_capabilities(detect_provider_family("9r/other/whatever-model"));
         assert_eq!(a.history_token_budget, b.history_token_budget);
+    }
+
+    #[test]
+    fn resolve_model_capabilities_intelligently_scales_and_detects_reasoning() {
+        // Claude / Codex / Antigravity
+        let claude = resolve_model_capabilities("cc/claude-3-7-sonnet");
+        assert!(claude.native_reasoning);
+        assert_eq!(claude.history_token_budget, LARGE_CONTEXT_HISTORY_BUDGET);
+
+        // Generic reasoning indicator (no brand hardcoded)
+        let reasoner = resolve_model_capabilities("custom/deepseek-reasoner");
+        assert!(reasoner.native_reasoning);
+
+        let thinking = resolve_model_capabilities("ollama/model-thinking:32b");
+        assert!(thinking.native_reasoning);
+
+        // Generic token-scaled models without brand hardcoding
+        let scaled_128k = resolve_model_capabilities("vllm/custom-model-128k");
+        assert!(!scaled_128k.native_reasoning);
+        assert_eq!(scaled_128k.history_token_budget, 128 * 1024 * 60 / 100);
+
+        // Small context model dynamically scaled
+        let small = resolve_model_capabilities("custom/my-model-8k");
+        assert_eq!(small.history_token_budget, 8 * 1024 * 60 / 100);
+    }
+
+    #[test]
+    fn discovered_meta_in_ram_scales_budget_and_reasoning() {
+        clear_capabilities_cache();
+        let model = "test-provider/custom-discovered-model";
+
+        // Inject discovered metadata into RAM (as if discovered from /models)
+        crate::llm::providers::custom::set_discovered_meta(
+            model,
+            crate::llm::providers::custom::DiscoveredModelMeta {
+                context_window: Some(65_536),
+                native_reasoning: Some(true),
+            },
+        );
+
+        let caps = resolve_model_capabilities(model);
+        assert!(caps.native_reasoning);
+        // 60% of 65_536 is 39_321
+        assert_eq!(caps.history_token_budget, 65_536 * 60 / 100);
+
+        // Subsequent call hits RAM cache directly
+        assert_eq!(get_cached_capabilities(model), Some(caps));
+    }
+
+    #[test]
+    fn parallel_sessions_can_run_concurrently_with_same_and_different_models() {
+        clear_capabilities_cache();
+
+        // Simulate 20 parallel session tasks running simultaneously across threads
+        // Some with the same model, some with different models
+        std::thread::scope(|s| {
+            let mut handles = Vec::new();
+
+            // 5 sessions running Model A (Generic reasoning)
+            for _ in 0..5 {
+                handles.push(s.spawn(|| {
+                    let caps = resolve_model_capabilities("parallel-custom/model-reasoner-shared");
+                    assert!(caps.native_reasoning);
+                }));
+            }
+
+            // 5 sessions running Model B (Generic 128k context)
+            for _ in 0..5 {
+                handles.push(s.spawn(|| {
+                    let caps = resolve_model_capabilities("parallel-custom/generic-128k");
+                    assert!(!caps.native_reasoning);
+                    assert_eq!(caps.history_token_budget, 128 * 1024 * 60 / 100);
+                }));
+            }
+
+            // 5 sessions running Model C (Claude 3.7)
+            for _ in 0..5 {
+                handles.push(s.spawn(|| {
+                    let caps = resolve_model_capabilities("cc/claude-3-7-sonnet");
+                    assert!(caps.native_reasoning);
+                    assert_eq!(caps.history_token_budget, LARGE_CONTEXT_HISTORY_BUDGET);
+                }));
+            }
+
+            // 5 sessions running Model D (Small 8k)
+            for _ in 0..5 {
+                handles.push(s.spawn(|| {
+                    let caps = resolve_model_capabilities("parallel-custom/small-8k-model");
+                    assert_eq!(caps.history_token_budget, 8 * 1024 * 60 / 100);
+                }));
+            }
+
+            for handle in handles {
+                handle.join().unwrap();
+            }
+        });
+
+        // Verify all 4 distinct models are cached in RAM
+        assert!(get_cached_capabilities("parallel-custom/model-reasoner-shared").is_some());
+        assert!(get_cached_capabilities("parallel-custom/generic-128k").is_some());
+        assert!(get_cached_capabilities("cc/claude-3-7-sonnet").is_some());
+        assert!(get_cached_capabilities("parallel-custom/small-8k-model").is_some());
     }
 }
 

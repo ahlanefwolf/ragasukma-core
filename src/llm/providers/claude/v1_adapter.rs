@@ -205,13 +205,43 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
         }
     }
 
+    // Enable Anthropic prompt caching on the second-to-last turn in multi-turn conversation
+    let msg_count = claude_messages.len();
+    if msg_count >= 2 {
+        let prev_idx = msg_count - 2;
+        if let Some(prev_msg) = claude_messages.get_mut(prev_idx).and_then(|m| m.as_object_mut()) {
+            if let Some(content_arr) = prev_msg.get_mut("content").and_then(|c| c.as_array_mut()) {
+                if let Some(last_block) = content_arr.last_mut().and_then(|b| b.as_object_mut()) {
+                    last_block.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+                }
+            } else if let Some(content_str) = prev_msg.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
+                prev_msg.insert("content".to_string(), json!([
+                    {
+                        "type": "text",
+                        "text": content_str,
+                        "cache_control": { "type": "ephemeral" }
+                    }
+                ]));
+            }
+        }
+    }
+
     let mut payload = json!({
         "model": clean_model,
         "messages": claude_messages,
-        "system": system_prompt,
         "stream": true,
         "max_tokens": req.max_tokens.unwrap_or(8192)
     });
+
+    if !system_prompt.trim().is_empty() {
+        payload["system"] = json!([
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": { "type": "ephemeral" }
+            }
+        ]);
+    }
 
     if let Some(tools) = &req.tools {
         let mut claude_tools = Vec::new();
@@ -244,6 +274,9 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
             }
         }
         if !claude_tools.is_empty() {
+            if let Some(last_tool) = claude_tools.last_mut().and_then(|t| t.as_object_mut()) {
+                last_tool.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+            }
             payload["tools"] = json!(claude_tools);
         }
     }

@@ -588,10 +588,12 @@ impl ClaudeProvider {
             .send()
             .context("Failed to connect to Claude Messages API")?;
 
-        let status = res.status();
-        if !status.is_success() {
-            let err_body = res.text().unwrap_or_default();
-            bail!("Claude Messages API returned HTTP {}: {}", status, err_body);
+        if !res.status().is_success() {
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Claude Messages API",
+                res,
+            )
+            .into());
         }
 
         let mut full_content = String::new();

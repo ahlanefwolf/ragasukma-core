@@ -117,29 +117,34 @@ pub fn prepare_turn_messages(
     // Bidirectional Tool Call Validation & Mapping:
     // 1. Collect all valid tool_call IDs and their associated function names emitted by assistant messages,
     // as well as files modified by subsequent edits for intermediate read compaction
-    let mut known_tool_call_ids = HashSet::new();
+    let mut known_tool_call_ids: HashSet<String> = HashSet::new();
     let mut tool_id_to_name: HashMap<String, String> = HashMap::new();
     let mut files_modified_in_window: HashSet<String> = HashSet::new();
+    let mut tool_id_to_file_path: HashMap<String, String> = HashMap::new();
     for msg in &messages_to_send {
         if msg.role == "assistant"
-            && let Some(ref tc_raw) = msg.tool_calls
-            && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(tc_raw)
+            && let Some(ref raw_tcs) = msg.tool_calls
+            && let Ok(calls) = serde_json::from_str::<Vec<V1ToolCall>>(raw_tcs)
         {
-            for c in calls {
-                known_tool_call_ids.insert(c.id.clone());
-                if (c.function.name == "workspace_edit_file"
-                    || c.function.name == "workspace_write_file")
-                    && let Ok(args_obj) =
-                        serde_json::from_str::<serde_json::Value>(&c.function.arguments)
-                    && let Some(path) = args_obj
-                        .get("file_path")
-                        .or_else(|| args_obj.get("path"))
-                        .and_then(|p| p.as_str())
+            for call in calls {
+                known_tool_call_ids.insert(call.id.clone());
+                tool_id_to_name.insert(call.id.clone(), call.function.name.clone());
+                // Collect file paths written/edited in this window
+                if matches!(
+                    call.function.name.as_str(),
+                    "workspace_write_file" | "workspace_edit_file"
+                ) && let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    && let Some(path) = args.get("file_path").and_then(|v| v.as_str())
                 {
-                    let clean = path.trim_start_matches("./").to_string();
+                    let clean = path.replace('\\', "/");
                     files_modified_in_window.insert(clean);
+                } else if call.function.name == "workspace_read_file"
+                    && let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    && let Some(path) = args.get("file_path").and_then(|v| v.as_str())
+                {
+                    let clean = path.replace('\\', "/");
+                    tool_id_to_file_path.insert(call.id.clone(), clean);
                 }
-                tool_id_to_name.insert(c.id, c.function.name);
             }
         }
     }
@@ -226,10 +231,20 @@ pub fn prepare_turn_messages(
                 .as_ref()
                 .and_then(|id| tool_id_to_name.get(id))
                 .map(|s| s.as_str());
+            let was_file_subsequently_modified = msg
+                .tool_call_id
+                .as_ref()
+                .and_then(|id| tool_id_to_file_path.get(id))
+                .map(|path| files_modified_in_window.contains(path))
+                .unwrap_or(false);
             msg.content.as_ref().map(|c| {
                 // If this is an older file read on a file that has subsequently been edited in this session,
                 // stub it out aggressively to save thousands of tokens
-                if tool_name == Some("workspace_read_file") && !is_recent_tail && c.len() > 600 {
+                if tool_name == Some("workspace_read_file")
+                    && was_file_subsequently_modified
+                    && !is_recent_tail
+                    && c.len() > 600
+                {
                     let first_line = c.lines().next().unwrap_or("").trim();
                     let compacted = format!(
                         "{}\n[... {} characters of prior file read omitted because this file was subsequently updated ...]",

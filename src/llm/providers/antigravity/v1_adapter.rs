@@ -4,7 +4,7 @@ use crate::llm::v1_engine::{
     V1ChatRequest, V1Response, V1StreamEvent, V1ToolCall, V1ToolCallFunction, extract_text_content,
     sanitize_function_name,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::sync::{LazyLock, Mutex};
@@ -995,10 +995,12 @@ where
         .send()
         .context("Failed to send request to Antigravity stream endpoint")?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let err_text = response.text().unwrap_or_default();
-        bail!("Antigravity HTTP error {status}: {err_text}");
+    if !response.status().is_success() {
+        return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+            "Antigravity",
+            response,
+        )
+        .into());
     }
 
     let reader = std::io::BufReader::new(response);

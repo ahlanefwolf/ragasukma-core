@@ -1,7 +1,34 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, RwLock};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DiscoveredModelMeta {
+    pub context_window: Option<usize>,
+    pub native_reasoning: Option<bool>,
+}
+
+static DISCOVERED_META_CACHE: LazyLock<RwLock<HashMap<String, DiscoveredModelMeta>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+pub fn get_discovered_meta(model_id: &str) -> Option<DiscoveredModelMeta> {
+    DISCOVERED_META_CACHE.read().ok()?.get(model_id).cloned()
+}
+
+pub fn set_discovered_meta(model_id: &str, meta: DiscoveredModelMeta) {
+    if let Ok(mut cache) = DISCOVERED_META_CACHE.write() {
+        cache.insert(model_id.to_string(), meta);
+    }
+}
+
+pub fn clear_discovered_meta() {
+    if let Ok(mut cache) = DISCOVERED_META_CACHE.write() {
+        cache.clear();
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CustomLlmAccount {
     pub prefix: String,
     pub name: String,
@@ -11,6 +38,10 @@ pub struct CustomLlmAccount {
     pub api_key: String,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "contextWindow")]
+    pub context_window: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "nativeReasoning")]
+    pub native_reasoning: Option<bool>,
 }
 
 fn accounts_path() -> PathBuf {
@@ -112,12 +143,106 @@ pub fn fetch_models() -> Vec<(String, String)> {
                     } else {
                         format!("{prefix}/{id}")
                     };
+
+                    let context_window = item
+                        .get("context_length")
+                        .or_else(|| item.get("max_model_len"))
+                        .or_else(|| item.get("context_window"))
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize);
+
+                    let native_reasoning = item
+                        .get("architecture")
+                        .and_then(|a| a.get("instruct_type"))
+                        .and_then(|s| s.as_str())
+                        .map(|s| s.contains("reasoner") || s.contains("thinking"));
+
+                    if context_window.is_some() || native_reasoning.is_some() {
+                        set_discovered_meta(
+                            &model_id,
+                            DiscoveredModelMeta {
+                                context_window,
+                                native_reasoning,
+                            },
+                        );
+                    }
+
                     models.push((model_id, account.name.clone()));
                 }
             }
         }
     }
     models
+}
+
+/// Queries the provider endpoint to introspect model metadata if not yet cached in RAM.
+/// Designed for parallel sessions: fast timeout (3s) so parallel turns are never blocked.
+pub async fn discover_model_meta(model_id: &str) -> Option<DiscoveredModelMeta> {
+    // 1. Fast path: check in-memory RAM cache
+    if let Some(cached) = get_discovered_meta(model_id) {
+        return Some(cached);
+    }
+
+    let prefix = model_id.split('/').next().unwrap_or("");
+    let raw_model = if let Some(stripped) = model_id.strip_prefix(&format!("{prefix}/")) {
+        stripped
+    } else {
+        model_id
+    };
+
+    let accounts = load_accounts();
+    let account = accounts
+        .into_iter()
+        .find(|a| a.enabled && a.prefix.eq_ignore_ascii_case(prefix))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?;
+
+    let base = account.base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/models")
+    } else {
+        format!("{base}/v1/models")
+    };
+
+    let mut request = client.get(&url);
+    if !account.api_key.trim().is_empty() {
+        request = request.bearer_auth(account.api_key.trim());
+    }
+
+    let response = request.send().await.ok()?;
+    let value = response.json::<serde_json::Value>().await.ok()?;
+
+    if let Some(items) = value.get("data").and_then(serde_json::Value::as_array) {
+        for item in items {
+            let id = item.get("id").and_then(serde_json::Value::as_str)?;
+            if id.eq_ignore_ascii_case(raw_model) || id.eq_ignore_ascii_case(model_id) {
+                let context_window = item
+                    .get("context_length")
+                    .or_else(|| item.get("max_model_len"))
+                    .or_else(|| item.get("context_window"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as usize);
+
+                let native_reasoning = item
+                    .get("architecture")
+                    .and_then(|a| a.get("instruct_type"))
+                    .and_then(|s| s.as_str())
+                    .map(|s| s.contains("reasoner") || s.contains("thinking"));
+
+                let meta = DiscoveredModelMeta {
+                    context_window,
+                    native_reasoning,
+                };
+                set_discovered_meta(model_id, meta.clone());
+                return Some(meta);
+            }
+        }
+    }
+
+    None
 }
 
 pub fn validate_account(account: &CustomLlmAccount) -> anyhow::Result<()> {
@@ -228,11 +353,11 @@ impl CustomProvider {
             .map_err(|e| anyhow::anyhow!("Custom provider request failed: {e}"))?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(anyhow::anyhow!(
-                "Custom provider returned error {status}: {body}"
-            ));
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Custom provider",
+                resp,
+            )
+            .into());
         }
 
         let reader = std::io::BufReader::new(resp);
@@ -334,10 +459,12 @@ impl CustomProvider {
         }
 
         let resp = request.send()?;
-        let status = resp.status();
-        if !status.is_success() {
-            let err_text = resp.text().unwrap_or_default();
-            anyhow::bail!("Custom LLM HTTP error {}: {}", status, err_text);
+        if !resp.status().is_success() {
+            return Err(crate::llm::types::LlmHttpError::from_blocking_response(
+                "Custom LLM",
+                resp,
+            )
+            .into());
         }
 
         use std::io::BufRead;
