@@ -238,7 +238,7 @@ pub async fn execute_session_turn(
                 );
 
                 release_turn_snapshots()?;
-                return Ok(err_msg_content);
+                return Err(anyhow::anyhow!(err_str));
             }
         };
 
