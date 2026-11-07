@@ -34,20 +34,24 @@ pub fn generate_pkce() -> (String, String) {
 }
 
 pub fn store_oauth_state(state: &str, code_verifier: &str) {
-    if let Ok(mut store) = OAUTH_STATE_STORE.lock() {
-        let now = Instant::now();
-        store.retain(|_, (_, exp)| *exp > now);
-        let expires_at = now + std::time::Duration::from_secs(600);
-        store.insert(state.to_string(), (code_verifier.to_string(), expires_at));
-    }
+    // Recover from a poisoned lock instead of silently dropping the state.
+    // Dropping it would surface later as a confusing "invalid state" error at
+    // callback time even though the real cause was an unrelated panic.
+    let mut store = OAUTH_STATE_STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    store.retain(|_, (_, exp)| *exp > now);
+    let expires_at = now + std::time::Duration::from_secs(600);
+    store.insert(state.to_string(), (code_verifier.to_string(), expires_at));
 }
 
 pub fn take_oauth_state(state: &str) -> Option<String> {
-    if let Ok(mut store) = OAUTH_STATE_STORE.lock() {
-        store.remove(state).map(|(v, _)| v)
-    } else {
-        None
-    }
+    // `None` must mean "unknown/expired state", never "the lock was poisoned".
+    let mut store = OAUTH_STATE_STORE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    store.remove(state).map(|(v, _)| v)
 }
 
 pub fn build_auth_url(redirect_uri: &str, state: &str, code_challenge: &str) -> String {
@@ -251,4 +255,42 @@ pub fn refresh_account_token(
     }
 
     Ok(token_data.access_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Poisons `OAUTH_STATE_STORE` by panicking while holding its lock.
+    fn poison_store() {
+        let _ = std::thread::spawn(|| {
+            let _guard = OAUTH_STATE_STORE.lock().unwrap();
+            panic!("intentional panic to poison the oauth state lock");
+        })
+        .join();
+    }
+
+    #[test]
+    fn store_and_take_survive_a_poisoned_lock() {
+        poison_store();
+        // Confirm the poison actually took effect, otherwise this test proves nothing.
+        assert!(
+            OAUTH_STATE_STORE.lock().is_err(),
+            "lock should be poisoned before exercising the code under test"
+        );
+
+        let state = "poison_test_state";
+        store_oauth_state(state, "the-verifier");
+
+        assert_eq!(
+            take_oauth_state(state).as_deref(),
+            Some("the-verifier"),
+            "a poisoned lock must not silently discard the stored OAuth state"
+        );
+    }
+
+    #[test]
+    fn take_unknown_state_returns_none() {
+        assert_eq!(take_oauth_state("never_stored_state"), None);
+    }
 }

@@ -15,6 +15,30 @@ use std::sync::Mutex;
 
 static ACCOUNTS_FILE_LOCK: Mutex<()> = Mutex::new(());
 
+/// Removes accounts matching `id_or_email` by **id or email**.
+///
+/// Codex accounts may be addressed by either identifier (unlike Claude, which
+/// matches on id only). Returns `true` when at least one account was removed.
+///
+/// An empty `id_or_email` is treated as a non-match: an account with no email
+/// must never be removable by passing an empty string.
+///
+/// Pure in-memory logic so the matching rule can be tested without touching disk.
+fn remove_account_entries(accounts: &mut Vec<CodexAccount>, id_or_email: &str) -> bool {
+    if id_or_email.is_empty() {
+        return false;
+    }
+    let initial_len = accounts.len();
+    accounts.retain(|a| {
+        // Match when the id matches, or when the account has an email that matches.
+        // An account without an email never matches via the email branch.
+        let matches =
+            a.id == id_or_email || a.email.as_deref().is_some_and(|email| email == id_or_email);
+        !matches
+    });
+    accounts.len() != initial_len
+}
+
 pub struct CodexProvider {
     pub accounts: Vec<CodexAccount>,
     pub current_index: usize,
@@ -263,10 +287,11 @@ impl CodexProvider {
     }
 
     pub fn remove_account(&mut self, id_or_email: &str) -> bool {
-        let initial_len = self.accounts.len();
-        self.accounts
-            .retain(|a| a.id != id_or_email && a.email.as_deref().unwrap_or("") != id_or_email);
-        if self.accounts.len() != initial_len {
+        let removed = remove_account_entries(&mut self.accounts, id_or_email);
+        if removed {
+            // Persistence failures are deliberately swallowed here: `remove_account`
+            // reports whether an account was *matched*, not whether the write hit disk.
+            // Callers that need durability must call `save_accounts()` and check it.
             let _ = self.save_accounts();
             // Sync across all candidate file locations to avoid restoration from stale candidate paths
             if let Ok(json) = serde_json::to_string_pretty(&self.accounts) {
@@ -274,10 +299,8 @@ impl CodexProvider {
                     let _ = std::fs::write(path, &json);
                 }
             }
-            true
-        } else {
-            false
         }
+        removed
     }
 
     pub fn list_account_infos(&self) -> Vec<CodexAccountInfo> {
@@ -896,5 +919,68 @@ mod tests {
         );
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("No OpenAI Codex accounts available"));
+    }
+
+    /// Builds a CodexAccount through the same deserialization path used in production,
+    /// so serde defaults are exercised instead of being bypassed by a literal struct.
+    fn account(id: &str, email: Option<&str>) -> CodexAccount {
+        let mut value = serde_json::json!({
+            "id": id,
+            "refresh_token": format!("refresh-{id}"),
+        });
+        if let Some(email) = email {
+            value["email"] = serde_json::Value::String(email.to_string());
+        }
+        serde_json::from_value(value).expect("test account must deserialize")
+    }
+
+    #[test]
+    fn remove_account_entries_removes_by_id() {
+        let mut accounts = vec![account("a", Some("a@example.com")), account("b", None)];
+
+        assert!(remove_account_entries(&mut accounts, "a"));
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "b");
+    }
+
+    #[test]
+    fn remove_account_entries_removes_by_email() {
+        // Codex accounts are addressable by email as well as id, unlike Claude.
+        // This locks the wider matching rule so it cannot silently regress to id-only.
+        let mut accounts = vec![account("a", Some("a@example.com")), account("b", None)];
+
+        assert!(remove_account_entries(&mut accounts, "a@example.com"));
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "b");
+    }
+
+    #[test]
+    fn remove_account_entries_reports_false_when_nothing_matched() {
+        let mut accounts = vec![account("a", Some("a@example.com"))];
+
+        assert!(!remove_account_entries(&mut accounts, "missing"));
+
+        assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn remove_account_entries_on_empty_list_is_false() {
+        let mut accounts: Vec<CodexAccount> = Vec::new();
+
+        assert!(!remove_account_entries(&mut accounts, "anything"));
+
+        assert!(accounts.is_empty());
+    }
+
+    #[test]
+    fn remove_account_entries_account_without_email_is_not_matched_by_empty_string() {
+        // `unwrap_or("")` must not make email-less accounts removable by passing "".
+        let mut accounts = vec![account("a", None)];
+
+        assert!(!remove_account_entries(&mut accounts, ""));
+
+        assert_eq!(accounts.len(), 1, "empty email key must not match an email-less account");
     }
 }

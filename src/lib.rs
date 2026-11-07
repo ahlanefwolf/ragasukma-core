@@ -23,6 +23,7 @@ pub mod assets;
 pub mod config;
 pub mod llm;
 pub mod repository;
+pub mod time_util;
 
 #[cfg(test)]
 mod tests {

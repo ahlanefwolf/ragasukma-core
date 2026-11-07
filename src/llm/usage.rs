@@ -312,42 +312,9 @@ pub async fn record_usage_async(
     .await
 }
 
-pub fn get_local_date_and_time() -> (String, String) {
-    #[cfg(unix)]
-    {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        unsafe {
-            let mut tm: libc::tm = std::mem::zeroed();
-            if libc::localtime_r(&now, &mut tm).is_null() {
-                return ("1970-01-01".to_string(), "00:00:00".to_string());
-            }
-            let date_str = format!(
-                "{:04}-{:02}-{:02}",
-                tm.tm_year + 1900,
-                tm.tm_mon + 1,
-                tm.tm_mday
-            );
-            let time_str = format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
-            (date_str, time_str)
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        let st = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        let date_str = format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay);
-        let time_str = format!("{:02}:{:02}:{:02}", st.wHour, st.wMinute, st.wSecond);
-        (date_str, time_str)
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        ("1970-01-01".to_string(), "00:00:00".to_string())
-    }
-}
+/// Delegates to the canonical helper so usage timestamps share the same
+/// timezone-aware format as the rest of the crate.
+pub use crate::time_util::get_local_date_and_time;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn record_usage_to_pool(

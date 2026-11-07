@@ -14,6 +14,18 @@ use std::sync::{LazyLock, Mutex};
 
 static ACCOUNTS_FILE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// Removes accounts whose `id` equals `id_or_email`.
+///
+/// Claude accounts match on `id` only (unlike Codex/Antigravity, which also
+/// match on email). Returns `true` when at least one account was removed.
+///
+/// Pure in-memory logic so the matching rule can be tested without touching disk.
+fn remove_account_entries(accounts: &mut Vec<ClaudeAccount>, id_or_email: &str) -> bool {
+    let before_len = accounts.len();
+    accounts.retain(|a| a.id != id_or_email);
+    accounts.len() < before_len
+}
+
 pub struct ClaudeProvider {
     pub accounts: Vec<ClaudeAccount>,
     pub current_index: usize,
@@ -194,10 +206,11 @@ impl ClaudeProvider {
     }
 
     pub fn remove_account(&mut self, id: &str) -> bool {
-        let before_len = self.accounts.len();
-        self.accounts.retain(|a| a.id != id);
-        let removed = self.accounts.len() < before_len;
+        let removed = remove_account_entries(&mut self.accounts, id);
         if removed {
+            // Persistence failures are deliberately swallowed here: `remove_account`
+            // reports whether an account was *matched*, not whether the write hit disk.
+            // Callers that need durability must call `save_accounts()` and check it.
             let _ = self.save_accounts();
         }
         removed
@@ -680,5 +693,74 @@ impl ClaudeProvider {
 
         self.execute_claude_stream_internal_v1(access_token, payload, &mut v1_handler)?;
         Ok(full_text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a ClaudeAccount through the same deserialization path used in production,
+    /// so serde defaults are exercised instead of being bypassed by a literal struct.
+    fn account(id: &str, email: Option<&str>) -> ClaudeAccount {
+        let mut value = serde_json::json!({
+            "id": id,
+            "refresh_token": format!("refresh-{id}"),
+        });
+        if let Some(email) = email {
+            value["email"] = serde_json::Value::String(email.to_string());
+        }
+        serde_json::from_value(value).expect("test account must deserialize")
+    }
+
+    #[test]
+    fn remove_account_entries_removes_by_id() {
+        let mut accounts = vec![account("a", Some("a@example.com")), account("b", None)];
+
+        assert!(remove_account_entries(&mut accounts, "a"));
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "b");
+    }
+
+    #[test]
+    fn remove_account_entries_matches_id_only_not_email() {
+        // Claude accounts are addressed by id only. Passing an email that happens to
+        // equal an account's email must NOT remove it; this locks the current contract
+        // so a future refactor cannot silently make email matching apply here.
+        let mut accounts = vec![account("a", Some("a@example.com"))];
+
+        assert!(!remove_account_entries(&mut accounts, "a@example.com"));
+
+        assert_eq!(accounts.len(), 1, "email must not be a removal key for Claude");
+        assert_eq!(accounts[0].id, "a");
+    }
+
+    #[test]
+    fn remove_account_entries_reports_false_when_nothing_matched() {
+        let mut accounts = vec![account("a", None)];
+
+        assert!(!remove_account_entries(&mut accounts, "missing"));
+
+        assert_eq!(accounts.len(), 1);
+    }
+
+    #[test]
+    fn remove_account_entries_on_empty_list_is_false() {
+        let mut accounts: Vec<ClaudeAccount> = Vec::new();
+
+        assert!(!remove_account_entries(&mut accounts, "anything"));
+
+        assert!(accounts.is_empty());
+    }
+
+    #[test]
+    fn remove_account_entries_removes_every_duplicate_id() {
+        let mut accounts = vec![account("dup", None), account("dup", None), account("keep", None)];
+
+        assert!(remove_account_entries(&mut accounts, "dup"));
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "keep");
     }
 }

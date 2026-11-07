@@ -25,9 +25,10 @@ pub use state::TurnState;
 /// store is global and lives as long as the process, so without this it grows with every
 /// file the agent ever touches. Called from every exit path of `execute_session_turn`,
 /// after the turn can no longer need to restore anything.
-fn release_turn_snapshots() {
-    crate::agent::executor::snapshot::WorkspaceSnapshot::global().clear();
+fn release_turn_snapshots() -> anyhow::Result<()> {
+    crate::agent::executor::snapshot::WorkspaceSnapshot::global().clear()
 }
+
 
 use crate::agent::models::AgentSessionEvent;
 use crate::agent::repository;
@@ -236,7 +237,7 @@ pub async fn execute_session_turn(
                     },
                 );
 
-                release_turn_snapshots();
+                release_turn_snapshots()?;
                 return Ok(err_msg_content);
             }
         };
@@ -453,12 +454,12 @@ pub async fn execute_session_turn(
             },
         );
 
-        release_turn_snapshots();
+        release_turn_snapshots()?;
         return Ok(content_to_save.to_string());
     }
 
     // Fallback: If iteration limit reached while still running tools
-    release_turn_snapshots();
+    release_turn_snapshots()?;
     gates::handle_iteration_limit_fallback(session_id, &state).await
 }
 
@@ -480,14 +481,20 @@ mod turn_boundary_tests {
 
         WorkspaceSnapshot::global().backup_file(&file).unwrap();
         assert!(
-            !WorkspaceSnapshot::global().tracked_files().is_empty(),
+            !WorkspaceSnapshot::global()
+                .tracked_files()
+                .expect("tracked_files must not fail on a healthy lock")
+                .is_empty(),
             "precondition: the turn must have recorded a backup"
         );
 
-        release_turn_snapshots();
+        release_turn_snapshots().expect("turn snapshots must be released");
 
         assert!(
-            WorkspaceSnapshot::global().tracked_files().is_empty(),
+            WorkspaceSnapshot::global()
+                .tracked_files()
+                .expect("tracked_files must not fail on a healthy lock")
+                .is_empty(),
             "the global store must be released when the turn ends"
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -120,6 +120,39 @@ pub fn is_session_task_running(session_id: &str) -> bool {
     map.contains_key(session_id)
 }
 
+/// Removes every per-session entry owned by this crate.
+///
+/// The broadcaster, running-task handle, and cancellation flag each live in a
+/// process-wide `HashMap` keyed by session id. Those maps are populated lazily on
+/// first use, so a long-running host that spins up many sessions would otherwise
+/// leak one entry (plus a capacity-2048 channel) per session forever.
+///
+/// Call this once a session has finished — successfully, cancelled, or errored.
+/// Any running task is aborted first so a stale handle cannot keep the session
+/// alive after its bookkeeping is gone.
+pub fn cleanup_session(session_id: &str) {
+    let aborted_task = {
+        let mut map = get_running_tasks_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.remove(session_id)
+    };
+    // Abort outside the map lock so a dropped task cannot re-enter cleanup.
+    if let Some(handle) = aborted_task {
+        handle.abort();
+    }
+
+    get_cancellation_flags_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(session_id);
+
+    get_broadcasters_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(session_id);
+}
+
 pub fn get_session_sender(session_id: &str) -> broadcast::Sender<AgentSessionEvent> {
     let mut map = get_broadcasters_map()
         .lock()
@@ -137,4 +170,76 @@ pub fn get_session_sender(session_id: &str) -> broadcast::Sender<AgentSessionEve
 pub fn broadcast_session_event(session_id: &str, event: AgentSessionEvent) {
     let sender = get_session_sender(session_id);
     let _ = sender.send(event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tracked_entry_count() -> usize {
+        let tasks = get_running_tasks_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        let flags = get_cancellation_flags_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        let senders = get_broadcasters_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
+        tasks + flags + senders
+    }
+
+    #[test]
+    fn cleanup_session_removes_all_three_registries() {
+        // Populate every registry for a fresh session id.
+        let session = "cleanup_test_session_a";
+        let _flag = get_session_cancellation_flag(session);
+        let _sender = get_session_sender(session);
+        let handle = tokio::runtime::Runtime::new()
+            .unwrap()
+            .spawn(async {})
+            .abort_handle();
+        register_session_task(session, handle);
+
+        assert_eq!(
+            tracked_entry_count(),
+            3,
+            "session should own one entry in each of the three registries"
+        );
+
+        cleanup_session(session);
+
+        assert_eq!(
+            tracked_entry_count(),
+            0,
+            "cleanup_session must release task handle, cancellation flag, and broadcaster"
+        );
+    }
+
+    #[test]
+    fn cleanup_session_is_idempotent_and_scoped() {
+        let kept = "cleanup_test_session_keep";
+        let removed = "cleanup_test_session_remove";
+        let _ = get_session_sender(kept);
+        let _ = get_session_sender(removed);
+
+        cleanup_session(removed);
+        cleanup_session(removed); // second call must not panic
+
+        // The untouched session survived; only the cleaned one is gone.
+        assert!(get_broadcasters_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(kept));
+        assert!(!get_broadcasters_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(removed));
+
+        // Leave no residue for other tests sharing the process-global maps.
+        cleanup_session(kept);
+    }
 }

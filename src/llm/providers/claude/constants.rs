@@ -1,4 +1,5 @@
 pub const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+pub const CLAUDE_REDIRECT_URI: &str = "http://localhost:54321/callback";
 pub const CLAUDE_AUTH_URL: &str = "https://claude.ai/oauth/authorize";
 pub const CLAUDE_TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
 pub const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
