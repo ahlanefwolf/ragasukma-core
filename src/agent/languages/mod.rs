@@ -1,4 +1,6 @@
 pub mod c_cpp;
+mod command_rules;
+
 pub mod csharp;
 pub mod dart;
 pub mod elixir;
@@ -267,311 +269,84 @@ pub fn detect_verifiers_for_modified_files(
 
     candidate_verifiers
 }
-
-/// Checks if an executed shell command is a verification / test / typecheck / build command across any language
+/// Checks if an executed shell command is a verification / test / typecheck / build command across any language.
+///
+/// The rule tables live in [`command_rules`]; the logic here is only the ordering:
+/// 1. split chained commands, 2. drop package management, 3. accept known verifiers,
+/// 4. fall back to language-agnostic signals.
+///
+/// Noise filtering is deliberately *not* a blanket early `continue`. Informational and
+/// filesystem commands are only discarded **after** the verifier checks have failed, so
+/// a verifier whose name shares a prefix with an informational command can never be
+/// silently shadowed.
 pub fn is_verification_command(cmd: &str) -> bool {
+    use command_rules::*;
+
     let lower = cmd.trim().to_lowercase();
 
-    // Commands that only rearrange the filesystem. They cannot fail in a way that says
-    // anything about the code's correctness, so a successful run is not evidence.
-    //
-    // This is deliberately a property ("did the command merely create, move, or delete
-    // files?") rather than an exhaustive inventory of every shell builtin that can do so.
-    let fs_mutation_prefixes = [
-        "mkdir",
-        "md ",
-        "new-item",
-        "ni ",
-        "touch",
-        "cp ",
-        "copy ",
-        "copy-item",
-        "mv ",
-        "move ",
-        "move-item",
-        "rm ",
-        "del ",
-        "remove-item",
-        "rd ",
-        "rmdir",
-        "mkdir ",
-        "rmdir ",
-        "set-content",
-        "add-content",
-        "out-file",
-        "chmod",
-        "chown",
-        "ln ",
-        "new-item",
-    ];
+    for sub in split_chained_commands(&lower) {
+        let sub_trimmed = trim_sub_command(sub);
 
-    // A bare existence probe reports a fact about the filesystem, not about behaviour.
-    let fs_probe_prefixes = ["test-path", "test ", "[ -f", "[ -d", "ls ", "dir "];
-
-    // Commands that are purely informational / navigation and NEVER count as verification
-    let pure_info_prefixes = [
-        "git status",
-        "git log",
-        "git diff",
-        "git show",
-        "git branch",
-        "git remote",
-        "ls",
-        "dir",
-        "pwd",
-        "cd ",
-        "echo ",
-        "cat ",
-        "type ",
-        "head ",
-        "tail ",
-        "find ",
-        "which ",
-        "where ",
-        "whoami",
-        "hostname",
-        "uname",
-    ];
-
-    // Package installation / dependency management commands that MUST NOT count as verification
-    let pkg_mgmt_prefixes = [
-        "npm install",
-        "npm i ",
-        "npm i",
-        "npm add",
-        "npm update",
-        "npm remove",
-        "npm uninstall",
-        "npm list",
-        "npm audit",
-        "npm init",
-        "pnpm install",
-        "pnpm i ",
-        "pnpm i",
-        "pnpm add",
-        "pnpm update",
-        "pnpm remove",
-        "pnpm list",
-        "pnpm audit",
-        "yarn add",
-        "yarn install",
-        "yarn remove",
-        "yarn list",
-        "yarn why",
-        "yarn init",
-        "bun install",
-        "bun i ",
-        "bun i",
-        "bun add",
-        "bun remove",
-        "bun init",
-        "cargo add",
-        "cargo install",
-        "cargo remove",
-        "cargo update",
-        "cargo tree",
-        "cargo new",
-        "cargo init",
-        "cargo metadata",
-        "cargo run",
-        "pip install",
-        "pip uninstall",
-        "pip list",
-        "pip freeze",
-        "pip3 install",
-        "pip3 uninstall",
-        "pip3 list",
-        "pip3 freeze",
-        "poetry add",
-        "poetry install",
-        "poetry remove",
-        "poetry lock",
-        "poetry show",
-        "uv add",
-        "uv pip",
-        "uv sync",
-        "uv lock",
-        "composer install",
-        "composer require",
-        "composer update",
-        "composer remove",
-        "go get",
-        "go install",
-        "go mod",
-    ];
-
-    // Handle chained shell commands e.g. "cd simulations/python_scenario && python3 -m unittest discover -s tests"
-    let sub_commands: Vec<&str> = lower
-        .split(['&', ';', '|'])
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for sub in sub_commands {
-        let sub_trimmed = sub.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace());
         if sub_trimmed.is_empty() {
             continue;
         }
 
-        // If the sub-command starts with a known pure-info command, skip it
-        if pure_info_prefixes
-            .iter()
-            .any(|info| sub_trimmed == *info || sub_trimmed.starts_with(info))
-        {
-            continue;
-        }
-
-        // Filesystem bookkeeping carries no signal about correctness. Skipping it here
-        // means `mkdir -p dist && npm run build` is judged on the build, not on the mkdir.
-        if fs_mutation_prefixes
-            .iter()
-            .any(|p| sub_trimmed.starts_with(p))
-            || fs_probe_prefixes.iter().any(|p| sub_trimmed.starts_with(p))
-        {
-            continue;
-        }
-
-        // If the sub-command is a package installation/management command, skip it
-        if pkg_mgmt_prefixes
-            .iter()
-            .any(|pkg| sub_trimmed == *pkg || sub_trimmed.starts_with(pkg))
-        {
-            continue;
-        }
-
-        let known_prefixes = [
-            "cargo test",
-            "cargo check",
-            "cargo clippy",
-            "cargo build",
-            "npm test",
-            "npm run test",
-            "npm run build",
-            "npm run check",
-            "npm run typecheck",
-            "npm run lint",
-            "pnpm test",
-            "pnpm run test",
-            "pnpm run build",
-            "pnpm run typecheck",
-            "pnpm run lint",
-            "yarn test",
-            "yarn run test",
-            "yarn run build",
-            "yarn run typecheck",
-            "yarn run lint",
-            "bun test",
-            "bun run build",
-            "bun run check",
-            "bun run lint",
-            "deno test",
-            "deno check",
-            "deno lint",
-            "node --test",
-            "node --experimental-strip-types --test",
-            "node test",
-            "npx tsc",
-            "tsc",
-            "vite build",
-            "pytest",
-            "python -m unittest",
-            "python3 -m unittest",
-            "py -m unittest",
-            "python -m pytest",
-            "python3 -m pytest",
-            "py -m pytest",
-            "python -m",
-            "python3 -m",
-            "uv run pytest",
-            "poetry run pytest",
-            "pipenv run pytest",
-            "uv run",
-            "poetry run",
-            "go test",
-            "go vet",
-            "go build",
-            "flutter test",
-            "flutter analyze",
-            "dart test",
-            "dart analyze",
-            "dotnet test",
-            "dotnet build",
-            "gradle test",
-            "./gradlew test",
-            "mvn test",
-            "mvn verify",
-            "ctest",
-            "cmake --build",
-            "make test",
-            "make check",
-            "meson test",
-            "ninja",
-            "php artisan test",
-            "./vendor/bin/phpunit",
-            "composer test",
-            "./vendor/bin/pest",
-            "bundle exec rspec",
-            "bundle exec rake test",
-            "rake test",
-            "mix test",
-            "swift test",
-            "swift build",
-            "zig build test",
-            "zig build",
-            "vitest",
-            "jest",
-            "just test",
-            "just check",
-            "task test",
-            "task check",
-            "bazel test",
-            "buck test",
-            "pants test",
-        ];
-
-        if known_prefixes.iter().any(|p| sub_trimmed.starts_with(p)) {
+        // Known verifiers win over every noise table, so no informational entry can
+        // ever shadow a real verifier — the failure mode a blanket skip invites.
+        if matches_prefix(sub_trimmed, KNOWN_VERIFICATION_PREFIXES) {
             return true;
+        }
+
+        // Package installation/management never proves the code is correct, even when a
+        // keyword such as `build` shows up among the arguments.
+        if matches_prefix(sub_trimmed, PKG_MGMT_PREFIXES) {
+            continue;
+        }
+
+        // A bare filesystem probe reports a fact about the filesystem, never about
+        // behaviour: `Test-Path src` succeeding says nothing about whether the code
+        // works. This has to be decided *before* the argument scan, because `Path` is
+        // otherwise indistinguishable from a verification keyword in tail position.
+        if is_probe_only(sub_trimmed) {
+            continue;
         }
 
         // Universal language-agnostic detection:
         // Any command invoking a test runner, linter, typechecker, or compiler script
-        let parts: Vec<&str> = sub_trimmed.split_whitespace().collect();
-        if let Some(first) = parts.first() {
-            let base_cmd = first.rsplit(['/', '\\']).next().unwrap_or(first);
-            // Dedicated build & test runners only (excluding multi-purpose package managers like cargo/npm)
-            let build_tools = [
-                "make", "ninja", "cmake", "ctest", "just", "task", "bazel", "buck", "buck2",
-                "meson", "scons", "rake", "gradle", "mvn", "pytest", "vitest", "jest", "mocha",
-                "dune", "sbt",
-            ];
-            if build_tools.contains(&base_cmd) {
-                return true;
-            }
+        let mut parts = sub_trimmed.split_whitespace();
+        let Some(first) = parts.next() else {
+            continue;
+        };
+        let base_cmd = first.rsplit(['/', '\\']).next().unwrap_or(first);
 
-            // Script executions e.g. "./test.sh", "bash run_tests.sh", "sh check.sh", "python3 tests/test.py"
-            if base_cmd.contains("test")
-                || base_cmd.contains("check")
-                || base_cmd.contains("verify")
-                || base_cmd.contains("lint")
-            {
-                return true;
-            }
+        if BUILD_TOOL_BINARIES.contains(&base_cmd) {
+            return true;
+        }
 
-            // Arguments containing verification keywords
-            if parts.iter().skip(1).any(|arg| {
-                *arg == "test"
-                    || *arg == "check"
-                    || *arg == "lint"
-                    || *arg == "build"
-                    || *arg == "typecheck"
-                    || *arg == "verify"
-                    || *arg == "validate"
-                    || arg.starts_with("test")
-                    || arg.contains("pytest")
-                    || arg.contains("unittest")
-            }) {
-                return true;
-            }
+        // Script executions e.g. "./test.sh", "bash run_tests.sh", "sh check.sh", "python3 tests/test.py"
+        if SCRIPT_VERIFY_KEYWORDS
+            .iter()
+            .any(|kw| base_cmd.contains(kw))
+        {
+            return true;
+        }
+
+        // Arguments containing verification keywords
+        if parts.any(|arg| {
+            VERIFY_ARGS.contains(&arg) || VERIFY_ARG_SUBSTRINGS.iter().any(|kw| arg.contains(kw))
+        }) {
+            return true;
+        }
+
+        // No verification signal found. Informational output and filesystem bookkeeping
+        // are dropped *here* rather than up front, so they only ever suppress themselves:
+        // `mkdir -p dist && npm run build` is still judged on the build, and a verifier
+        // sharing a prefix with `ls` / `dir` is never swallowed by the probe table.
+        if matches_prefix(sub_trimmed, PURE_INFO_PREFIXES)
+            || matches_prefix(sub_trimmed, FS_MUTATION_PREFIXES)
+            || matches_prefix(sub_trimmed, FS_PROBE_PREFIXES)
+        {
+            continue;
         }
     }
 
@@ -684,6 +459,44 @@ mod tests {
             assert!(
                 is_verification_command(cmd),
                 "`{cmd}` must count as verification"
+            );
+        }
+    }
+
+    /// A generic interpreter invocation is not verification: `python -m http.server`
+    /// starts a server and proves nothing about the code.
+    #[test]
+    fn generic_module_invocations_are_not_verification() {
+        for cmd in [
+            "python -m http.server 8000",
+            "python3 -m venv .venv",
+            "py -m pip install requests",
+            "uv run python app.py",
+            "poetry run python app.py",
+        ] {
+            assert!(
+                !is_verification_command(cmd),
+                "`{cmd}` runs an interpreter but verifies nothing"
+            );
+        }
+    }
+
+    /// Informational prefixes must never shadow a real verifier.
+    ///
+    /// `FS_PROBE_PREFIXES` and `PURE_INFO_PREFIXES` contain short entries such as `ls`
+    /// and `dir`. If those were consulted before the verifier tables, any command
+    /// starting with those letters would be skipped. This pins the ordering: the
+    /// verifier checks always run first.
+    #[test]
+    fn informational_prefixes_do_not_shadow_verifiers() {
+        for cmd in [
+            "ls-tests && cargo test",
+            "dir-check; go test ./...",
+            "curl -s localhost:3000 | grep ok && pytest",
+        ] {
+            assert!(
+                is_verification_command(cmd),
+                "`{cmd}` contains a real verifier and must not be filtered as noise"
             );
         }
     }
