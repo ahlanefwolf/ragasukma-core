@@ -1,6 +1,8 @@
 // Agent MCP (Model Context Protocol) integration module
 // Fully language-agnostic implementation supporting stdio and HTTP/SSE JSON-RPC 2.0 transports.
 
+pub mod discovery;
+
 pub mod types {
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
@@ -450,7 +452,7 @@ impl From<&crate::agent::models::McpServer> for McpServerConfig {
     }
 }
 
-/// Represents an active MCP tool discovered from an active project MCP server
+/// Represents an active MCP tool discovered from an active project MCP server or DB cache
 #[derive(Debug, Clone)]
 pub struct ActiveMcpTool {
     pub server_id: String,
@@ -459,9 +461,11 @@ pub struct ActiveMcpTool {
     pub namespaced_name: String,
     pub definition: McpToolDefinition,
     pub server_config: McpServerConfig,
+    pub markdown_spec: Option<String>,
 }
 
-/// Discovers tools from all active MCP servers for a project
+/// Discovers tools from all active MCP servers for a project, prioritizing synced tools in DB
+/// while falling back to live `tools/list` handshake when available.
 pub async fn resolve_active_mcp_tools(
     servers: &[crate::agent::models::McpServer],
 ) -> Vec<ActiveMcpTool> {
@@ -471,27 +475,103 @@ pub async fn resolve_active_mcp_tools(
             continue;
         }
         let config: McpServerConfig = s.into();
-        let client = McpClient::new(config.clone());
-        match client.list_tools().await {
-            Ok(tools) => {
-                for t in tools {
-                    let namespaced = format!("mcp__{}", t.name);
+
+        // 1. First attempt to load tools from `mcp_server_tools` table
+        let mut loaded_from_db = false;
+        if let Ok(db_tools) = crate::agent::repository::list_mcp_server_tools(&s.id).await {
+            if !db_tools.is_empty() {
+                for tool in db_tools {
+                    let namespaced = format!("mcp__{}", tool.name);
+                    // Synthesize definition from markdown spec
+                    let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
                     resolved.push(ActiveMcpTool {
                         server_id: config.id.clone(),
                         server_name: config.name.clone(),
-                        original_name: t.name.clone(),
+                        original_name: tool.name.clone(),
                         namespaced_name: namespaced,
-                        definition: t,
+                        definition: def,
                         server_config: config.clone(),
+                        markdown_spec: Some(tool.config),
                     });
                 }
+                loaded_from_db = true;
             }
-            Err(e) => {
-                crate::term_err!("[MCP] Failed to list tools from '{}': {}", s.name, e);
+        }
+
+        // 2. Fallback to live JSON-RPC list_tools if DB had no tools
+        if !loaded_from_db {
+            let client = McpClient::new(config.clone());
+            match client.list_tools().await {
+                Ok(tools) => {
+                    for t in tools {
+                        let namespaced = format!("mcp__{}", t.name);
+                        resolved.push(ActiveMcpTool {
+                            server_id: config.id.clone(),
+                            server_name: config.name.clone(),
+                            original_name: t.name.clone(),
+                            namespaced_name: namespaced,
+                            definition: t,
+                            server_config: config.clone(),
+                            markdown_spec: None,
+                        });
+                    }
+                }
+                Err(e) => {
+                    crate::term_err!("[MCP] Failed to list tools from '{}': {}", s.name, e);
+                }
             }
         }
     }
     resolved
+}
+
+/// Helper to parse tool parameters schema from Markdown contract or fallback
+fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
+    let mut schema = serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "required": []
+    });
+
+    // Check for execution contract JSON inside markdown code fence
+    let mut in_json = false;
+    let mut json_buf = String::new();
+    let mut desc_lines = Vec::new();
+
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```json") {
+            in_json = true;
+            continue;
+        } else if in_json && trimmed.starts_with("```") {
+            in_json = false;
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_buf) {
+                if let Some(params) = v.get("parameters").or_else(|| v.get("inputSchema")) {
+                    schema = params.clone();
+                }
+            }
+            continue;
+        }
+
+        if in_json {
+            json_buf.push_str(line);
+            json_buf.push('\n');
+        } else if !trimmed.starts_with('#') && !trimmed.is_empty() && desc_lines.len() < 3 {
+            desc_lines.push(trimmed);
+        }
+    }
+
+    let description = if !desc_lines.is_empty() {
+        desc_lines.join(" ")
+    } else {
+        format!("Tool {} from MCP server", name)
+    };
+
+    McpToolDefinition {
+        name: name.to_string(),
+        description: Some(description),
+        input_schema: schema,
+    }
 }
 
 /// Dispatches a tool call to the matching active MCP server
@@ -541,4 +621,51 @@ pub async fn call_active_mcp_tool(
     }
 
     Ok(output.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_markdown_to_tool_def_basic() {
+        let md = r#"# search_files
+Search files across the repository.
+
+## Parameters
+- `path` (string, required): Directory path.
+- `pattern` (string, optional): Search regex.
+
+## Execution Contract
+```json
+{
+  "method": "tools/call",
+  "name": "search_files",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" },
+      "pattern": { "type": "string" }
+    },
+    "required": ["path"]
+  }
+}
+```
+"#;
+        let def = parse_markdown_to_tool_def("search_files", md);
+        assert_eq!(def.name, "search_files");
+        assert!(def.description.unwrap().contains("Search files across"));
+        assert_eq!(def.input_schema["type"], "object");
+        assert!(def.input_schema["properties"]["path"].is_object());
+        assert_eq!(def.input_schema["required"][0], "path");
+    }
+
+    #[test]
+    fn test_parse_markdown_to_tool_def_fallback() {
+        let md = "# no_json_contract\nA simple tool without code block.";
+        let def = parse_markdown_to_tool_def("no_json_contract", md);
+        assert_eq!(def.name, "no_json_contract");
+        assert!(def.description.unwrap().contains("A simple tool"));
+        assert_eq!(def.input_schema["type"], "object");
+    }
 }

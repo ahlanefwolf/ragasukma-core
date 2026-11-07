@@ -27,14 +27,184 @@ fn default_active() -> i64 {
 pub struct McpServer {
     pub id: String,
     pub name: String,
-    pub config: String, // Raw JSON configuration
+    pub config: String, // Raw JSON or Markdown configuration
     pub is_enabled: i64,
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, FromRow)]
+pub struct McpServerTool {
+    pub server_id: String,
+    pub name: String,
+    pub config: String, // Markdown tool specification/instructions
+}
+
+fn extract_execution_block(content: &str) -> Option<&str> {
+    let trimmed = content.trim();
+    // 1. Check YAML frontmatter (starts with ---)
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        if let Some(idx) = rest.find("\n---") {
+            let fm = &rest[..idx];
+            if !fm.trim().is_empty() {
+                return Some(fm.trim());
+            }
+        }
+    }
+
+    // 2. Check fenced code blocks: ```exec, ```yaml, ```yml, ```json
+    for tag in &["```exec", "```yaml", "```yml", "```json"] {
+        if let Some(start_idx) = content.find(tag) {
+            let after_tag = &content[start_idx + tag.len()..];
+            if let Some(end_idx) = after_tag.find("```") {
+                let block = after_tag[..end_idx].trim();
+                if !block.is_empty() {
+                    return Some(block);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_yaml_or_json_value(text: &str) -> serde_json::Value {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return serde_json::Value::Null;
+    }
+
+    // Try parsing as JSON first
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if val.is_object() {
+            return val;
+        }
+    }
+
+    // Parse simple YAML lines
+    let mut root = serde_json::Map::new();
+    let mut current_key: Option<String> = None;
+    let mut current_list: Vec<serde_json::Value> = Vec::new();
+    let mut current_map: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    let mut is_in_list = false;
+    let mut is_in_map = false;
+
+    let flush = |root: &mut serde_json::Map<String, serde_json::Value>,
+                 key: &mut Option<String>,
+                 list: &mut Vec<serde_json::Value>,
+                 map: &mut serde_json::Map<String, serde_json::Value>,
+                 in_list: &mut bool,
+                 in_map: &mut bool| {
+        if let Some(k) = key.take() {
+            if *in_list {
+                root.insert(k, serde_json::Value::Array(std::mem::take(list)));
+                *in_list = false;
+            } else if *in_map {
+                root.insert(k, serde_json::Value::Object(std::mem::take(map)));
+                *in_map = false;
+            }
+        }
+    };
+
+    for line in trimmed.lines() {
+        let line_trimmed = line.trim();
+        if line_trimmed.is_empty() || line_trimmed.starts_with('#') {
+            continue;
+        }
+
+        // List item under current key, e.g. - "-y" or - @modelcontextprotocol/server
+        if let Some(item_str) = line_trimmed.strip_prefix('-') {
+            let item_val = item_str.trim().trim_matches('"').trim_matches('\'');
+            if current_key.is_some() {
+                is_in_list = true;
+                current_list.push(serde_json::Value::String(item_val.to_string()));
+                continue;
+            }
+        }
+
+        // Key-value pair, e.g. command: npx or env:
+        if let Some((k, v)) = line_trimmed.split_once(':') {
+            let key_str = k.trim().trim_matches('"').trim_matches('\'').to_string();
+            let val_str = v.trim();
+
+            let is_indented = line.starts_with("  ") || line.starts_with('\t');
+            if is_indented && current_key.is_some() && !val_str.is_empty() && is_in_map {
+                let clean_v = val_str.trim_matches('"').trim_matches('\'');
+                current_map.insert(key_str, serde_json::Value::String(clean_v.to_string()));
+                continue;
+            }
+
+            flush(
+                &mut root,
+                &mut current_key,
+                &mut current_list,
+                &mut current_map,
+                &mut is_in_list,
+                &mut is_in_map,
+            );
+
+            if val_str.is_empty() {
+                current_key = Some(key_str.clone());
+                if key_str == "env" {
+                    is_in_map = true;
+                }
+            } else if val_str.starts_with('[') && val_str.ends_with(']') {
+                if let Ok(parsed_arr) = serde_json::from_str::<serde_json::Value>(val_str) {
+                    root.insert(key_str, parsed_arr);
+                } else {
+                    root.insert(key_str, serde_json::Value::String(val_str.to_string()));
+                }
+            } else if val_str.starts_with('{') && val_str.ends_with('}') {
+                if let Ok(parsed_obj) = serde_json::from_str::<serde_json::Value>(val_str) {
+                    root.insert(key_str, parsed_obj);
+                } else {
+                    root.insert(key_str, serde_json::Value::String(val_str.to_string()));
+                }
+            } else {
+                let clean_v = val_str.trim_matches('"').trim_matches('\'');
+                root.insert(key_str, serde_json::Value::String(clean_v.to_string()));
+            }
+        }
+    }
+
+    flush(
+        &mut root,
+        &mut current_key,
+        &mut current_list,
+        &mut current_map,
+        &mut is_in_list,
+        &mut is_in_map,
+    );
+
+    serde_json::Value::Object(root)
+}
+
 impl McpServer {
     pub fn config_value(&self) -> serde_json::Value {
-        serde_json::from_str(&self.config).unwrap_or_else(|_| serde_json::json!({}))
+        let trimmed = self.config.trim();
+        // 1. Direct JSON (legacy / backward-compatible)
+        if trimmed.starts_with('{') {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if val.is_object() {
+                    return val;
+                }
+            }
+        }
+
+        // 2. Extract execution block from Markdown
+        if let Some(block) = extract_execution_block(&self.config) {
+            let parsed = parse_yaml_or_json_value(block);
+            if parsed.is_object() && !parsed.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                return parsed;
+            }
+        }
+
+        // 3. Fallback: attempt YAML/JSON directly on entire string
+        let direct_parsed = parse_yaml_or_json_value(&self.config);
+        if direct_parsed.is_object() {
+            return direct_parsed;
+        }
+
+        serde_json::json!({})
     }
 
     pub fn transport(&self) -> String {
@@ -244,4 +414,82 @@ pub enum AgentSessionEvent {
     ThoughtDelta { delta: String },
     #[serde(rename = "stream_reset")]
     StreamReset,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_server_config_legacy_json() {
+        let server = McpServer {
+            id: "srv1".to_string(),
+            name: "GitHub Server".to_string(),
+            config: r#"{"transport":"stdio","command":"npx","args":["-y","@mcp/github"],"env":{"TOKEN":"abc"}}"#.to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+
+        assert_eq!(server.transport(), "stdio");
+        assert_eq!(server.command(), Some("npx".to_string()));
+        assert_eq!(server.args_json(), r#"["-y","@mcp/github"]"#);
+        assert_eq!(server.env_json(), r#"{"TOKEN":"abc"}"#);
+    }
+
+    #[test]
+    fn test_mcp_server_config_markdown_exec_block() {
+        let md = r#"
+# My GitHub Server
+Documentation and server notes.
+
+## Execution
+```exec
+transport: stdio
+command: npx
+args:
+  - "-y"
+  - "@mcp/github"
+env:
+  GITHUB_TOKEN: "xyz123"
+```
+
+## Tools
+Some notes here.
+"#;
+        let server = McpServer {
+            id: "srv2".to_string(),
+            name: "GitHub MD".to_string(),
+            config: md.to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+
+        assert_eq!(server.transport(), "stdio");
+        assert_eq!(server.command(), Some("npx".to_string()));
+        let args: Vec<String> = serde_json::from_str(&server.args_json()).unwrap();
+        assert_eq!(args, vec!["-y", "@mcp/github"]);
+        let env: serde_json::Value = serde_json::from_str(&server.env_json()).unwrap();
+        assert_eq!(env["GITHUB_TOKEN"], "xyz123");
+    }
+
+    #[test]
+    fn test_mcp_server_config_markdown_frontmatter() {
+        let md = r#"---
+transport: sse
+url: http://localhost:8080/sse
+---
+# Remote Server
+Description here
+"#;
+        let server = McpServer {
+            id: "srv3".to_string(),
+            name: "Remote MD".to_string(),
+            config: md.to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+
+        assert_eq!(server.transport(), "sse");
+        assert_eq!(server.url(), Some("http://localhost:8080/sse".to_string()));
+    }
 }

@@ -1,5 +1,5 @@
 use super::{generate_id, now_secs};
-use crate::agent::models::{McpServer, Project, Session};
+use crate::agent::models::{McpServer, McpServerTool, Project, Session};
 use anyhow::Result;
 
 // ============================================================================
@@ -375,6 +375,68 @@ pub async fn delete_mcp_server(id: &str) -> Result<()> {
     let pool = super::pool().await;
     sqlx::query("DELETE FROM mcp_servers WHERE id = ?1")
         .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn list_mcp_server_tools(server_id: &str) -> Result<Vec<McpServerTool>> {
+    let pool = super::pool().await;
+    let tools = sqlx::query_as::<_, McpServerTool>(
+        "SELECT server_id, name, config \
+         FROM mcp_server_tools WHERE server_id = ?1 ORDER BY name ASC",
+    )
+    .bind(server_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(tools)
+}
+
+pub async fn list_all_mcp_server_tools() -> Result<Vec<McpServerTool>> {
+    let pool = super::pool().await;
+    let tools = sqlx::query_as::<_, McpServerTool>(
+        "SELECT server_id, name, config \
+         FROM mcp_server_tools ORDER BY server_id ASC, name ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(tools)
+}
+
+pub async fn upsert_mcp_server_tool(
+    server_id: &str,
+    name: &str,
+    config: &str,
+) -> Result<()> {
+    let pool = super::pool().await;
+    sqlx::query(
+        "INSERT INTO mcp_server_tools (server_id, name, config) \
+         VALUES (?1, ?2, ?3) \
+         ON CONFLICT(server_id, name) DO UPDATE SET \
+            config = excluded.config",
+    )
+    .bind(server_id)
+    .bind(name)
+    .bind(config)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_mcp_server_tool(server_id: &str, name: &str) -> Result<()> {
+    let pool = super::pool().await;
+    sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1 AND name = ?2")
+        .bind(server_id)
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_mcp_server_tools_by_server(server_id: &str) -> Result<()> {
+    let pool = super::pool().await;
+    sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1")
+        .bind(server_id)
         .execute(pool)
         .await?;
     Ok(())

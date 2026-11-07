@@ -230,6 +230,13 @@ Use the endpoint URL, headers, env, command and args exactly as they appear in t
                 "- `{}` (from {}): {}\n",
                 tool.namespaced_name, tool.server_name, desc
             ));
+
+            if let Some(spec) = &tool.markdown_spec {
+                prompt.push_str(&format!(
+                    "\n#### Tool Specification: `{}`\n{}\n\n",
+                    tool.namespaced_name, spec.trim()
+                ));
+            }
         }
         prompt.push('\n');
     }
