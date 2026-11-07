@@ -13,11 +13,15 @@ pub struct DiscoveredTool {
     pub config: String,
 }
 
-/// System prompt for the LLM Tool Discovery Runner
+/// System prompt for the LLM Tool Discovery Runner (Agnostic Markdown)
 pub const MCP_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are an expert Model Context Protocol (MCP) Semantic Compiler and Tool Specialist.
-Your task is to analyze the provided MCP server documentation and any raw tool schemas, then produce a clean, comprehensive Markdown specification for each available tool.
+Your mission is to thoroughly analyze an MCP server's configuration and produce clean, comprehensive specifications in pure Markdown for all available tools.
 
-For each tool, wrap the output inside a `<tool name="TOOL_NAME">` block:
+You prioritize being model-agnostic: both the server configuration and the tool specifications are pure Markdown so any LLM can easily learn, read, and understand them.
+Do NOT output JSON schemas or JSON codeblocks for the tool parameters or execution contracts.
+Describe parameters and capabilities using clean, expressive Markdown.
+
+For each tool, output exactly one `<tool name="TOOL_NAME">` block:
 
 <tool name="tool_name">
 # tool_name
@@ -25,22 +29,17 @@ For each tool, wrap the output inside a `<tool name="TOOL_NAME">` block:
 A concise, high-level description of what the tool does and when the agent should call it.
 
 ## Parameters
-- `param_name` (type, required/optional): Description of parameter and constraints.
+- `param_name` (type, required/optional): Description of parameter, constraints, and format.
 
-## Execution Contract
-```json
-{
-  "method": "tools/call",
-  "name": "tool_name"
-}
-```
+## Usage Guidelines
+Clear instructions for the agent on how to formulate calls and interpret results.
 </tool>
 
 Rules:
-1. Every tool must have a distinct `<tool name="...">` and `</tool>` tag.
-2. The inside of the tag must be valid Markdown.
-3. Be accurate regarding parameter names, types, and descriptions.
-4. If no tools are available or detectable, return no `<tool>` tags.
+1. Every tool must have a distinct `<tool name="...">` and `</tool>` tag with a snake_case name.
+2. Inside each `<tool>` tag must be pure, clean Markdown. No JSON codeblocks.
+3. Be precise with parameter names, types, descriptions, and required constraints.
+4. You MUST output at least one `<tool name="...">` block representing the primary tools of this MCP server. Never return an empty response.
 "#;
 
 /// Build the user prompt for the LLM runner
@@ -50,20 +49,42 @@ pub fn build_discovery_prompt(
     raw_tools: Option<&[McpToolDefinition]>,
 ) -> String {
     let mut prompt = format!(
-        "Server Name: {}\n\nServer Configuration & Documentation:\n```markdown\n{}\n```\n\n",
-        server.name, server.config
+        "Server Name: {}\nServer ID: {}\n\nServer Configuration:\n```\n{}\n```\n\n",
+        server.name, server.id, server.config
     );
 
     if let Some(tools) = raw_tools
         && !tools.is_empty()
     {
-        prompt.push_str("Raw Tools Discovered via Native MCP Handshake (tools/list):\n```json\n");
-        let json_str = serde_json::to_string_pretty(tools).unwrap_or_else(|_| "[]".to_string());
-        prompt.push_str(&json_str);
-        prompt.push_str("\n```\n\n");
+        prompt.push_str("Tools Discovered via MCP Handshake (tools/list):\n");
+        for tool in tools {
+            let desc = tool.description.as_deref().unwrap_or("No description");
+            prompt.push_str(&format!("- Tool `{}`: {}\n", tool.name, desc));
+            if let Some(props) = tool
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+            {
+                for (pname, pval) in props {
+                    let ptype = pval.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+                    let pdesc = pval.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    if pdesc.is_empty() {
+                        prompt.push_str(&format!("  * `{pname}` ({ptype})\n"));
+                    } else {
+                        prompt.push_str(&format!("  * `{pname}` ({ptype}): {pdesc}\n"));
+                    }
+                }
+            }
+        }
+        prompt.push('\n');
     }
 
-    prompt.push_str("Please extract and generate the Markdown specification for every tool provided above.");
+    prompt.push_str(
+        "Study the MCP server configuration and any native tools listed above.\n\
+        You are demanded to formulate and generate the complete specification for each tool \
+        provided by this MCP server so they can be registered into the mcp_server_tools database.\n\
+        Wrap each tool inside `<tool name=\"tool_name\"> ... </tool>` tags.",
+    );
     prompt
 }
 
@@ -151,6 +172,43 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
         }
     }
 
+    // 3. Fallback: Check if response is raw JSON array of tools
+    if tools.is_empty() {
+        let trimmed_resp = response.trim();
+        let json_slice = if let Some(start) = trimmed_resp.find('[') {
+            if let Some(end) = trimmed_resp.rfind(']') {
+                &trimmed_resp[start..=end]
+            } else {
+                trimmed_resp
+            }
+        } else {
+            trimmed_resp
+        };
+
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_slice)
+            && let Some(arr) = val.as_array()
+        {
+            for item in arr {
+                    if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                        let config = item
+                            .get("description")
+                            .or_else(|| item.get("config"))
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("");
+                        let tool_md = if config.starts_with('#') {
+                            config.to_string()
+                        } else {
+                            format!("# {}\n\n{}\n", name, config)
+                        };
+                        tools.push(DiscoveredTool {
+                            name: name.to_string(),
+                            config: tool_md,
+                        });
+                    }
+                }
+            }
+        }
+
     tools
 }
 
@@ -199,9 +257,11 @@ pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
         md.push_str("No parameters required.\n");
     }
 
-    md.push_str("\n## Execution Contract\n```json\n{\n");
-    md.push_str(&format!("  \"method\": \"tools/call\",\n  \"name\": \"{}\"\n", tool.name));
-    md.push_str("}\n```\n");
+    md.push_str("\n## Usage Guidelines\n");
+    md.push_str(&format!(
+        "Agnostic MCP tool specification for `{}`. Invoke through the agent tool execution runtime with the parameters defined above.\n",
+        tool.name
+    ));
 
     DiscoveredTool {
         name: tool.name.clone(),
@@ -260,15 +320,26 @@ pub async fn discover_tools(
         }
     };
 
-    // 2. If model runner is provided or requested, invoke LLM
-    if let Some(model) = model_name {
+    // 2. Resolve LLM model runner: use explicitly provided model or default active model
+    let target_model = match model_name {
+        Some(m) if !m.trim().is_empty() => Some(m.trim().to_string()),
+        _ => {
+            let user_cfg = crate::config::load_user_config();
+            if !user_cfg.llm_model.trim().is_empty() {
+                Some(user_cfg.llm_model)
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(model) = target_model {
         let user_prompt = build_discovery_prompt(server, raw_tools.as_deref());
         let sys_prompt = MCP_DISCOVERY_SYSTEM_PROMPT.to_string();
-        let target_model = model.to_string();
 
         let llm_res: Result<String, String> = tokio::task::spawn_blocking(move || {
             let mut client = LlmClient::new();
-            client.model = target_model;
+            client.model = model;
             client.set_system_prompt(sys_prompt);
             client
                 .chat_stream(&user_prompt, |_| Ok(()))
@@ -320,6 +391,10 @@ pub async fn sync_server_tools(
         upsert_mcp_server_tool(&server.id, &tool.name, &tool.config)
             .await
             .map_err(|e| format!("Failed to upsert tool {}: {e}", tool.name))?;
+        info!(
+            "Inserted/upserted tool '{}' for MCP server '{}' ({}) into mcp_server_tools",
+            tool.name, server.name, server.id
+        );
     }
 
     Ok(tools)
@@ -342,13 +417,8 @@ Execute a SQL query against the SQLite database.
 ## Parameters
 - `sql` (string, required): The SQL query string.
 
-## Execution Contract
-```json
-{
-  "method": "tools/call",
-  "name": "query_database"
-}
-```
+## Usage Guidelines
+Agnostic database tool.
 </tool>
 
 <tool name="list_tables">
@@ -356,13 +426,8 @@ Execute a SQL query against the SQLite database.
 
 List all available tables.
 
-## Execution Contract
-```json
-{
-  "method": "tools/call",
-  "name": "list_tables"
-}
-```
+## Usage Guidelines
+List tables in the database.
 </tool>
 "#;
 
@@ -413,5 +478,6 @@ Delete a file on disk.
         assert!(tool.config.contains("Add two numbers together"));
         assert!(tool.config.contains("- `a` (number, required): First number"));
         assert!(tool.config.contains("- `b` (number, required): Second number"));
+        assert!(!tool.config.contains("```json"));
     }
 }

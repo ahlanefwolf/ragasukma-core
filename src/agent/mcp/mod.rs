@@ -505,6 +505,7 @@ pub async fn resolve_active_mcp_tools(
                 Ok(tools) => {
                     for t in tools {
                         let namespaced = format!("mcp__{}", t.name);
+                        let md = discovery::tool_definition_to_markdown(&t);
                         resolved.push(ActiveMcpTool {
                             server_id: config.id.clone(),
                             server_name: config.name.clone(),
@@ -512,7 +513,7 @@ pub async fn resolve_active_mcp_tools(
                             namespaced_name: namespaced,
                             definition: t,
                             server_config: config.clone(),
-                            markdown_spec: None,
+                            markdown_spec: Some(md.config),
                         });
                     }
                 }
@@ -525,37 +526,62 @@ pub async fn resolve_active_mcp_tools(
     resolved
 }
 
-/// Helper to parse tool parameters schema from Markdown contract or fallback
+/// Helper to parse tool parameters schema directly from pure Markdown specification
 fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
-    let mut schema = serde_json::json!({
-        "type": "object",
-        "properties": {},
-        "required": []
-    });
-
-    // Check for execution contract JSON inside markdown code fence
-    let mut in_json = false;
-    let mut json_buf = String::new();
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
     let mut desc_lines = Vec::new();
+    let mut in_parameters = false;
 
     for line in config.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with("```json") {
-            in_json = true;
-            continue;
-        } else if in_json && trimmed.starts_with("```") {
-            in_json = false;
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_buf)
-                && let Some(params) = v.get("parameters").or_else(|| v.get("inputSchema"))
-            {
-                schema = params.clone();
-            }
+
+        if trimmed.starts_with('#') {
+            let lower = trimmed.to_lowercase();
+            in_parameters = lower.contains("parameter");
             continue;
         }
 
-        if in_json {
-            json_buf.push_str(line);
-            json_buf.push('\n');
+        if in_parameters {
+            // Parses format: - `param_name` (type, required/optional): description
+            if let Some(bullet) = trimmed.strip_prefix('-').or_else(|| trimmed.strip_prefix('*')) {
+                let bullet_trimmed = bullet.trim();
+                let (param_part, desc_part) = bullet_trimmed.split_once(':').unwrap_or((bullet_trimmed, ""));
+                
+                let param_name = if let Some(start) = param_part.find('`') {
+                    if let Some(end) = param_part[start + 1..].find('`') {
+                        &param_part[start + 1..start + 1 + end]
+                    } else {
+                        param_part.trim()
+                    }
+                } else {
+                    param_part.split_whitespace().next().unwrap_or("").trim()
+                };
+
+                if !param_name.is_empty() {
+                    let is_req = param_part.to_lowercase().contains("required");
+                    let ptype = if param_part.contains("number") || param_part.contains("integer") {
+                        "number"
+                    } else if param_part.contains("bool") {
+                        "boolean"
+                    } else if param_part.contains("array") || param_part.contains("list") {
+                        "array"
+                    } else {
+                        "string"
+                    };
+
+                    let mut prop_obj = serde_json::Map::new();
+                    prop_obj.insert("type".to_string(), serde_json::Value::String(ptype.to_string()));
+                    if !desc_part.trim().is_empty() {
+                        prop_obj.insert("description".to_string(), serde_json::Value::String(desc_part.trim().to_string()));
+                    }
+
+                    properties.insert(param_name.to_string(), serde_json::Value::Object(prop_obj));
+                    if is_req {
+                        required.push(serde_json::Value::String(param_name.to_string()));
+                    }
+                }
+            }
         } else if !trimmed.starts_with('#') && !trimmed.is_empty() && desc_lines.len() < 3 {
             desc_lines.push(trimmed);
         }
@@ -567,10 +593,15 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
         format!("Tool {} from MCP server", name)
     };
 
+    let mut schema_map = serde_json::Map::new();
+    schema_map.insert("type".to_string(), serde_json::Value::String("object".to_string()));
+    schema_map.insert("properties".to_string(), serde_json::Value::Object(properties));
+    schema_map.insert("required".to_string(), serde_json::Value::Array(required));
+
     McpToolDefinition {
         name: name.to_string(),
         description: Some(description),
-        input_schema: schema,
+        input_schema: serde_json::Value::Object(schema_map),
     }
 }
 

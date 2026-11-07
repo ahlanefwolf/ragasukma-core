@@ -193,27 +193,15 @@ fn build_static_prompt(
     );
 
     if !active_mcp_servers.is_empty() {
-        prompt.push_str("### ⚡ Active Project External MCP Servers (Raw Configuration)\n\
-The raw JSON config of every external MCP server configured for this workspace project is inlined below. These are NOT callable functions and there is no dedicated wrapper tool for them — you are given the raw config so that YOU can reason about it yourself. Read the raw JSON, recognize what kind of service each one is, and then decide how to talk to it:\n\
-- **SSE / HTTP MCP** (`url` / `type: \"sse\"|\"http\"`): write a short Node.js (native `fetch`) or Python script that speaks JSON-RPC 2.0 over the endpoint (`initialize` → `tools/list` → `tools/call`), then run it with `workspace_run_command`.\n\
-- **CLI / Stdio MCP** (`command` + `args`): run the command directly through `workspace_run_command` (e.g. `npx`, `uvx`, or a binary), piping JSON-RPC 2.0 lines on stdin if the tool expects a stdio handshake.\n\
-Use the endpoint URL, headers, env, command and args exactly as they appear in the raw JSON — that is the source of truth. Do not guess a different address or invent servers.\n\n");
+        prompt.push_str("### ⚡ Active Project External MCP Servers:\n\n");
 
         for (idx, server) in active_mcp_servers.iter().enumerate() {
-            let mut cfg_val = server.config_value();
-            if let Some(obj) = cfg_val.as_object_mut()
-                && !obj.contains_key("name")
-            {
-                obj.insert("name".to_string(), serde_json::json!(server.name));
-            }
-            let pretty_json =
-                serde_json::to_string_pretty(&cfg_val).unwrap_or_else(|_| server.config.clone());
+            let text_config = format_mcp_config_as_pure_text(&server.config);
             prompt.push_str(&format!(
-                "#### {}. MCP Server: \"{}\" ({})\n```json\n{}\n```\n\n",
+                "#### {}. MCP Server: \"{}\"\n{}\n\n",
                 idx + 1,
                 server.name,
-                server.transport(),
-                pretty_json
+                text_config.trim()
             ));
         }
     }
@@ -232,15 +220,94 @@ Use the endpoint URL, headers, env, command and args exactly as they appear in t
             ));
 
             if let Some(spec) = &tool.markdown_spec {
-                prompt.push_str(&format!(
-                    "\n#### Tool Specification: `{}`\n{}\n\n",
-                    tool.namespaced_name, spec.trim()
-                ));
+                let text_spec = sanitize_spec_to_pure_text(spec);
+                if !text_spec.is_empty() {
+                    prompt.push_str(&format!(
+                        "\n#### Tool Specification: `{}`\n{}\n\n",
+                        tool.namespaced_name, text_spec
+                    ));
+                }
             }
         }
         prompt.push('\n');
     }
     prompt
+}
+
+/// Formats MCP server configuration as pure text, converting any JSON structures into clean Markdown list items.
+fn format_mcp_config_as_pure_text(raw_config: &str) -> String {
+    let trimmed = raw_config.trim();
+    if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        return json_to_markdown_bullet_text(&val, 0);
+    }
+    trimmed.to_string()
+}
+
+fn json_to_markdown_bullet_text(val: &serde_json::Value, indent: usize) -> String {
+    let pad = "  ".repeat(indent);
+    match val {
+        serde_json::Value::Object(map) => {
+            let mut out = String::new();
+            for (k, v) in map {
+                match v {
+                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                        out.push_str(&format!("{pad}- **{k}**:\n"));
+                        out.push_str(&json_to_markdown_bullet_text(v, indent + 1));
+                    }
+                    serde_json::Value::String(s) => {
+                        out.push_str(&format!("{pad}- **{k}**: {s}\n"));
+                    }
+                    _ => {
+                        out.push_str(&format!("{pad}- **{k}**: {v}\n"));
+                    }
+                }
+            }
+            out
+        }
+        serde_json::Value::Array(arr) => {
+            let mut out = String::new();
+            for item in arr {
+                match item {
+                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
+                        out.push_str(&json_to_markdown_bullet_text(item, indent + 1));
+                    }
+                    serde_json::Value::String(s) => {
+                        out.push_str(&format!("{pad}- {s}\n"));
+                    }
+                    _ => {
+                        out.push_str(&format!("{pad}- {item}\n"));
+                    }
+                }
+            }
+            out
+        }
+        serde_json::Value::String(s) => format!("{pad}{s}\n"),
+        _ => format!("{pad}{val}\n"),
+    }
+}
+
+/// Cleans any lingering JSON code fences out of tool specifications so prompt remains pure text
+fn sanitize_spec_to_pure_text(spec: &str) -> String {
+    let mut cleaned = String::new();
+    let mut skipping_json = false;
+    for line in spec.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```json") {
+            skipping_json = true;
+            continue;
+        } else if skipping_json && trimmed.starts_with("```") {
+            skipping_json = false;
+            continue;
+        }
+        if !skipping_json {
+            cleaned.push_str(line);
+            cleaned.push('\n');
+        }
+    }
+    cleaned.trim().to_string()
 }
 
 /// Cache key for the static prompt block.

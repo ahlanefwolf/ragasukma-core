@@ -178,28 +178,97 @@ impl McpServer {
     pub fn config_value(&self) -> serde_json::Value {
         let trimmed = self.config.trim();
         // 1. Direct JSON (legacy / backward-compatible)
-        if trimmed.starts_with('{')
+        let parsed_val = if trimmed.starts_with('{')
             && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
             && val.is_object()
         {
+            Some(val)
+        } else if let Some(block) = extract_execution_block(&self.config) {
+            // 2. Extract execution block from Markdown
+            let parsed = parse_yaml_or_json_value(block);
+            if parsed.is_object() && !parsed.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                Some(parsed)
+            } else {
+                None
+            }
+        } else {
+            // 3. Fallback: attempt YAML/JSON directly on entire string
+            let direct_parsed = parse_yaml_or_json_value(&self.config);
+            if direct_parsed.is_object() && !direct_parsed.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+                Some(direct_parsed)
+            } else {
+                None
+            }
+        };
+
+        let val = parsed_val.unwrap_or_else(|| serde_json::json!({}));
+        Self::unwrap_nested_config(val, &self.name, &self.id)
+    }
+
+    /// Unwrap nested MCP configurations (e.g. {"mcpServers": { ... }}, {"servers": { ... }}, or {"<server_name>": { ... }})
+    fn unwrap_nested_config(
+        val: serde_json::Value,
+        name_hint: &str,
+        id_hint: &str,
+    ) -> serde_json::Value {
+        if !val.is_object() {
             return val;
         }
 
-        // 2. Extract execution block from Markdown
-        if let Some(block) = extract_execution_block(&self.config) {
-            let parsed = parse_yaml_or_json_value(block);
-            if parsed.is_object() && !parsed.as_object().map(|m| m.is_empty()).unwrap_or(true) {
-                return parsed;
+        // Check if config already has root fields
+        if val.get("command").is_some() || val.get("url").is_some() || val.get("transport").is_some() {
+            return val;
+        }
+
+        // Check wrapper keys: "mcpServers", "mcp_servers", "servers"
+        for wrapper_key in &["mcpServers", "mcp_servers", "servers"] {
+            if let Some(inner) = val.get(*wrapper_key)
+                && inner.is_object()
+            {
+                // Check if inner matches name_hint or id_hint
+                if let Some(server_obj) = inner.get(name_hint).or_else(|| inner.get(id_hint))
+                    && server_obj.is_object()
+                {
+                    return server_obj.clone();
+                }
+
+                // If inner has a single key or child with command/url, pick it
+                if let Some(obj_map) = inner.as_object() {
+                    for (_k, v) in obj_map {
+                        if v.is_object()
+                            && (v.get("command").is_some() || v.get("url").is_some())
+                        {
+                            return v.clone();
+                        }
+                    }
+                    if obj_map.len() == 1
+                        && let Some(first_val) = obj_map.values().next()
+                        && first_val.is_object()
+                    {
+                        return first_val.clone();
+                    }
+                }
+                return inner.clone();
             }
         }
 
-        // 3. Fallback: attempt YAML/JSON directly on entire string
-        let direct_parsed = parse_yaml_or_json_value(&self.config);
-        if direct_parsed.is_object() {
-            return direct_parsed;
+        // Check if val has a single key matching server name or containing command/url
+        if let Some(obj_map) = val.as_object() {
+            if let Some(server_obj) = obj_map.get(name_hint).or_else(|| obj_map.get(id_hint))
+                && server_obj.is_object()
+            {
+                return server_obj.clone();
+            }
+            if obj_map.len() == 1
+                && let Some(first_val) = obj_map.values().next()
+                && first_val.is_object()
+                && (first_val.get("command").is_some() || first_val.get("url").is_some())
+            {
+                return first_val.clone();
+            }
         }
 
-        serde_json::json!({})
+        val
     }
 
     pub fn transport(&self) -> String {
