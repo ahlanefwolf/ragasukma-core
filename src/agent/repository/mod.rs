@@ -3,10 +3,12 @@ use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod audit;
 pub mod goals;
 pub mod messages;
 pub mod projects_and_sessions;
 
+pub use audit::*;
 pub use goals::*;
 pub use messages::*;
 pub use projects_and_sessions::*;

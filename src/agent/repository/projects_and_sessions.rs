@@ -217,6 +217,29 @@ pub async fn update_session_model(id: &str, model: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resets any sessions left in "running" state by an earlier process crash or abrupt kill.
+///
+/// Returns the number of sessions reset to "idle".
+pub async fn reset_stale_running_sessions() -> Result<usize> {
+    let pool = super::pool().await;
+
+    let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = 'running'")
+        .fetch_one(pool)
+        .await?;
+    if stale == 0 {
+        return Ok(0);
+    }
+
+    sqlx::query("UPDATE sessions SET status = 'idle' WHERE status = 'running'")
+        .execute(pool)
+        .await?;
+    tracing::warn!(
+        "[Agent Turn] Reset {} session(s) left 'running' by a previous process",
+        stale
+    );
+    Ok(stale as usize)
+}
+
 pub async fn delete_session(id: &str) -> Result<()> {
     // The session is going away, so its in-memory file backups must go with it. This is the
     // release point for the snapshot store: a turn boundary must keep the backups (the
@@ -505,9 +528,11 @@ pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[Stri
     let pool = super::pool().await;
     let all_servers = list_mcp_servers().await?;
 
+    let mut tx = pool.begin().await?;
+
     sqlx::query("DELETE FROM project_mcp_servers WHERE project_id = ?1")
         .bind(project_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     for s in all_servers {
@@ -516,16 +541,18 @@ pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[Stri
         } else {
             0
         };
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO project_mcp_servers (project_id, server_id, is_enabled) \
              VALUES (?1, ?2, ?3)",
         )
         .bind(project_id)
         .bind(&s.id)
         .bind(is_active)
-        .execute(pool)
-        .await;
+        .execute(&mut *tx)
+        .await?;
     }
+
+    tx.commit().await?;
 
     Ok(())
 }

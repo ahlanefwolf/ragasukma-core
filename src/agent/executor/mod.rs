@@ -33,25 +33,7 @@ pub use state::TurnState;
 /// `running` only: a `paused` or `failed` session is a deliberate state that must survive a
 /// restart. Returns how many rows were corrected.
 pub async fn reset_stale_running_sessions() -> Result<usize> {
-    let pool = repository::pool().await;
-
-    // Count first: `execute` reports rows matched, and the log is the only operator-visible
-    // evidence that the sweep did anything, so an empty sweep is silent, not a "0 pruned".
-    let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = 'running'")
-        .fetch_one(pool)
-        .await?;
-    if stale == 0 {
-        return Ok(0);
-    }
-
-    sqlx::query("UPDATE sessions SET status = 'idle' WHERE status = 'running'")
-        .execute(pool)
-        .await?;
-    tracing::warn!(
-        "[Agent Turn] Reset {} session(s) left 'running' by a previous process",
-        stale
-    );
-    Ok(stale as usize)
+    repository::reset_stale_running_sessions().await
 }
 
 #[doc(hidden)]
