@@ -14,12 +14,21 @@ pub struct DiscoveredTool {
 }
 
 /// System prompt for the LLM Tool Discovery Runner (Agnostic Markdown)
-pub const MCP_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are an expert Model Context Protocol (MCP) Semantic Compiler and Tool Specialist.
-Your mission is to thoroughly analyze an MCP server's configuration and produce clean, comprehensive specifications in pure Markdown for all available tools.
+pub const MCP_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are an expert MCP Skill Compiler and Tool Specialist.
+Your mission is to thoroughly analyze an MCP server's Markdown configuration (the skill description written by the user) and produce clean, comprehensive specifications in pure Markdown for all available tools, including a concrete shell command template for each tool.
 
-You prioritize being model-agnostic: both the server configuration and the tool specifications are pure Markdown so any LLM can easily learn, read, and understand them.
+You prioritize being model-agnostic: the server configuration and the tool specifications are pure Markdown so any LLM can easily learn, read, and understand them.
 Do NOT output JSON schemas or JSON codeblocks for the tool parameters or execution contracts.
 Describe parameters and capabilities using clean, expressive Markdown.
+
+## Shell Environment (IMPORTANT — write every command template in THIS syntax)
+{shell_desc}
+
+## Command Template Priority (IMPORTANT — follow this order)
+1. NATIVE OS COMMAND FIRST: if the tool maps to a system executable (curl, ffmpeg, sqlite3, git, docker, etc.), the Command Template MUST be that native command with `{param}` placeholders. This is the primary path.
+2. Node.js inline: if no native OS command exists (pure logic / JSON processing / API calls with logic), use an inline one-liner with Node directly — NO separate .js script file. Example: `node -e "const c=require('child_process');..." -- {param}`
+3. Python inline as last resort: `python3 -c '...'` (Unix) / `py -3 -c '...'` (Windows) — also inline, NO separate .py script file.
+Never invent a .js/.py file path; everything must run directly from the command line.
 
 For each tool, output exactly one `<tool name="TOOL_NAME">` block:
 
@@ -31,15 +40,24 @@ A concise, high-level description of what the tool does and when the agent shoul
 ## Parameters
 - `param_name` (type, required/optional): Description of parameter, constraints, and format.
 
+## Command Template
+A ready-to-run shell command in the Shell Environment syntax above, following the Priority order above.
+Use `{param_name}` placeholders for parameters. Example:
+
+```bash
+curl -s "https://api.example.com/search?q={query}"
+```
+
 ## Usage Guidelines
 Clear instructions for the agent on how to formulate calls and interpret results.
 </tool>
 
 Rules:
 1. Every tool must have a distinct `<tool name="...">` and `</tool>` tag with a snake_case name.
-2. Inside each `<tool>` tag must be pure, clean Markdown. No JSON codeblocks.
-3. Be precise with parameter names, types, descriptions, and required constraints.
-4. You MUST output at least one `<tool name="...">` block representing the primary tools of this MCP server. Never return an empty response.
+2. Inside each `<tool>` tag must be pure, clean Markdown. No JSON codeblocks (except the Command Template bash/powershell fenced block).
+3. Every tool MUST include a `## Command Template` section with a concrete runnable command using `{param}` placeholders. Derive it from the server configuration (executables, scripts, URLs, or skill steps described by the user). If the skill has no CLI equivalent, describe the closest shell workflow.
+4. Be precise with parameter names, types, descriptions, and required constraints.
+5. You MUST output at least one `<tool name="...">` block representing the primary tools of this MCP server. Never return an empty response.
 "#;
 
 /// Build the user prompt for the LLM runner
@@ -80,9 +98,12 @@ pub fn build_discovery_prompt(
     }
 
     prompt.push_str(
-        "Study the MCP server configuration and any native tools listed above.\n\
+        "Study the MCP server configuration (Markdown skill description from the user) above.\n\
         You are demanded to formulate and generate the complete specification for each tool \
         provided by this MCP server so they can be registered into the mcp_server_tools database.\n\
+        Every tool must include a `## Command Template` section with a runnable shell command \
+        using `{param}` placeholders (derive it from the configuration, executables, or scripts \
+        the user described).\n\
         Wrap each tool inside `<tool name=\"tool_name\"> ... </tool>` tags.",
     );
     prompt
@@ -335,7 +356,15 @@ pub async fn discover_tools(
 
     if let Some(model) = target_model {
         let user_prompt = build_discovery_prompt(server, raw_tools.as_deref());
-        let sys_prompt = MCP_DISCOVERY_SYSTEM_PROMPT.to_string();
+        // OS-aware shell description, same pattern as executor/prompt.rs: on Windows
+        // PowerShell with ';' separator (no '&&'), on Unix POSIX shell with '&&'.
+        #[cfg(target_os = "windows")]
+        let shell_desc = "OS: Windows. Shell: PowerShell. Use native PowerShell syntax for scripts and paths. For multiple commands in one execution, use ';' as separator (do not use '&&' as Windows PowerShell 5.1 does not support it). When a command needs curl, write `curl.exe` (the bare `curl` is an alias for Invoke-WebRequest and will fail). Script runtimes: Node.js (`node`) or Python (`python` / `py -3`).";
+
+        #[cfg(not(target_os = "windows"))]
+        let shell_desc = "OS: macOS/Linux. Shell: POSIX shell. Use standard Unix shell syntax; chain sequential commands with '&&'. Script runtimes: Node.js (`node`) or Python (`python3`).";
+
+        let sys_prompt = MCP_DISCOVERY_SYSTEM_PROMPT.replace("{shell_desc}", shell_desc);
 
         let llm_res: Result<String, String> = tokio::task::spawn_blocking(move || {
             let mut client = LlmClient::new();
