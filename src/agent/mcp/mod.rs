@@ -752,7 +752,10 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
         c
     };
 
+    #[cfg(windows)]
     let mut child = shell_command.spawn().map_err(|e| format!("Failed to start shell: {}", e))?;
+    #[cfg(not(windows))]
+    let child = shell_command.spawn().map_err(|e| format!("Failed to start shell: {}", e))?;
 
     #[cfg(windows)]
     {
