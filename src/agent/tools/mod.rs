@@ -392,6 +392,7 @@ pub async fn execute_tool_call(
     name: &str,
     args: &serde_json::Value,
     allowed_roots: &[String],
+    session_id: &str,
 ) -> Result<String> {
     match name {
         "workspace_list_dir" => {
@@ -559,7 +560,18 @@ pub async fn execute_tool_call(
                 .context("Parameter 'content' is required")?;
 
             let resolved = resolve_allowed_path(file_path, allowed_roots)?;
-            let _ = crate::agent::snapshot::WorkspaceSnapshot::global().backup_file(&resolved);
+            // BUG-06: this used to be `let _ = ...backup_file(...)`, which discarded the
+            // error. A failed backup means the write below cannot be undone, but the tool
+            // description promises a rollback is always available, so the write is refused
+            // rather than performed un-restorably.
+            crate::agent::snapshot::for_session(session_id)
+                .backup_file(&resolved)
+                .with_context(|| {
+                    format!(
+                        "Refusing to write '{}': a rollback point could not be recorded",
+                        file_path
+                    )
+                })?;
             if let Some(parent) = resolved.parent() {
                 std_fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create directories for '{}'", file_path))?;
@@ -575,24 +587,63 @@ pub async fn execute_tool_call(
             .to_string())
         }
         "workspace_rollback" => {
+            // Backups are keyed by session, so a rollback can only ever see files this
+            // session wrote. That is what the description promised all along.
+            let snapshot = crate::agent::snapshot::for_session(session_id);
             let file_path = args.get("file_path").and_then(|v| v.as_str());
             if let Some(fp) = file_path {
                 let resolved = resolve_allowed_path(fp, allowed_roots)?;
-                let restored =
-                    crate::agent::snapshot::WorkspaceSnapshot::global().rollback_file(&resolved)?;
+                let restored = snapshot.rollback_file(&resolved)?;
+                // `false` means nothing was recorded for this path in this session, i.e. the
+                // file was never modified here. Reporting `"success"` with `restored: false`
+                // made the model claim a revert that never happened.
+                let status = if restored { "success" } else { "not_tracked" };
                 Ok(json!({
-                    "status": "success",
+                    "status": status,
                     "restored": restored,
-                    "file_path": fp
+                    "file_path": fp,
+                    "message": if restored {
+                        "File restored to its pre-session state."
+                    } else {
+                        "No backup exists for this file in this session, so nothing was changed. \
+                         Do not claim it was reverted."
+                    }
                 })
                 .to_string())
             } else {
-                let restored =
-                    crate::agent::snapshot::WorkspaceSnapshot::global().rollback_all()?;
-                let paths: Vec<String> = restored
+                let report = snapshot.rollback_all()?;
+                // Read the verdict before `restored` is consumed by `into_iter` below.
+                let complete = report.is_complete();
+                let paths: Vec<String> = report
+                    .restored
                     .into_iter()
                     .map(|p| p.to_string_lossy().to_string())
                     .collect();
+                // A partial rollback must not be advertised as success. The model decides
+                // what to tell the user from this payload, and `"success"` here previously
+                // meant "listed every tracked file", not "restored every tracked file".
+                if !complete {
+                    let failures: Vec<serde_json::Value> = report
+                        .failed
+                        .iter()
+                        .map(|(p, err)| {
+                            json!({
+                                "file_path": p.to_string_lossy().to_string(),
+                                "error": err,
+                            })
+                        })
+                        .collect();
+                    return Ok(json!({
+                        "status": "partial",
+                        "restored_count": paths.len(),
+                        "restored_files": paths,
+                        "failed_count": failures.len(),
+                        "failed_files": failures,
+                        "message": "Some files could not be restored and are still modified. \
+                                    Report this to the user; do not claim the rollback succeeded.",
+                    })
+                    .to_string());
+                }
                 Ok(json!({
                     "status": "success",
                     "restored_count": paths.len(),
@@ -617,7 +668,6 @@ pub async fn execute_tool_call(
                 .context("Parameter 'new_text' is required")?;
 
             let resolved = resolve_allowed_path(file_path, allowed_roots)?;
-            let _ = crate::agent::snapshot::WorkspaceSnapshot::global().backup_file(&resolved);
 
             if !resolved.exists() {
                 bail!("File '{}' not found to edit", file_path);
@@ -625,6 +675,19 @@ pub async fn execute_tool_call(
             if resolved.is_dir() {
                 bail!("'{}' is a directory, not a file", file_path);
             }
+
+            // BUG-06: the backup used to run *before* the two checks above and its error was
+            // discarded. Backing up first recorded a rollback point for a call that then
+            // failed — an entry the session would later "restore", rewriting a file the turn
+            // never touched. Checking first means a backup only exists for edits that happen.
+            crate::agent::snapshot::for_session(session_id)
+                .backup_file(&resolved)
+                .with_context(|| {
+                    format!(
+                        "Refusing to edit '{}': a rollback point could not be recorded",
+                        file_path
+                    )
+                })?;
 
             let content = std_fs::read_to_string(&resolved)
                 .context(format!("Failed to read file '{}' for editing", file_path))?;
@@ -829,6 +892,10 @@ pub async fn execute_tool_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Session the tool calls below act as. Backups are per session, so every call
+    /// needs one; using a constant keeps the tests from leaking files into each other.
+    const TEST_SESSION_ID: &str = "tools-test-session";
     use std::fs;
     use std::path::Path;
 
@@ -1106,6 +1173,7 @@ mod tests {
             "workspace_read_file",
             &serde_json::json!({ "file_path": "large_file.src" }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1122,6 +1190,7 @@ mod tests {
                 "end_line": 12
             }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1136,6 +1205,7 @@ mod tests {
                 "mode": "full"
             }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1166,6 +1236,7 @@ mod tests {
             "workspace_list_dir",
             &serde_json::json!({ "path": "." }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1203,6 +1274,7 @@ mod tests {
                 "content": "Line A\nLine B\nLine C"
             }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1238,6 +1310,7 @@ mod tests {
             "workspace_grep",
             &serde_json::json!({ "query": "calculate_price" }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1294,6 +1367,7 @@ mod tests {
                 "query": "start_doku_payment"
             }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();
@@ -1310,6 +1384,7 @@ mod tests {
                 "new_text": "start_jokul_doku_payment"
             }),
             &roots,
+            TEST_SESSION_ID,
         )
         .await
         .unwrap();

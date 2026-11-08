@@ -52,11 +52,23 @@ pub fn cutoff_epoch_secs(days: u64) -> i64 {
     now.saturating_sub(days.saturating_mul(SECONDS_PER_DAY)) as i64
 }
 
-/// Prunes expired `messages` and `agent_audit_logs` rows.
+/// Prunes expired `messages` and `agent_audit_logs` rows, and repairs session status left
+/// behind by a previous process.
 ///
 /// This is best-effort: failures are logged and never abort startup, because losing
 /// maintenance should not stop the application from running.
 pub async fn run_retention_sweep() {
+    // BUG-03 follow-up: `TurnStatusGuard` restores `idle` however a turn ends, but it dies
+    // with the process. A crash mid-turn leaves the row at `running` with no owner, and the
+    // TUI rebuilds `is_running` from that column on every load — so the stale row alone is
+    // enough to show a spinner that never stops, even after a restart. Repairing it here
+    // reuses the existing once-at-startup hook instead of adding a parallel init path.
+    match crate::agent::executor::reset_stale_running_sessions().await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("[Startup] Reset {} stale 'running' session(s) to idle", n),
+        Err(e) => tracing::error!("[Startup] Could not reset stale session status: {e}"),
+    }
+
     if let Some(days) = retention_days(ENV_MESSAGE_RETENTION_DAYS, DEFAULT_MESSAGE_RETENTION_DAYS) {
         let cutoff = cutoff_epoch_secs(days);
         match repository::delete_expired_messages(cutoff).await {

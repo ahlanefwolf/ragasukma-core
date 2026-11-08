@@ -405,7 +405,7 @@ pub async fn execute_turn_tool_calls(
                 }
             }
         } else {
-            match execute_tool_call(&tool_name, &args_val, allowed_folders).await {
+            match execute_tool_call(&tool_name, &args_val, allowed_folders, session_id).await {
                 Ok(out) => {
                     let dur = tool_start_instant.elapsed().as_millis() as i64;
                     audit_tool_call(

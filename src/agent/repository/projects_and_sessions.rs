@@ -218,6 +218,17 @@ pub async fn update_session_model(id: &str, model: &str) -> Result<()> {
 }
 
 pub async fn delete_session(id: &str) -> Result<()> {
+    // The session is going away, so its in-memory file backups must go with it. This is the
+    // release point for the snapshot store: a turn boundary must keep the backups (the
+    // rollback contract is per session), a deletion must not.
+    crate::agent::snapshot::release_session(id);
+
+    // Same reasoning for the per-session turn generation counter: no turn can still be in
+    // flight once the session is deleted, so this is the only safe point to reclaim it.
+    // `is_latest_turn` deliberately never prunes the entry, because a stale cleanup must not
+    // disown a newer turn that is still running.
+    crate::agent::executor::forget_session_generation(id);
+
     let pool = super::pool().await;
 
     // All five statements are one logical deletion. Running them outside a transaction

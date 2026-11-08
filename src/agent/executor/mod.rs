@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 pub mod gates;
 pub mod helpers;
@@ -19,24 +21,267 @@ pub use helpers::{
 pub use snapshot::WorkspaceSnapshot;
 pub use state::TurnState;
 
-/// Releases the per-turn file backups once the turn is over.
+/// Resets every session still marked `running` back to `idle`.
 ///
-/// Every write/edit stores the previous file bytes so the session can be reverted. That
-/// store is global and lives as long as the process, so without this it grows with every
-/// file the agent ever touches. Called from every exit path of `execute_session_turn`,
-/// after the turn can no longer need to restore anything.
-fn release_turn_snapshots() -> anyhow::Result<()> {
-    crate::agent::executor::snapshot::WorkspaceSnapshot::global().clear()
+/// `TurnStatusGuard` covers every way a turn can end *inside* the process, but it cannot
+/// cover the process itself going away: a crash, a force-quit, or a kill during a turn
+/// leaves the DB row at `running` with no owner left to clear it. `bridge.rs` rebuilds the
+/// TUI's `is_running` from that column on every `SessionsLoaded`, so without this sweep the
+/// session displays a spinner forever, including across restarts.
+///
+/// Runs once at startup from [`crate::agent::maintenance::retention_task`]. Scoped to
+/// `running` only: a `paused` or `failed` session is a deliberate state that must survive a
+/// restart. Returns how many rows were corrected.
+pub async fn reset_stale_running_sessions() -> Result<usize> {
+    let pool = repository::pool().await;
+
+    // Count first: `execute` reports rows matched, and the log is the only operator-visible
+    // evidence that the sweep did anything, so an empty sweep is silent, not a "0 pruned".
+    let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = 'running'")
+        .fetch_one(pool)
+        .await?;
+    if stale == 0 {
+        return Ok(0);
+    }
+
+    sqlx::query("UPDATE sessions SET status = 'idle' WHERE status = 'running'")
+        .execute(pool)
+        .await?;
+    tracing::warn!(
+        "[Agent Turn] Reset {} session(s) left 'running' by a previous process",
+        stale
+    );
+    Ok(stale as usize)
 }
 
+#[doc(hidden)]
+/// Drops the file backups belonging to one session.
+///
+/// This is deliberately *not* called at a turn boundary any more. Backups are keyed per
+/// session, and the tool contract says `workspace_rollback` reverts "every file this session
+/// touched" �?— so a later turn must still be able to undo what an earlier turn wrote. Releasing
+/// at the turn boundary is what made the tool lose its data one step before it was used.
+/// It runs when the session itself is deleted instead (`delete_session` calls
+/// `snapshot::release_session` directly; this wrapper exists for the boundary tests).
+pub fn release_session_snapshots(session_id: &str) -> bool {
+    crate::agent::snapshot::release_session(session_id)
+}
 
 use crate::agent::models::AgentSessionEvent;
 use crate::agent::repository;
 
+// ---------------------------------------------------------------------------
+// Turn generations (N-2)
+// ---------------------------------------------------------------------------
+
+// `TurnStatusGuard::drop` cannot await, so on the abort path (the TUI aborts the turn task on
+// cancel) it *schedules* the status reset as a detached task. That detached task races the
+// next turn: if the user cancels and immediately sends a new prompt, the new turn sets
+// `running`, and only then does the old turn's cleanup run and set `idle` again �� emiting
+// `StatusChange { idle }` while the session is very much working.
+//
+// A per-session generation counter removes the race. Every turn claims the next generation at
+// `TurnStatusGuard::new`; a cleanup may only write the status if it still owns the latest
+// generation. The check and the "invalidate" are the same atomic step, so a stale cleanup
+// either runs before the new turn claims its generation (harmless: it is overwritten) or sees
+// itself superseded and does nothing.
+static TURN_GENERATIONS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
+fn turn_generations() -> &'static Mutex<HashMap<String, u64>> {
+    TURN_GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Claims the next generation for `session_id`, invalidating every earlier turn's cleanup.
+fn claim_turn_generation(session_id: &str) -> u64 {
+    let mut map = turn_generations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let next = map.get(session_id).copied().unwrap_or(0) + 1;
+    map.insert(session_id.to_string(), next);
+    next
+}
+
+/// True while `generation` is still the newest turn claimed for `session_id`.
+///
+/// A stale cleanup must never prune the entry: whenever `latest > generation` there is a
+/// newer turn still in flight that *owns* that entry, and removing it would make that turn
+/// fail to recognise itself as latest later on - its cleanup (idle status + notification)
+/// would then be skipped and the session would be stuck on "running" again (BUG-03).
+///
+/// The entry instead lives as long as the session can still run turns, and is reclaimed by
+/// [`forget_session_generation`] when the session is deleted.
+fn is_latest_turn(session_id: &str, generation: u64) -> bool {
+    let map = turn_generations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.get(session_id).copied() == Some(generation)
+}
+
+/// Drops the generation counter for a session that no longer exists.
+///
+/// This is the only safe place to reclaim the entry: at this point no turn can be in flight,
+/// so nothing can mistake the reset for a superseded generation.
+pub(crate) fn forget_session_generation(session_id: &str) {
+    let mut map = turn_generations()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.remove(session_id);
+}
+
+/// How a turn ended, as seen by the caller.
+///
+/// This used to be a bare `Result<String>`, which left cancellation with no way to be
+/// reported: a turn that was stopped early had to return either an empty "successful"
+/// reply or a fabricated error. Both lie to the caller. Making the outcome explicit lets
+/// the bridge distinguish "the model answered" from "the user stopped it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnOutcome {
+    /// The model produced a final answer for the user.
+    Completed(String),
+    /// The turn stopped before producing an answer because the session was cancelled or
+    /// its status was changed externally. `reason` is for logs, not for the user.
+    Cancelled { reason: String },
+}
+
+impl TurnOutcome {
+    /// The reply text, or an empty string when the turn was cancelled.
+    #[must_use]
+    pub fn reply(&self) -> &str {
+        match self {
+            Self::Completed(text) => text,
+            Self::Cancelled { .. } => "",
+        }
+    }
+
+    /// Whether the turn reached a final answer.
+    #[must_use]
+    pub fn is_completed(&self) -> bool {
+        matches!(self, Self::Completed(_))
+    }
+}
+
+/// Guarantees the session leaves the turn with status `idle`.
+///
+/// `execute_session_turn_inner` marks the session `running` and then has six `?` early
+/// returns (history load, goal resolution, prompt build, assistant message insert, tool
+/// runner, final message insert). None of those used to reset the status, so a single DB
+/// or tool failure left the row `running` permanently. That is not cosmetic: the TUI
+/// rebuilds `is_running` straight from the `sessions.status` column, so the session showed
+/// a spinning "RUNNING" badge until the process restarted, and still after it.
+///
+/// The guard also releases the turn's file backups. On the success and LLM-error paths the
+/// inner function already does that, and `clear()` is idempotent, so the extra call costs
+/// nothing while covering the six early returns that used to leak the store.
+struct TurnStatusGuard<'a> {
+    session_id: &'a str,
+    /// Which turn for this session this guard owns. Cleanup only lands while it is still the
+    /// newest one; see [`claim_turn_generation`].
+    generation: u64,
+    armed: bool,
+}
+
+impl<'a> TurnStatusGuard<'a> {
+    fn new(session_id: &'a str) -> Self {
+        Self {
+            generation: claim_turn_generation(session_id),
+            session_id,
+            armed: true,
+        }
+    }
+
+    /// Performs the cleanup exactly once. Must be awaited on every return path of the
+    /// wrapper, because `Drop` can only schedule it, not complete it.
+    async fn finish(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.armed = false;
+        Self::cleanup(self.session_id, self.generation).await;
+    }
+
+    async fn cleanup(session_id: &str, generation: u64) {
+        // Backups are deliberately kept here: they belong to the session, not to this turn.
+        // See `release_session_snapshots`, which runs when the session is deleted.
+
+        // A newer turn already owns this session. Writing `idle` now would flip the status of
+        // a turn that is still running, so the stale cleanup is dropped entirely — including
+        // the broadcast below, which the UI treats as authoritative.
+        if !is_latest_turn(session_id, generation) {
+            tracing::debug!(
+                "[Agent Turn] Skipping stale cleanup for session {session_id} (turn {generation})"
+            );
+            return;
+        }
+
+        // Errors here are logged, never propagated: the caller is already returning the
+        // turn's real outcome and must not have it replaced by a status-write failure.
+        if let Err(e) = repository::update_session_status(session_id, "idle").await {
+            tracing::warn!(
+                "[Agent Turn] Could not reset session {} to idle: {}",
+                session_id,
+                e
+            );
+        }
+
+        broadcast_session_event(
+            session_id,
+            AgentSessionEvent::StatusChange {
+                status: "idle".to_string(),
+            },
+        );
+    }
+}
+
+impl Drop for TurnStatusGuard<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // Last resort. A panic or an aborted task (the TUI aborts the turn task on
+        // cancel) never reaches `finish`, and `Drop` cannot await, so the cleanup is
+        // scheduled instead. Without this the abort path would reintroduce the very bug
+        // the guard exists to prevent.
+        //
+        // The spawned task carries this guard's generation, so if the user has already
+        // started another turn by the time it runs, it quietly stands down instead of
+        // clobbering the new turn's `running` status.
+        let session_id = self.session_id.to_string();
+        let generation = self.generation;
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    TurnStatusGuard::cleanup(&session_id, generation).await;
+                });
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "[Agent Turn] No runtime available to reset session {} to idle",
+                    self.session_id
+                );
+            }
+        }
+    }
+}
+
+/// Runs one agent turn and guarantees the session is left `idle` afterwards.
+///
+/// Thin wrapper: all the real work lives in `execute_session_turn_inner`, which is free to
+/// use `?` for its six failure points. The cleanup is unconditional here, so no future
+/// early return added to the inner function can silently strand the status again.
 pub async fn execute_session_turn(
     session_id: &str,
     model_override: Option<&str>,
-) -> Result<String> {
+) -> Result<TurnOutcome> {
+    let mut guard = TurnStatusGuard::new(session_id);
+    let result = execute_session_turn_inner(session_id, model_override).await;
+    guard.finish().await;
+    result
+}
+
+async fn execute_session_turn_inner(
+    session_id: &str,
+    model_override: Option<&str>,
+) -> Result<TurnOutcome> {
     // 1. Load Session & Project
     let session = repository::get_session(session_id)
         .await?
@@ -48,7 +293,17 @@ pub async fn execute_session_turn(
 
     let allowed_folders = parse_project_folders(project.root_path.as_deref());
     for folder in &allowed_folders {
-        let _ = crate::agent::tools::ensure_git_and_gitignore(std::path::Path::new(folder));
+        // BUG-11: this used to be `let _ = ...`, so a failing `git init` or .gitignore write
+        // was invisible. It is not fatal — the turn can proceed without a repo — but it has
+        // to be visible, otherwise the project silently stays untracked and every later
+        // git-based recovery step quietly does nothing.
+        if let Err(e) = crate::agent::tools::ensure_git_and_gitignore(std::path::Path::new(folder)) {
+            tracing::warn!(
+                "[Agent Turn] Could not prepare git workspace at '{}': {}",
+                folder,
+                e
+            );
+        }
     }
     let prompt_skills =
         crate::agent::skills::scan_project_skills(project.root_path.as_deref(), &allowed_folders);
@@ -123,11 +378,17 @@ pub async fn execute_session_turn(
             && status != "running"
         {
             tracing::info!(
-                "[Agent] Session {} status changed to '{}', breaking iteration loop.",
+                "[Agent] Session {} status changed to '{}', stopping the turn.",
                 session_id,
                 status
             );
-            break;
+            // Returning here, not `break`. A `break` fell through to the iteration-limit
+            // fallback below, which persisted a "partial changes applied / please continue"
+            // assistant message and reclassified the goal as Failed or Verification. That
+            // reported an exhausted budget for a turn the user had deliberately stopped.
+            return Ok(TurnOutcome::Cancelled {
+                reason: format!("session status became '{status}'"),
+            });
         }
 
         broadcast_session_event(
@@ -237,7 +498,6 @@ pub async fn execute_session_turn(
                     },
                 );
 
-                release_turn_snapshots()?;
                 return Err(anyhow::anyhow!(err_str));
             }
         };
@@ -454,49 +714,208 @@ pub async fn execute_session_turn(
             },
         );
 
-        release_turn_snapshots()?;
-        return Ok(content_to_save.to_string());
+        return Ok(TurnOutcome::Completed(content_to_save.to_string()));
     }
 
     // Fallback: If iteration limit reached while still running tools
-    release_turn_snapshots()?;
-    gates::handle_iteration_limit_fallback(session_id, &state).await
+    let summary = gates::handle_iteration_limit_fallback(session_id, &state).await?;
+    Ok(TurnOutcome::Completed(summary))
 }
 
 #[cfg(test)]
 mod turn_boundary_tests {
-    use super::release_turn_snapshots;
-    use crate::agent::executor::snapshot::WorkspaceSnapshot;
+    use super::{claim_turn_generation, is_latest_turn, release_session_snapshots, TurnStatusGuard};
+    use crate::agent::repository;
 
-    /// Guards the behaviour, not the helper: a turn boundary must leave the global
-    /// snapshot store empty. Testing `WorkspaceSnapshot::clear()` directly proves the
-    /// method works but says nothing about whether anything ever calls it, which is how
-    /// this store ended up growing for the lifetime of the process unnoticed.
+    /// BUG-09 rewrite. The old test asserted that a finished *turn* emptied the backup
+    /// store \u2014 precisely the behaviour that made workspace_rollback useless, because its
+    /// contract is per session and therefore spans turns. Backups must survive a turn
+    /// boundary and be dropped when the session itself is deleted. The second half is the
+    /// BUG-02 regression: one session releasing its store must not disturb another's.
     #[test]
-    fn a_finished_turn_leaves_no_backups_behind() {
+    fn backups_survive_a_turn_boundary_and_are_dropped_with_the_session() {
         let dir = std::env::temp_dir().join(format!("turn-snap-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        let file = dir.join("touched.txt");
-        std::fs::write(&file, b"before").unwrap();
+        let mine = dir.join("mine.txt");
+        let theirs = dir.join("theirs.txt");
+        std::fs::write(&mine, b"before").unwrap();
+        std::fs::write(&theirs, b"before").unwrap();
 
-        WorkspaceSnapshot::global().backup_file(&file).unwrap();
-        assert!(
-            !WorkspaceSnapshot::global()
-                .tracked_files()
-                .expect("tracked_files must not fail on a healthy lock")
-                .is_empty(),
-            "precondition: the turn must have recorded a backup"
+        let busy = crate::agent::snapshot::for_session("snap-boundary-busy");
+        let other = crate::agent::snapshot::for_session("snap-boundary-other");
+        busy.backup_file(&mine).unwrap();
+        other.backup_file(&theirs).unwrap();
+
+        // A turn boundary must not discard what the session still needs to roll back ...
+        assert_eq!(
+            busy.tracked_files().unwrap().len(),
+            1,
+            "a turn boundary must keep this session's backups"
+        );
+        // ... and must never reach into another session's store (BUG-02).
+        assert_eq!(
+            other.tracked_files().unwrap().len(),
+            1,
+            "a turn boundary in one session must not clear another session's backups"
         );
 
-        release_turn_snapshots().expect("turn snapshots must be released");
-
         assert!(
-            WorkspaceSnapshot::global()
+            release_session_snapshots("snap-boundary-busy"),
+            "deleting a session must release its store"
+        );
+        // Assert through a fresh lookup, not through `busy`: a handle already held elsewhere
+        // shares the backing map, so it keeps its data alive until it is dropped. That is
+        // deliberate — an in-flight turn must not lose its backups mid-flight — but it means
+        // the handle cannot observe the release. Re-acquiring creates an empty store.
+        assert!(
+            crate::agent::snapshot::for_session("snap-boundary-busy")
                 .tracked_files()
-                .expect("tracked_files must not fail on a healthy lock")
+                .unwrap()
                 .is_empty(),
-            "the global store must be released when the turn ends"
+            "a released session must not keep backups in the registry"
+        );
+        assert_eq!(
+            other.tracked_files().unwrap().len(),
+            1,
+            "deleting one session must not drop another session's backups"
+        );
+
+        assert!(release_session_snapshots("snap-boundary-other"));
+        // Assert on these two sessions only. A global "zero sessions" check would be a false
+        // signal here: other tests run in the same process and legitimately hold stores.
+        assert!(
+            crate::agent::snapshot::for_session("snap-boundary-other")
+                .tracked_files()
+                .unwrap()
+                .is_empty(),
+            "a released session must not keep backups in the registry"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test for the "session stuck on running forever" bug.
+    ///
+    /// The turn marks the session `running` and then hits a DB or tool failure that
+    /// propagates with `?`. Before the guard existed, that early return skipped every
+    /// status reset, so the row stayed `running`. The TUI rebuilds `is_running` from that
+    /// column, so the session showed a spinning RUNNING badge across restarts.
+    ///
+    /// The guard is tested directly because driving a real failure through
+    /// `execute_session_turn` would need a live model. Testing `finish()` covers the
+    /// mechanism the wrapper relies on for all six early returns at once.
+    #[tokio::test]
+    async fn a_failed_turn_leaves_the_session_idle() {
+        let project = repository::create_project("guard-test", "regression", None, None)
+            .await
+            .expect("project fixture must be creatable");
+        let session = repository::create_session(&project.id, "guard", None, None, None)
+            .await
+            .expect("session fixture must be creatable");
+
+        repository::update_session_status(&session.id, "running")
+            .await
+            .expect("the turn must be able to mark the session running");
+
+        // Simulate the turn having recorded a backup before it failed.
+        let dir = std::env::temp_dir().join(format!("turn-guard-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("half-written.txt");
+        std::fs::write(&file, b"before").unwrap();
+        crate::agent::snapshot::for_session(&session.id)
+            .backup_file(&file)
+            .unwrap();
+
+        let mut guard = TurnStatusGuard::new(&session.id);
+        guard.finish().await;
+
+        let status = repository::get_session_status(&session.id)
+            .await
+            .expect("status must be readable");
+        assert_eq!(
+            status.as_deref(),
+            Some("idle"),
+            "a turn that failed must not leave the session marked running"
+        );
+        // The failed turn must not have discarded the session's rollback data: the user can
+        // still ask for it to be reverted after a failure, and that spans turns.
+        assert_eq!(
+            crate::agent::snapshot::for_session(&session.id)
+                .tracked_files()
+                .expect("tracked_files must not fail on a healthy lock")
+                .len(),
+            1,
+            "a failed turn must not throw away the session's backups"
+        );
+        assert!(release_session_snapshots(&session.id));
+
+        let _ = repository::delete_session(&session.id).await;
+        let _ = repository::delete_project(&project.id).await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `finish` must be idempotent: the wrapper always calls it, and `Drop` may also have
+    /// run. A second cleanup must not flip the status or panic.
+    #[tokio::test]
+    async fn finishing_twice_is_harmless() {
+        let project = repository::create_project("guard-idem", "regression", None, None)
+            .await
+            .expect("project fixture must be creatable");
+        let session = repository::create_session(&project.id, "guard", None, None, None)
+            .await
+            .expect("session fixture must be creatable");
+        repository::update_session_status(&session.id, "running")
+            .await
+            .expect("status must be writable");
+
+        let mut guard = TurnStatusGuard::new(&session.id);
+        guard.finish().await;
+        guard.finish().await;
+
+        let status = repository::get_session_status(&session.id)
+            .await
+            .expect("status must be readable");
+        assert_eq!(status.as_deref(), Some("idle"));
+
+        let _ = repository::delete_session(&session.id).await;
+        let _ = repository::delete_project(&project.id).await;
+    }
+
+    /// N-2 regression: a stale cleanup must not disturb the generation owned by a newer turn.
+    ///
+    /// `TurnStatusGuard::drop` can only *schedule* its cleanup, so a superseded turn may reach
+    /// the check after a newer turn has already claimed its own generation. That stale check
+    /// must answer "not latest" and leave the newer turn's claim intact; if it pruned the
+    /// entry, the newer turn would later fail to recognise itself as latest and its cleanup
+    /// (idle status + notification) would be skipped entirely - reviving BUG-03.
+    #[test]
+    fn a_stale_cleanup_must_not_disown_the_newer_turn() {
+        let session = format!("n2-stale-{}", std::process::id());
+
+        let first = claim_turn_generation(&session);
+        assert!(
+            is_latest_turn(&session, first),
+            "the only turn to have claimed the session must be the latest"
+        );
+
+        let second = claim_turn_generation(&session);
+        assert!(second > first, "each claim must advance the generation");
+        assert!(
+            is_latest_turn(&session, second),
+            "a newly claimed turn must be recognised as the latest"
+        );
+
+        // The first turn's orphaned cleanup runs late and must be ignored.
+        assert!(
+            !is_latest_turn(&session, first),
+            "a superseded turn must not report itself as the latest"
+        );
+        // ... and critically, the second turn must still own the session afterwards.
+        assert!(
+            is_latest_turn(&session, second),
+            "a stale cleanup must not delete the newer turn's generation"
+        );
+
+        // A session that never claimed anything is never the latest.
+        assert!(!is_latest_turn(&format!("n2-unknown-{}", std::process::id()), 1));
     }
 }
