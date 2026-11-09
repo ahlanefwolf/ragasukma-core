@@ -397,18 +397,18 @@ pub async fn handle_iteration_limit_fallback(
         session_id,
         AgentSessionEvent::MessageCreated(final_fallback_msg),
     );
+    broadcast_session_event(
+        session_id,
+        AgentSessionEvent::Done {
+            reply: fallback_summary.clone(),
+        },
+    );
 
     let _ = repository::update_session_status(session_id, "idle").await;
     broadcast_session_event(
         session_id,
         AgentSessionEvent::StatusChange {
             status: "idle".to_string(),
-        },
-    );
-    broadcast_session_event(
-        session_id,
-        AgentSessionEvent::Done {
-            reply: fallback_summary.clone(),
         },
     );
 

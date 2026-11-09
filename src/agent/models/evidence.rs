@@ -40,6 +40,7 @@ pub struct GoalVerification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum AgentSessionEvent {
     #[serde(rename = "status")]
     StatusChange { status: String },
