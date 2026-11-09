@@ -493,7 +493,7 @@ impl From<&crate::agent::models::McpServer> for McpServerConfig {
             args,
             env,
             url: s.url(),
-            is_enabled: s.is_enabled == 1,
+            is_enabled: s.is_enabled,
         }
     }
 }
@@ -517,7 +517,7 @@ pub async fn resolve_active_mcp_tools(
 ) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
     for s in servers {
-        if s.is_enabled != 1 {
+        if !s.is_enabled {
             continue;
         }
         let config: McpServerConfig = s.into();

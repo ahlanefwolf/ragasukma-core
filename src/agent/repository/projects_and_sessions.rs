@@ -257,7 +257,7 @@ pub async fn delete_session(id: &str) -> Result<()> {
     // All five statements are one logical deletion. Running them outside a transaction
     // means a mid-way failure leaves a session with goals but no evidence, or evidence
     // pointing at goals that no longer exist.
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // 1. Clean up goal verifications and goal evidence for any goal in this session
     sqlx::query("DELETE FROM goal_verifications WHERE goal_id IN (SELECT id FROM goals WHERE session_id = ?1)")
@@ -301,7 +301,7 @@ pub async fn delete_session(id: &str) -> Result<()> {
 pub async fn delete_expired_sessions(cutoff_epoch_secs: i64) -> Result<u64> {
     let pool = super::pool().await;
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Remove goals (and their dependent rows) belonging to expired sessions first.
     sqlx::query(
@@ -342,7 +342,7 @@ pub async fn delete_expired_sessions(cutoff_epoch_secs: i64) -> Result<u64> {
 pub async fn delete_orphan_projects() -> Result<u64> {
     let pool = super::pool().await;
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Evidence is project-scoped rather than session-scoped, so clear it explicitly.
     sqlx::query(
@@ -528,7 +528,7 @@ pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[Stri
     let pool = super::pool().await;
     let all_servers = list_mcp_servers().await?;
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     sqlx::query("DELETE FROM project_mcp_servers WHERE project_id = ?1")
         .bind(project_id)

@@ -29,7 +29,7 @@ pub async fn revalidate_evidence_cache(
     let mut stale_count = 0;
 
     for ev in evidences {
-        if ev.is_stale == 1 {
+        if ev.is_stale {
             continue;
         }
 
@@ -167,7 +167,7 @@ pub async fn build_previous_goals_summary(
         if let Ok(verifs) = repository::list_goal_verifications(&g.id).await
             && let Some(last_v) = verifs.last()
         {
-            let status_str = if last_v.is_passed == 1 {
+            let status_str = if last_v.is_passed {
                 "PASSED"
             } else {
                 "FAILED"

@@ -83,7 +83,7 @@ pub async fn create_message(
     loop {
         attempts += 1;
         let id = generate_id("msg");
-        let mut tx = pool.begin().await?;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
         let res: Result<(i64,), sqlx::Error> = sqlx::query_as(
             "INSERT INTO messages (id, session_id, sequence_num, role, content, thought, tool_calls, tool_call_id, \

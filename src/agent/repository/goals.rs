@@ -323,7 +323,12 @@ pub async fn conclude_goal_if_verified(
     let pool = super::pool().await;
     let now = now_secs();
 
-    let mut tx = pool.begin().await?;
+    // BEGIN IMMEDIATE takes the write lock up front. A plain deferred BEGIN starts as a
+    // reader and only upgrades to a writer at the UPDATE below; under WAL that upgrade
+    // fails with SQLITE_BUSY_SNAPSHOT *without* honouring busy_timeout, because waiting
+    // would invalidate the snapshot. Taking the write lock at BEGIN puts any contention on
+    // the busy_timeout path instead, so concurrent writers wait rather than error out.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let goal_exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM goals WHERE id = ?1")
         .bind(goal_id)
@@ -386,7 +391,7 @@ pub async fn conclude_goal_with_verification(
     let pool = super::pool().await;
     let now = now_secs();
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let res = sqlx::query(
         "UPDATE goals SET status = ?1, phase = 'concluded', conclusion = ?2, version = version + 1, updated_at = ?3 \
@@ -491,7 +496,7 @@ pub async fn save_evidence_and_link(
     let now = now_secs();
     let id = generate_id("ev");
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Upsert on the (project, file, line range) key: re-reading the same slice must
     // refresh the existing row, not append a duplicate. RETURNING gives us the id
@@ -554,7 +559,7 @@ pub async fn save_evidence_and_link(
         symbol_name: symbol_name.map(|s| s.to_string()),
         summary: summary.to_string(),
         raw_snippet: raw_snippet.map(|s| s.to_string()),
-        is_stale: 0,
+        is_stale: false,
         created_at: persisted_created_at,
         updated_at: now,
     })
@@ -629,7 +634,7 @@ struct RankedEvidence {
     symbol_name: Option<String>,
     summary: String,
     raw_snippet: Option<String>,
-    is_stale: i64,
+    is_stale: bool,
     created_at: i64,
     updated_at: i64,
     relevance_score: f64,
@@ -739,7 +744,9 @@ pub async fn record_verification_with_status(
     let id = generate_id("verif");
     let passed_int = if is_passed { 1 } else { 0 };
 
-    let mut tx = pool.begin().await?;
+    // BEGIN IMMEDIATE: see conclude_goal_if_verified — a deferred BEGIN that later writes
+    // can hit SQLITE_BUSY_SNAPSHOT under WAL without retrying, bypassing busy_timeout.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     sqlx::query(
         "INSERT INTO goal_verifications (id, goal_id, iteration, test_command, test_output, is_passed, feedback, created_at) \
@@ -784,7 +791,7 @@ pub async fn record_verification_with_status(
         iteration,
         test_command: test_command.to_string(),
         test_output: test_output.to_string(),
-        is_passed: passed_int,
+        is_passed,
         feedback: feedback.map(|s| s.to_string()),
         created_at: now,
     })
@@ -848,7 +855,7 @@ mod transaction_tests {
 
         let verifs = list_goal_verifications(&goal_id).await.unwrap();
         assert_eq!(verifs.len(), 1);
-        assert_eq!(verifs[0].is_passed, 1);
+        assert_eq!(verifs[0].is_passed, true);
 
         let goal = get_goal(&goal_id).await.unwrap().unwrap();
         assert_eq!(goal.status, "action", "status must follow the verification");

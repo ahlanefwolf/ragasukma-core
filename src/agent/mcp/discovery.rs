@@ -404,7 +404,7 @@ pub fn server_to_config(server: &McpServer) -> Option<McpServerConfig> {
         args,
         env,
         url: server.url(),
-        is_enabled: server.is_enabled == 1,
+        is_enabled: server.is_enabled,
     })
 }
 
@@ -643,7 +643,7 @@ Use wisely.
             id: "figma_mcp".to_string(),
             name: "Figma Server".to_string(),
             config: "Figma design integration CLI".to_string(),
-            is_enabled: 1,
+            is_enabled: true,
             created_at: 0,
         };
 
