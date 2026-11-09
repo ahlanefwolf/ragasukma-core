@@ -166,4 +166,3 @@ pub fn resolve_call_signature_scoped(call_id: &str, target_family: Option<&str>)
 pub fn resolve_call_signature(call_id: &str) -> Option<String> {
     resolve_call_signature_scoped(call_id, None)
 }
-

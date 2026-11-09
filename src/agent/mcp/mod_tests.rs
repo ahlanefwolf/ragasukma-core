@@ -113,8 +113,7 @@ fn test_render_template_placeholders_no_arguments_is_identity() {
 #[test]
 fn test_normalize_command_for_windows() {
     // bash idioms that commonly break PowerShell 5.1
-    let normalized =
-        normalize_command_for_windows(r#"curl -s 'https://x' && python3 script.py"#);
+    let normalized = normalize_command_for_windows(r#"curl -s 'https://x' && python3 script.py"#);
     assert_eq!(normalized, r#"curl.exe -s "https://x" ; python script.py"#);
 }
 

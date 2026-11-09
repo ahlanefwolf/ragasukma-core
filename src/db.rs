@@ -5,9 +5,9 @@
 //! does not have to reach into `crate::llm` just to obtain a connection. `llm::usage`
 //! still records usage rows through it, but that is a consumer, not the owner.
 
+use sqlx::SqlitePool;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::SqlitePool;
 use std::path::PathBuf;
 use tokio::sync::OnceCell;
 

@@ -1,15 +1,13 @@
 //! Request payload construction for the Antigravity v1 API.
 
-use crate::llm::providers::antigravity::constants::*;
-use super::model_config::{resolve_model_alias, resolve_gemini_thinking_config};
+use super::model_config::{resolve_gemini_thinking_config, resolve_model_alias};
 use super::signature::{
     resolve_call_signature_scoped, sanitize_thought_signature, signature_family,
     store_thought_signature_scoped,
 };
-use crate::llm::v1_engine::{
-    V1ChatRequest, extract_text_content, sanitize_function_name,
-};
+use crate::llm::providers::antigravity::constants::*;
 use crate::llm::providers::antigravity::types::generate_pseudo_uuid;
+use crate::llm::v1_engine::{V1ChatRequest, extract_text_content, sanitize_function_name};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 

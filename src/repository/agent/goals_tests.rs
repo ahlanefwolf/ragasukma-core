@@ -28,17 +28,9 @@ async fn verification_and_status_commit_together() {
     let _guard = crate::repository::agent::testsupport::db_test_lock().await;
     let (_pid, goal_id) = seed_goal().await;
 
-    record_verification_with_status(
-        &goal_id,
-        1,
-        "cargo test",
-        "ok",
-        true,
-        None,
-        Some("action"),
-    )
-    .await
-    .unwrap();
+    record_verification_with_status(&goal_id, 1, "cargo test", "ok", true, None, Some("action"))
+        .await
+        .unwrap();
 
     let verifs = list_goal_verifications(&goal_id).await.unwrap();
     assert_eq!(verifs.len(), 1);
@@ -53,16 +45,9 @@ async fn verification_rolls_back_when_goal_is_missing() {
     let _guard = crate::repository::agent::testsupport::db_test_lock().await;
     // The insert would succeed on its own; the failed status update must undo it.
     let ghost = generate_id("ghost_goal");
-    let res = record_verification_with_status(
-        &ghost,
-        1,
-        "cargo test",
-        "ok",
-        true,
-        None,
-        Some("action"),
-    )
-    .await;
+    let res =
+        record_verification_with_status(&ghost, 1, "cargo test", "ok", true, None, Some("action"))
+            .await;
     assert!(res.is_err(), "expected failure for missing goal");
 
     let leftovers = list_goal_verifications(&ghost).await.unwrap();

@@ -1,15 +1,16 @@
 //! Streaming execution of a v1 request (SSE parsing and event mapping).
 
-use crate::llm::providers::antigravity::constants::*;
 use super::payload::build_gemini_payload;
-use crate::llm::providers::antigravity::types::generate_pseudo_uuid;
 use super::signature::{
     sanitize_thought_signature, signature_family, store_thought_signature_scoped,
 };
-use crate::llm::v1_engine::{V1ChatRequest, V1Response, V1StreamEvent, V1ToolCall, V1ToolCallFunction};
+use crate::llm::providers::antigravity::constants::*;
+use crate::llm::providers::antigravity::types::generate_pseudo_uuid;
+use crate::llm::v1_engine::{
+    V1ChatRequest, V1Response, V1StreamEvent, V1ToolCall, V1ToolCallFunction,
+};
 use anyhow::{Context, Result};
 use std::io::BufRead;
-
 
 #[allow(clippy::too_many_arguments)]
 pub fn execute_v1_stream<F>(
@@ -228,4 +229,3 @@ where
         finish_reason,
     })
 }
-

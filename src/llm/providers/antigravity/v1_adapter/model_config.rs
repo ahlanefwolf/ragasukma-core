@@ -53,4 +53,3 @@ pub fn resolve_gemini_thinking_budget(model: &str) -> (i64, bool) {
     let (_, budget, include_thoughts) = resolve_gemini_thinking_config(model);
     (budget, include_thoughts)
 }
-
