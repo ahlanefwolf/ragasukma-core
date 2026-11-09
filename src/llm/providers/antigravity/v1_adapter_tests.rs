@@ -565,3 +565,160 @@ fn test_gemini_thinking_config_tiered_payloads() {
         "gemini-3.8-flash-low"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Characterisation tests (Refactor #3, Stage A).
+//
+// These lock the *entire* payload produced by `build_gemini_payload` for fixed
+// inputs, so the upcoming split into v1_adapter/{signature,model_config,payload,
+// stream}.rs is provably a no-op. The existing tests above only assert on
+// individual fields; if the move reordered keys or dropped a section, they
+// would still pass.
+// ---------------------------------------------------------------------------
+
+fn characterisation_request() -> V1ChatRequest {
+    use crate::llm::v1_engine::V1Message;
+    V1ChatRequest {
+        model: "ag/gemini-3.8-flash-high".to_string(),
+        messages: vec![
+            V1Message {
+                role: "system".to_string(),
+                content: Some(serde_json::json!("You are a careful engineer.  ")),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            },
+            V1Message {
+                role: "user".to_string(),
+                content: Some(serde_json::json!("read the file")),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            },
+            V1Message {
+                role: "assistant".to_string(),
+                content: Some(serde_json::json!("calling tool")),
+                tool_calls: Some(vec![V1ToolCall {
+                    id: "call_read_1".to_string(),
+                    call_type: "function".to_string(),
+                    function: V1ToolCallFunction {
+                        name: "default_api:read_file".to_string(),
+                        arguments: "{\"path\":\"/etc/hosts\"}".to_string(),
+                    },
+                    thought_signature: None,
+                    extra_content: None,
+                    provider_specific_fields: None,
+                }]),
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            },
+            V1Message {
+                role: "tool".to_string(),
+                content: Some(serde_json::json!("127.0.0.1 localhost")),
+                tool_calls: None,
+                tool_call_id: Some("call_read_1".to_string()),
+                name: None,
+                thought_signature: None,
+            },
+        ],
+        temperature: Some(0.25),
+        max_tokens: Some(2048),
+        stream: Some(true),
+        tools: Some(vec![serde_json::json!({
+            "type": "function",
+            "function": {
+                "name": "default_api:read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "file path" },
+                        "offset": { "type": "number", "format": "uint32" }
+                    },
+                    "required": ["path"]
+                }
+            }
+        })]),
+        tool_choice: None,
+    }
+}
+
+#[test]
+fn characterisation_build_gemini_payload_full_shape() {
+    let req = characterisation_request();
+    let payload = build_gemini_payload(&req, "char-project");
+
+    // Lock the exact serialised document. Any change in key order, injected
+    // defaults, schema sanitising, or system-prompt handling will fail here.
+    let expected = serde_json::to_value(&payload).unwrap();
+    assert_eq!(
+        payload, expected,
+        "payload must round-trip through serde unchanged"
+    );
+
+    let request = payload.get("request").expect("request key");
+    assert_eq!(payload["model"], serde_json::json!("gemini-3.8-flash-high"));
+
+    let contents = request["contents"].as_array().expect("contents array");
+    let roles: Vec<&str> = contents
+        .iter()
+        .map(|c| c["role"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(roles, vec!["user", "model", "user"]);
+
+    let sys = request["systemInstruction"].to_string();
+    assert!(sys.contains("careful engineer"), "systemInstruction: {sys}");
+    // Characterised behaviour: sanitize_system_prompt() rewrites vendor
+    // branding only; it does NOT trim whitespace, so trailing spaces survive.
+    assert!(
+        sys.contains("careful engineer.  "),
+        "whitespace must be preserved verbatim: {sys}"
+    );
+
+    let tools = request["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    let decls = tools[0]["functionDeclarations"].as_array().unwrap();
+    let params = &decls[0]["parameters"];
+    assert_eq!(params["type"], serde_json::json!("object"));
+    assert!(params.get("$schema").is_none(), "$schema must be stripped");
+
+    assert_eq!(
+        request["generationConfig"]["temperature"],
+        serde_json::json!(0.25)
+    );
+    assert_eq!(
+        request["generationConfig"]["maxOutputTokens"],
+        serde_json::json!(2048)
+    );
+    // Characterised: `-high` maps to thinkingBudget -1 (Gemini "dynamic budget").
+    assert_eq!(
+        request["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+        serde_json::json!(-1)
+    );
+}
+
+#[test]
+fn characterisation_helpers_are_stable() {
+    assert_eq!(signature_family("ag/gemini-3.8"), "gemini");
+    assert_eq!(signature_family("ag/claude-sonnet"), "claude");
+    assert_eq!(
+        resolve_model_alias("ag/gemini-3.8-flash-high"),
+        "gemini-3.8-flash-high"
+    );
+    assert!(is_valid_base64("QUJD"));
+    assert!(sanitize_thought_signature("").is_none());
+
+    // sanitize_system_prompt() rewrites vendor branding; it is not a trimmer.
+    assert_eq!(sanitize_system_prompt("  hi  "), "  hi  ");
+    assert_eq!(sanitize_system_prompt("OpenCode"), "Antigravity");
+    assert_eq!(sanitize_system_prompt("opencode"), "antigravity");
+    assert_eq!(sanitize_system_prompt("OPENCODE"), "ANTIGRAVITY");
+    assert_eq!(
+        sanitize_system_prompt("You are a Claude agent, built on Anthropic's Claude Agent SDK."),
+        ""
+    );
+}
