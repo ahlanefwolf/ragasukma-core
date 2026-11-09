@@ -12,7 +12,7 @@
 //! - `RAGASUKMA_AGENT_SESSION_RETENTION_DAYS`    (default 90, `0` disables)
 //! - `RAGASUKMA_AGENT_RETENTION_INTERVAL_HOURS`  (default 6, `0` = startup only)
 
-use crate::agent::repository;
+use crate::repository::agent as repository;
 
 pub const ENV_MESSAGE_RETENTION_DAYS: &str = "RAGASUKMA_AGENT_MESSAGE_RETENTION_DAYS";
 pub const ENV_AUDIT_RETENTION_DAYS: &str = "RAGASUKMA_AGENT_AUDIT_RETENTION_DAYS";

@@ -50,7 +50,7 @@ pub fn release_session_snapshots(session_id: &str) -> bool {
 }
 
 use crate::agent::models::AgentSessionEvent;
-use crate::agent::repository;
+use crate::repository::agent as repository;
 
 // ---------------------------------------------------------------------------
 // Turn generations (N-2)
@@ -711,7 +711,7 @@ async fn execute_session_turn_inner(
 #[cfg(test)]
 mod turn_boundary_tests {
     use super::{claim_turn_generation, is_latest_turn, release_session_snapshots, TurnStatusGuard};
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     /// BUG-09 rewrite. The old test asserted that a finished *turn* emptied the backup
     /// store \u2014 precisely the behaviour that made workspace_rollback useless, because its

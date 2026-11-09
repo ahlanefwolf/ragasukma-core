@@ -891,7 +891,7 @@ pub async fn execute_tool_call(
                 .context("Parameter 'extension_name' is required")?;
             crate::agent::executor::state::activate_session_extension(session_id, extension_name);
 
-            let all_servers = crate::agent::repository::list_mcp_servers()
+            let all_servers = crate::repository::agent::list_mcp_servers()
                 .await
                 .unwrap_or_default();
             let matched_server = all_servers

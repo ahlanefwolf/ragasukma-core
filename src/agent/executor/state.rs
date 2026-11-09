@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, RwLock};
 
 use crate::agent::models::{Message, Project, Session};
-use crate::agent::repository;
+use crate::repository::agent as repository;
 
 static SESSION_ACTIVATED_EXTENSIONS: LazyLock<RwLock<HashMap<String, HashSet<String>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -717,7 +717,7 @@ mod capability_tests {
 /// judging the user's own sentence back at them.
 #[cfg(test)]
 mod goal_criteria_tests {
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     #[tokio::test]
     async fn a_new_goal_does_not_copy_its_demand_into_success_criteria() {

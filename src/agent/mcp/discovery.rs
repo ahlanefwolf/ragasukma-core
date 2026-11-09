@@ -3,7 +3,7 @@ use tracing::{info, warn};
 
 use crate::agent::mcp::{McpClient, McpServerConfig, McpToolDefinition};
 use crate::agent::models::McpServer;
-use crate::agent::repository::upsert_mcp_server_tool;
+use crate::repository::agent::upsert_mcp_server_tool;
 use crate::llm::client::LlmClient;
 
 /// Tool information discovered either via LLM analysis or native JSON-RPC inspection

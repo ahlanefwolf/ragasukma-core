@@ -838,7 +838,7 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn verification_and_status_commit_together() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (_pid, goal_id) = seed_goal().await;
 
         record_verification_with_status(
@@ -863,7 +863,7 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn verification_rolls_back_when_goal_is_missing() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         // The insert would succeed on its own; the failed status update must undo it.
         let ghost = generate_id("ghost_goal");
         let res = record_verification_with_status(
@@ -887,7 +887,7 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn conclude_requires_a_passing_verification() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (_pid, goal_id) = seed_goal().await;
 
         let res = conclude_goal_if_verified(&goal_id, "completed", "done").await;
@@ -899,7 +899,7 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn conclude_succeeds_after_passing_verification() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (_pid, goal_id) = seed_goal().await;
         record_verification_with_status(&goal_id, 1, "cargo test", "ok", true, None, None)
             .await
@@ -916,7 +916,7 @@ mod transaction_tests {
 
     #[tokio::test]
     async fn evidence_and_link_are_written_together() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (project_id, goal_id) = seed_goal().await;
 
         let ev = save_evidence_and_link(
@@ -942,7 +942,7 @@ mod transaction_tests {
     /// the very file the agent changed.
     #[tokio::test]
     async fn rereading_an_edited_file_keeps_its_higher_rank() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (project_id, goal_id) = seed_goal().await;
         let modified = crate::agent::evidence_ranking::rank_evidence(
             crate::agent::evidence_ranking::EvidenceOrigin::Modified,
@@ -1002,7 +1002,7 @@ mod transaction_tests {
     /// recent-but-lower-ranked file to the top.
     #[tokio::test]
     async fn stale_evidence_is_ordered_below_recently_touched_evidence() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let (project_id, goal_id) = seed_goal().await;
         let pool = super::super::pool().await;
 

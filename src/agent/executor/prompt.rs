@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::agent::executor::state::ModelCapabilities;
 use crate::agent::models::{McpServer, Project, PromptSkill};
-use crate::agent::repository;
+use crate::repository::agent as repository;
 
 /// Everything the system prompt needs to describe one agent turn.
 ///

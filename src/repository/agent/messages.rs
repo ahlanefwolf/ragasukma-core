@@ -158,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_message_atomic_sequences() {
-        let _guard = crate::agent::repository::testsupport::db_test_lock().await;
+        let _guard = crate::repository::agent::testsupport::db_test_lock().await;
         let pool = super::super::pool().await;
         // Prepare test session
         let test_session_id = format!(

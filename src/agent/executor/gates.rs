@@ -3,7 +3,7 @@ use anyhow::Result;
 use super::state::TurnState;
 use crate::agent::events::broadcast_session_event;
 use crate::agent::models::AgentSessionEvent;
-use crate::agent::repository;
+use crate::repository::agent as repository;
 
 pub enum GateResult {
     Continue,

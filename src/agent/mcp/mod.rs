@@ -524,7 +524,7 @@ pub async fn resolve_active_mcp_tools(
 
         // 1. First attempt to load tools from `mcp_server_tools` table
         let mut loaded_from_db = false;
-        if let Ok(db_tools) = crate::agent::repository::list_mcp_server_tools(&s.id).await
+        if let Ok(db_tools) = crate::repository::agent::list_mcp_server_tools(&s.id).await
             && !db_tools.is_empty()
         {
             for tool in db_tools {

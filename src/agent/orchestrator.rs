@@ -5,7 +5,7 @@ use super::context_builder::{
     build_goal_context_prompt, reuse_evidence_from_parent, revalidate_evidence_cache,
 };
 use super::models::{Goal, GoalVerification};
-use super::repository;
+use crate::repository::agent as repository;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -259,7 +259,7 @@ impl GoalOrchestrator {
 #[cfg(test)]
 mod inheritance_tests {
     use crate::agent::orchestrator::GoalOrchestrator;
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     async fn project_and_session() -> (String, String) {
         let project = repository::create_project("Api Inheritance", "", None, None)

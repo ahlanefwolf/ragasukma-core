@@ -11,7 +11,6 @@ pub mod maintenance;
 pub mod mcp;
 pub mod models;
 pub mod orchestrator;
-pub mod repository;
 pub mod skills;
 pub mod snapshot;
 pub mod tools;

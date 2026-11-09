@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use super::models::Goal;
-use super::repository;
+use crate::repository::agent as repository;
 
 /// Computes a sha256 checksum of a file to detect any file changes / drifts.
 pub fn compute_file_version<P: AsRef<Path>>(path: P) -> Result<String> {
@@ -305,7 +305,7 @@ pub async fn build_goal_context_prompt(goal: &Goal, evidence_limit: usize) -> Re
 #[cfg(test)]
 mod reuse_scoring_tests {
     use crate::agent::context_builder::reuse_evidence_from_parent;
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     async fn session_with_two_goals() -> (String, String, String) {
         let project = repository::create_project("Reuse Scoring", "", None, None)
@@ -469,7 +469,7 @@ mod reuse_scoring_tests {
 #[cfg(test)]
 mod conclusion_tests {
     use crate::agent::orchestrator::{GoalOrchestrator, GoalState};
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     async fn goal_in_new_session() -> (String, String) {
         let project = repository::create_project("Conclusion Rules", "", None, None)
@@ -624,7 +624,7 @@ mod conclusion_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::repository;
+    use crate::repository::agent as repository;
 
     /// The evidence block is rebuilt on every turn, so it must respect the caller's cap instead of
     /// dumping every cached file into the prompt.
