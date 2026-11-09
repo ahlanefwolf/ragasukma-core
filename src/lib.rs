@@ -21,6 +21,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod agent;
 pub mod assets;
 pub mod config;
+pub mod db;
 pub mod llm;
 pub mod repository;
 pub mod time_util;
