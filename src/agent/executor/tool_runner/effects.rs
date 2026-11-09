@@ -347,3 +347,142 @@ pub(super) async fn apply_post_execution(
         }
     }
 }
+
+/// Corrective directives, inspection-streak advice and the evidence cache.
+///
+/// Runs once the tool has executed: it turns what happened into guidance for
+/// the next step, then records the file versions the goal can cite as proof.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn apply_post_inspection(
+    state: &mut TurnState,
+    tool_name: &str,
+    tool_output: &str,
+    args_val: &Value,
+    target_arg_file: Option<&str>,
+    is_edit_op: bool,
+    is_inspection: bool,
+    is_accessing_unmodified_target: bool,
+    project_id: &str,
+    allowed_folders: &[String],
+) {
+    // If edit failed due to text mismatch or duplicate match, guide model directly back to target
+    if tool_name == "workspace_edit_file" {
+        if tool_output.contains("'old_text' not found") {
+            state.ephemeral_directive = Some(
+            "Edit recovery: `workspace_edit_file` failed because 'old_text' did not match the file on disk. Inspect the exact slice using `workspace_read_file` if needed, and re-call `workspace_edit_file` with matching lines and 2-3 lines of surrounding context.".to_string()
+        );
+        } else if tool_output.contains("matches ") || tool_output.contains("matched ") {
+            state.ephemeral_directive = Some(
+            "Edit recovery: 'old_text' matched multiple locations in the file. Include the enclosing block, function declaration, or 2-3 additional surrounding lines in 'old_text' to make it unique, and re-call `workspace_edit_file`.".to_string()
+        );
+        }
+    }
+
+    // Check inspection streaks (advise model to apply changes or conclude)
+    // Escalating warning tied to the real turn budget instead of an arbitrary
+    // constant, so the advice the model receives matches how much room it has.
+    if state.global_inspection_streak >= state.inspection_streak_limit {
+        state.ephemeral_directive = Some(format!(
+            "Notice: you have run {} inspections without modifying code, and your turn budget is limited. Stop exploring: either apply the change with `workspace_edit_file` / `workspace_write_file`, or answer the user with what you have established so far.",
+            state.global_inspection_streak
+        ));
+    }
+
+    if state.has_passed_verification && is_inspection && !is_accessing_unmodified_target {
+        state.ephemeral_directive = Some(
+        "STOP: Verification has already passed for modified files! Do not perform redundant inspections. Conclude your response or proceed directly to edit remaining target files.".to_string()
+    );
+    }
+
+    let is_file_inspection = tool_name == "workspace_read_file" || tool_name == "workspace_grep";
+    if is_file_inspection && let Some(path) = target_arg_file.as_deref() {
+        let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
+        let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
+        let is_exact_dup =
+            state
+                .recent_read_slices
+                .contains(&(path.to_string(), start_line, end_line));
+        if is_exact_dup || (start_line.is_none() && end_line.is_none()) {
+            let count = state
+                .consecutive_read_same_file
+                .entry(path.to_string())
+                .or_insert(0);
+            *count += 1;
+            if *count >= 5 {
+                state.ephemeral_directive = Some(format!(
+                    "Notice: You have inspected `{path}` {count} times this turn. If your task requires code modifications, call `workspace_edit_file` now. If answering a question, respond directly to the user."
+                ));
+            }
+        }
+    }
+
+    // Auto-cache discovered file contents into Evidence Cache with true SHA-256 version
+    if tool_name == "workspace_read_file" && !tool_output.starts_with("Tool execution error") {
+        if let Some(file_path) = target_arg_file.as_deref() {
+            let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
+            let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
+            let preview_summary = format!(
+                "Read {} (lines {:?}-{:?})",
+                file_path,
+                start_line.unwrap_or(1),
+                end_line.unwrap_or(0)
+            );
+            let file_ver =
+                crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
+                    .ok()
+                    .and_then(|p| crate::agent::context_builder::compute_file_version(&p).ok())
+                    .unwrap_or_else(|| "live_mtime".to_string());
+            let snippet: String = tool_output.chars().take(1500).collect();
+            // A read is context, not proof of work, so it ranks below any edited file.
+            // Freshly observed, so age is zero; recency decay is applied at read time.
+            let score = crate::agent::evidence_ranking::rank_evidence(
+                crate::agent::evidence_ranking::EvidenceOrigin::Read,
+                0,
+            );
+            if let Err(e) = repository::save_evidence_and_link(
+                project_id,
+                file_path,
+                &file_ver,
+                start_line,
+                end_line,
+                None,
+                &preview_summary,
+                Some(&snippet),
+                Some((&state.goal_id, score, true)),
+            )
+            .await
+            {
+                crate::term_err!("[Evidence] Failed to cache read of {}: {}", file_path, e);
+            }
+        }
+    } else if is_edit_op
+        && !tool_output.starts_with("Tool execution error")
+        && let Some(file_path) = target_arg_file.as_deref()
+    {
+        let preview_summary = format!("Modified/Created file {}", file_path);
+        let file_ver = crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
+            .ok()
+            .and_then(|p| crate::agent::context_builder::compute_file_version(&p).ok())
+            .unwrap_or_else(|| "live_mtime".to_string());
+        // An edited/created file is part of the solution, so it ranks at the top.
+        let score = crate::agent::evidence_ranking::rank_evidence(
+            crate::agent::evidence_ranking::EvidenceOrigin::Modified,
+            0,
+        );
+        if let Err(e) = repository::save_evidence_and_link(
+            project_id,
+            file_path,
+            &file_ver,
+            None,
+            None,
+            None,
+            &preview_summary,
+            None,
+            Some((&state.goal_id, score, true)),
+        )
+        .await
+        {
+            crate::term_err!("[Evidence] Failed to cache edit of {}: {}", file_path, e);
+        }
+    }
+}
