@@ -13,52 +13,17 @@ pub struct DiscoveredTool {
     pub config: String,
 }
 
-/// System prompt for the LLM Tool Discovery Runner (Agnostic Markdown)
-pub const MCP_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are an expert MCP Skill Compiler and Tool Specialist.
-Your mission is to thoroughly analyze an MCP server's Markdown configuration (the skill description written by the user) and produce clean, comprehensive specifications in pure Markdown for all available tools, including a concrete shell command template for each tool.
+/// System prompt for the LLM Tool Discovery Runner (Command Only)
+pub const MCP_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are a CLI command generator for external MCP tools.
+Your ONLY task is to generate the single-line shell command template needed to execute each tool, using `{param}` placeholders.
 
-You prioritize being model-agnostic: the server configuration and the tool specifications are pure Markdown so any LLM can easily learn, read, and understand them.
-Do NOT output JSON schemas or JSON codeblocks for the tool parameters or execution contracts.
-Describe parameters and capabilities using clean, expressive Markdown.
-
-## Shell Environment (IMPORTANT — write every command template in THIS syntax)
-{shell_desc}
-
-## Command Template Priority (IMPORTANT — follow this order)
-1. NATIVE OS COMMAND FIRST: if the tool maps to a system executable (curl, ffmpeg, sqlite3, git, docker, etc.), the Command Template MUST be that native command with `{param}` placeholders. This is the primary path.
-2. Node.js inline: if no native OS command exists (pure logic / JSON processing / API calls with logic), use an inline one-liner with Node directly — NO separate .js script file. Example: `node -e "const c=require('child_process');..." -- {param}`
-3. Python inline as last resort: `python3 -c '...'` (Unix) / `py -3 -c '...'` (Windows) — also inline, NO separate .py script file.
-Never invent a .js/.py file path; everything must run directly from the command line.
-
-For each tool, output exactly one `<tool name="TOOL_NAME">` block:
-
-<tool name="tool_name">
-# tool_name
-
-A concise, high-level description of what the tool does and when the agent should call it.
-
-## Parameters
-- `param_name` (type, required/optional): Description of parameter, constraints, and format.
-
-## Command Template
-A ready-to-run shell command in the Shell Environment syntax above, following the Priority order above.
-Use `{param_name}` placeholders for parameters. Example:
-
-```bash
-curl -s "https://api.example.com/search?q={query}"
-```
-
-## Usage Guidelines
-Clear instructions for the agent on how to formulate calls and interpret results.
-</tool>
+Output format:
+<tool name="tool_name">command --flag {param}</tool>
 
 Rules:
-1. Every tool must have a distinct `<tool name="...">` and `</tool>` tag with a snake_case name.
-2. Inside each `<tool>` tag must be pure, clean Markdown. No JSON codeblocks (except the Command Template bash/powershell fenced block).
-3. Every tool MUST include a `## Command Template` section with a concrete runnable command using `{param}` placeholders. Derive it from the server configuration (executables, scripts, URLs, or skill steps described by the user). If the skill has no CLI equivalent, describe the closest shell workflow.
-4. Be precise with parameter names, types, descriptions, and required constraints.
-5. You MUST output at least one `<tool name="...">` block representing the primary tools of this MCP server. Never return an empty response.
-"#;
+1. Output ONLY the single-line shell command inside <tool name="...">...</tool>.
+2. Do NOT write markdown headings, explanations, parameters lists, or usage guides.
+3. Every command template must be a single runnable line."#;
 
 /// Build the user prompt for the LLM runner
 #[must_use]
@@ -101,11 +66,40 @@ pub fn build_discovery_prompt(
         "Study the MCP server configuration (Markdown skill description from the user) above.\n\
         You are demanded to formulate and generate the complete specification for each tool \
         provided by this MCP server so they can be registered into the mcp_server_tools database.\n\
-        Every tool must include a `## Command Template` section with a runnable shell command \
+        Every tool must include a `## Command Template` section with EXACTLY ONE SINGLE LINE runnable shell command \
         using `{param}` placeholders (derive it from the configuration, executables, or scripts \
-        the user described).\n\
+        the user described). The command template MUST NOT contain multiple lines or linebreaks.\n\
         Wrap each tool inside `<tool name=\"tool_name\"> ... </tool>` tags.",
     );
+    prompt
+}
+
+/// Build a focused user prompt for the LLM runner to generate a rich specification for ONE single tool.
+/// This gives the raw `mcp_servers.config` to the LLM so it learns how the server runs.
+#[must_use]
+pub fn build_single_tool_prompt(
+    server: &McpServer,
+    tool: &McpToolDefinition,
+) -> String {
+    let mut prompt = format!(
+        "Server Name: {}\n\nServer Configuration (`mcp_servers.config`):\n```\n{}\n```\n\nTarget Tool: {}\n",
+        server.name, server.config.trim(), tool.name
+    );
+
+    if let Some(ref desc) = tool.description {
+        prompt.push_str(&format!("Description: {}\n", desc));
+    }
+    if let Some(props) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+        let prop_names: Vec<String> = props.keys().cloned().collect();
+        prompt.push_str(&format!("Parameters: {}\n", prop_names.join(", ")));
+    }
+
+    prompt.push_str(&format!(
+        "\nBased on the raw server configuration above, generate ONLY the single-line shell command template to execute `{}` using `{{param}}` placeholders.\n\
+        Format:\n\
+        <tool name=\"{}\">command --arg {{param}}</tool>",
+        tool.name, tool.name
+    ));
     prompt
 }
 
@@ -143,9 +137,10 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
             if let Some(end_tag_idx) = content_start.find("</tool>") {
                 let tool_content = content_start[..end_tag_idx].trim().to_string();
                 if !name.is_empty() && !tool_content.is_empty() {
+                    let sanitized = sanitize_command_template_to_single_line(&tool_content);
                     tools.push(DiscoveredTool {
                         name,
-                        config: tool_content,
+                        config: sanitized,
                     });
                 }
                 remaining = &content_start[end_tag_idx + 7..];
@@ -171,7 +166,10 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
             if let Some((name, body_lines)) = current_tool.take() {
                 let body = body_lines.join("\n").trim().to_string();
                 if !name.is_empty() && !body.is_empty() {
-                    tools.push(DiscoveredTool { name, config: body });
+                    tools.push(DiscoveredTool {
+                        name,
+                        config: sanitize_command_template_to_single_line(&body),
+                    });
                 }
             }
             let name_part = if let Some(rest) = trimmed.strip_prefix("### TOOL:") {
@@ -189,7 +187,10 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
     if let Some((name, body_lines)) = current_tool {
         let body = body_lines.join("\n").trim().to_string();
         if !name.is_empty() && !body.is_empty() {
-            tools.push(DiscoveredTool { name, config: body });
+            tools.push(DiscoveredTool {
+                name,
+                config: sanitize_command_template_to_single_line(&body),
+            });
         }
     }
 
@@ -210,27 +211,112 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
             && let Some(arr) = val.as_array()
         {
             for item in arr {
-                    if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
-                        let config = item
-                            .get("description")
-                            .or_else(|| item.get("config"))
-                            .and_then(|c| c.as_str())
-                            .unwrap_or("");
-                        let tool_md = if config.starts_with('#') {
-                            config.to_string()
-                        } else {
-                            format!("# {}\n\n{}\n", name, config)
-                        };
-                        tools.push(DiscoveredTool {
-                            name: name.to_string(),
-                            config: tool_md,
-                        });
-                    }
+                if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                    let config = item
+                        .get("description")
+                        .or_else(|| item.get("config"))
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("");
+                    let tool_md = if config.starts_with('#') {
+                        config.to_string()
+                    } else {
+                        format!("# {}\n\n{}\n", name, config)
+                    };
+                    tools.push(DiscoveredTool {
+                        name: name.to_string(),
+                        config: sanitize_command_template_to_single_line(&tool_md),
+                    });
                 }
             }
         }
+    }
 
     tools
+}
+
+/// Sanitizes a Markdown tool specification so that the `## Command Template`
+/// section contains strictly a single-line execution command inside its code block.
+#[must_use]
+pub fn sanitize_command_template_to_single_line(config: &str) -> String {
+    let mut result = Vec::new();
+    let mut in_command_template = false;
+    let mut in_code_block = false;
+    let mut code_block_fence = String::new();
+    let mut command_lines = Vec::new();
+
+    for line in config.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("## ") {
+            if in_command_template && in_code_block {
+                // Closing unclosed code block before next header
+                let single_line = collapse_command_lines(&command_lines);
+                result.push(single_line);
+                result.push(code_block_fence.clone());
+                in_code_block = false;
+                command_lines.clear();
+            }
+            in_command_template = trimmed.to_lowercase().contains("command template");
+            result.push(line.to_string());
+            continue;
+        }
+
+        if in_command_template {
+            if trimmed.starts_with("```") {
+                if !in_code_block {
+                    in_code_block = true;
+                    code_block_fence = trimmed.to_string();
+                    result.push(line.to_string());
+                    command_lines.clear();
+                } else {
+                    // Exiting code block: collapse collected command lines into exactly one single line
+                    let single_line = collapse_command_lines(&command_lines);
+                    if !single_line.is_empty() {
+                        result.push(single_line);
+                    }
+                    result.push(line.to_string());
+                    in_code_block = false;
+                    command_lines.clear();
+                }
+                continue;
+            }
+
+            if in_code_block {
+                if !trimmed.is_empty() {
+                    command_lines.push(trimmed);
+                }
+                continue;
+            }
+        }
+
+        result.push(line.to_string());
+    }
+
+    if in_code_block {
+        let single_line = collapse_command_lines(&command_lines);
+        if !single_line.is_empty() {
+            result.push(single_line);
+        }
+        result.push(code_block_fence);
+    }
+
+    result.join("\n")
+}
+
+fn collapse_command_lines(lines: &[&str]) -> String {
+    let mut joined = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let mut clean = line.trim();
+        // Remove trailing shell continuation backslash if present
+        if clean.ends_with('\\') {
+            clean = clean[..clean.len() - 1].trim();
+        }
+        if i > 0 && !joined.is_empty() && !clean.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(clean);
+    }
+    joined
 }
 
 /// Fallback converter: converts native `McpToolDefinition` JSON into clean Markdown spec
@@ -278,9 +364,17 @@ pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
         md.push_str("No parameters required.\n");
     }
 
-    md.push_str("\n## Usage Guidelines\n");
+    md.push_str("\n## Command Template\n```bash\n");
+    let mut cmd_parts = vec![tool.name.clone()];
+    if let Some(props) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+        for (prop_name, _) in props {
+            cmd_parts.push(format!("--{prop_name} \"{{{prop_name}}}\""));
+        }
+    }
+    md.push_str(&cmd_parts.join(" "));
+    md.push_str("\n```\n\n## Usage Guidelines\n");
     md.push_str(&format!(
-        "Agnostic MCP tool specification for `{}`. Invoke through the agent tool execution runtime with the parameters defined above.\n",
+        "External CLI command for `{}`. Execute directly via `workspace_run_command` with the parameters defined above.\n",
         tool.name
     ));
 
@@ -320,7 +414,7 @@ pub async fn try_native_list_tools(server: &McpServer) -> Result<Vec<McpToolDefi
         .ok_or_else(|| "Server does not have an active runtime transport configuration".to_string())?;
 
     let client = McpClient::new(config);
-    client.initialize().await?;
+    let _ = client.initialize().await;
     client.list_tools().await
 }
 
@@ -354,22 +448,44 @@ pub async fn discover_tools(
         }
     };
 
+    // OS-aware shell description, same pattern as executor/prompt.rs: on Windows
+    // PowerShell with ';' separator (no '&&'), on Unix POSIX shell with '&&'.
+    #[cfg(target_os = "windows")]
+    let shell_desc = "OS: Windows. Shell: PowerShell. Use native PowerShell syntax for scripts and paths. For multiple commands in one execution, use ';' as separator (do not use '&&' as Windows PowerShell 5.1 does not support it). When a command needs curl, write `curl.exe` (the bare `curl` is an alias for Invoke-WebRequest and will fail). Script runtimes: Node.js (`node`) or Python (`python` / `py -3`).";
+
+    #[cfg(not(target_os = "windows"))]
+    let shell_desc = "OS: macOS/Linux. Shell: POSIX shell. Use standard Unix shell syntax; chain sequential commands with '&&'. Script runtimes: Node.js (`node`) or Python (`python3`).";
+
+    let sys_prompt = MCP_DISCOVERY_SYSTEM_PROMPT.replace("{shell_desc}", shell_desc);
+
+    // 2. If native MCP handshake returned raw_tools, instantly map each tool definition
+    // directly to its clean markdown specification without waiting for slow serial LLM calls.
+    if let Some(raw_list) = raw_tools
+        && !raw_list.is_empty()
+    {
+        info!(
+            "Instant native registration: converting {} tools directly for server '{}'",
+            raw_list.len(),
+            server.name
+        );
+        let final_tools: Vec<DiscoveredTool> = raw_list
+            .iter()
+            .map(|raw_tool| tool_definition_to_markdown(raw_tool))
+            .collect();
+
+        return Ok(final_tools);
+    }
+
+    // 3. Fallback for document-only servers without a running transport binary:
+    // Generate specifications in batch using the skill configuration document.
     if let Some(model) = target_model {
-        let user_prompt = build_discovery_prompt(server, raw_tools.as_deref());
-        // OS-aware shell description, same pattern as executor/prompt.rs: on Windows
-        // PowerShell with ';' separator (no '&&'), on Unix POSIX shell with '&&'.
-        #[cfg(target_os = "windows")]
-        let shell_desc = "OS: Windows. Shell: PowerShell. Use native PowerShell syntax for scripts and paths. For multiple commands in one execution, use ';' as separator (do not use '&&' as Windows PowerShell 5.1 does not support it). When a command needs curl, write `curl.exe` (the bare `curl` is an alias for Invoke-WebRequest and will fail). Script runtimes: Node.js (`node`) or Python (`python` / `py -3`).";
-
-        #[cfg(not(target_os = "windows"))]
-        let shell_desc = "OS: macOS/Linux. Shell: POSIX shell. Use standard Unix shell syntax; chain sequential commands with '&&'. Script runtimes: Node.js (`node`) or Python (`python3`).";
-
-        let sys_prompt = MCP_DISCOVERY_SYSTEM_PROMPT.replace("{shell_desc}", shell_desc);
+        let user_prompt = build_discovery_prompt(server, None);
+        let sys_prompt_clone = sys_prompt.clone();
 
         let llm_res: Result<String, String> = tokio::task::spawn_blocking(move || {
             let mut client = LlmClient::new();
             client.model = model;
-            client.set_system_prompt(sys_prompt);
+            client.set_system_prompt(sys_prompt_clone);
             client
                 .chat_stream(&user_prompt, |_| Ok(()))
                 .map_err(|e| e.to_string())
@@ -377,27 +493,13 @@ pub async fn discover_tools(
         .await
         .map_err(|e| format!("LLM runner task execution error: {e}"))?;
 
-        match llm_res {
-            Ok(output) => {
-                let parsed = parse_tools_from_response(&output);
-                if !parsed.is_empty() {
-                    return Ok(parsed);
-                }
-                warn!("LLM discovery returned output but parsed 0 tools; evaluating fallbacks.");
+        if let Ok(output) = llm_res {
+            let parsed = parse_tools_from_response(&output);
+            if !parsed.is_empty() {
+                return Ok(parsed);
             }
-            Err(e) => {
-                warn!("LLM discovery failed: {}. Falling back to native tools if available.", e);
-            }
+            warn!("LLM discovery returned output but parsed 0 tools; evaluating markdown fallbacks.");
         }
-    }
-
-    // 3. Fallback: If native tools exist, convert them to Markdown specifications
-    if let Some(tools) = raw_tools
-        && !tools.is_empty()
-    {
-        let converted: Vec<DiscoveredTool> =
-            tools.iter().map(tool_definition_to_markdown).collect();
-        return Ok(converted);
     }
 
     // 4. Fallback: Parse tools directly from the server markdown content
@@ -508,5 +610,60 @@ Delete a file on disk.
         assert!(tool.config.contains("- `a` (number, required): First number"));
         assert!(tool.config.contains("- `b` (number, required): Second number"));
         assert!(!tool.config.contains("```json"));
+    }
+
+    #[test]
+    fn test_sanitize_command_template_to_single_line() {
+        let multiline_spec = r#"# sample_tool
+
+Description here.
+
+## Parameters
+- `param` (string, required): A parameter.
+
+## Command Template
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0"}' \
+  | figcraft-cli mcp
+```
+
+## Usage Guidelines
+Use wisely.
+"#;
+
+        let sanitized = sanitize_command_template_to_single_line(multiline_spec);
+        assert!(sanitized.contains("```bash\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\"}' | figcraft-cli mcp\n```"));
+        assert!(sanitized.contains("## Usage Guidelines"));
+    }
+
+    #[test]
+    fn test_build_single_tool_prompt() {
+        let server = McpServer {
+            id: "figma_mcp".to_string(),
+            name: "Figma Server".to_string(),
+            config: "Figma design integration CLI".to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+
+        let raw_tool = McpToolDefinition {
+            name: "inspect_node".to_string(),
+            description: Some("Inspects layout and styling of a Figma node".to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_key": { "type": "string", "description": "Figma file key" },
+                    "node_id": { "type": "string", "description": "Target node id" }
+                },
+                "required": ["file_key", "node_id"]
+            }),
+        };
+
+        let prompt = build_single_tool_prompt(&server, &raw_tool);
+        assert!(prompt.contains("Tool: inspect_node"));
+        assert!(prompt.contains("Description: Inspects layout and styling of a Figma node"));
+        assert!(prompt.contains("file_key") && prompt.contains("node_id"));
+        assert!(prompt.contains("<tool name=\"inspect_node\">"));
     }
 }

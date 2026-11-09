@@ -5,6 +5,39 @@ use std::sync::{LazyLock, RwLock};
 use crate::agent::models::{Message, Project, Session};
 use crate::agent::repository;
 
+static SESSION_ACTIVATED_EXTENSIONS: LazyLock<RwLock<HashMap<String, HashSet<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Checks if an extension/MCP server has been activated for a session.
+pub fn is_extension_active(session_id: &str, server_name: &str) -> bool {
+    let guard = SESSION_ACTIVATED_EXTENSIONS
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .get(session_id)
+        .map(|set| set.contains(&server_name.to_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Activates an extension/MCP server for a session.
+pub fn activate_session_extension(session_id: &str, server_name: &str) -> bool {
+    let mut guard = SESSION_ACTIVATED_EXTENSIONS
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(session_id.to_string())
+        .or_default()
+        .insert(server_name.to_lowercase())
+}
+
+/// Retrieves all active extensions for a session.
+pub fn get_session_active_extensions(session_id: &str) -> HashSet<String> {
+    let guard = SESSION_ACTIVATED_EXTENSIONS
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    guard.get(session_id).cloned().unwrap_or_default()
+}
+
 pub struct TurnState {
     pub goal_id: String,
     pub current_phase: String,

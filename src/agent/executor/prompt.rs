@@ -13,6 +13,7 @@ pub struct AgentPromptContext<'a> {
     pub allowed_folders: &'a [String],
     pub prompt_skills: &'a [PromptSkill],
     pub active_mcp_servers: &'a [McpServer],
+    pub dormant_mcp_servers: &'a [McpServer],
     pub mcp_tools: &'a [crate::agent::mcp::ActiveMcpTool],
     pub session_id: &'a str,
     pub goal_id: &'a str,
@@ -30,6 +31,7 @@ fn build_static_prompt(
     allowed_folders: &[String],
     prompt_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
+    dormant_mcp_servers: &[McpServer],
     mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
     capabilities: ModelCapabilities,
 ) -> String {
@@ -172,24 +174,25 @@ fn build_static_prompt(
 
     prompt.push_str(
         "2. DEDICATED STRUCTURED TOOLS: Use `workspace_edit_file`, `workspace_write_file`, `workspace_read_file` and `workspace_grep` for workspace code changes and inspections. Do not rewrite source files via shell heredocs or Python one-liners.\n\
-         3. VENDOR/DEPENDENCY INTEGRITY: NEVER edit vendor dependencies inside `node_modules/`, `.git/`, or library internals. Apply all fixes to your own project source files.\n\
-         4. DISCOVERY DISCIPLINE: Investigate only what the task needs. Read the relevant file, understand it, then act. Do not wander across unrelated files; if an investigation is getting large, say what you found so far and what you still need.\n\
-         5. SCRIPT & DATA AUTOMATION: Node.js (`node -e '...'`) or Python (`python3` / `python`) is available for non-file operations (API requests, regex/JSON parsing, sqlite queries, data conversion) when no dedicated tool covers the need. Pick the most suitable, reliable runtime present in the environment.\n\
-         6. WORKSPACE EXECUTION: Use `workspace_run_command` for builds, tests, package managers and git operations.\n",
+         3. EXTERNAL CLI TOOLS: When an active project extension/MCP tool matches the intended action, execute its CLI command directly using `workspace_run_command`. Replace placeholders (e.g. `<param>` or `{param}`) with appropriate values.\n\
+         4. VENDOR/DEPENDENCY INTEGRITY: NEVER edit vendor dependencies inside `node_modules/`, `.git/`, or library internals. Apply all fixes to your own project source files.\n\
+         5. DISCOVERY DISCIPLINE: Investigate only what the task needs. Read the relevant file, understand it, then act. Do not wander across unrelated files; if an investigation is getting large, say what you found so far and what you still need.\n\
+         6. SCRIPT & DATA AUTOMATION: Node.js (`node -e '...'`) or Python (`python3` / `python`) is available for non-file operations (API requests, regex/JSON parsing, sqlite queries, data conversion) when no dedicated tool covers the need. Pick the most suitable, reliable runtime present in the environment.\n\
+         7. WORKSPACE EXECUTION: Use `workspace_run_command` for terminal commands, builds, tests, package managers, git operations, and running the external CLI commands listed below.\n",
     );
 
     if capabilities.native_reasoning {
         prompt.push_str(
-            "7. SELF-REASONING: Think before acting. Deliberate internally about risk, which file or command is needed, and likely blind spots; the UI displays your reasoning separately, so do not wrap it in tags.\n",
+            "8. SELF-REASONING: Think before acting. Deliberate internally about risk, which file or command is needed, and likely blind spots; the UI displays your reasoning separately, so do not wrap it in tags.\n",
         );
     } else {
         prompt.push_str(
-            "7. SELF-REASONING: Before invoking a tool or answering, write a brief internal reflection of 1-3 sentences wrapped in `<thought>...</thought>`. Consider risk, which file or command is needed, and likely blind spots. Do not repeat the reasoning outside the tags.\n",
+            "8. SELF-REASONING: Before invoking a tool or answering, write a brief internal reflection of 1-3 sentences wrapped in `<thought>...</thought>`. Consider risk, which file or command is needed, and likely blind spots. Do not repeat the reasoning outside the tags.\n",
         );
     }
 
     prompt.push_str(
-        "8. USER-FACING PREAMBLE: Before acting, say in one short sentence, in the user's language, what you are about to do. When you batch several tools, one sentence covering all of them is enough. Never narrate step by step.\n\n",
+        "9. USER-FACING PREAMBLE: Before acting, say in one short sentence, in the user's language, what you are about to do. When you batch several tools, one sentence covering all of them is enough. Never narrate step by step.\n\n",
     );
 
     if !active_mcp_servers.is_empty() {
@@ -206,28 +209,36 @@ fn build_static_prompt(
         }
     }
 
+    if !dormant_mcp_servers.is_empty() {
+        prompt.push_str("### 🔌 Available Extensions (On-Demand Activation):\n");
+        prompt.push_str("To optimize context tokens, the following extensions are installed in dormant mode. When a user task requires one of these extensions, call `activate_extension(extension_name: \"<name>\")` to load its dedicated tools into your tool declaration schema:\n");
+        for server in dormant_mcp_servers {
+            prompt.push_str(&format!(
+                "- `{}`: Call `activate_extension(extension_name: \"{}\")` when needed.\n",
+                server.name, server.name
+            ));
+        }
+        prompt.push('\n');
+    }
+
     if !mcp_tools.is_empty() {
-        prompt.push_str("### ⚡ Pre-Resolved Tool Functions (Model Context Protocol):\n");
+        prompt.push_str("### 🛠️ Active External CLI Commands (Execute via `workspace_run_command`):\n");
+        prompt.push_str("The following commands are available from active extensions/servers. When needed, execute them directly via `workspace_run_command` (substitute placeholders with real values):\n");
         for tool in mcp_tools {
             let desc = tool
                 .definition
                 .description
                 .as_deref()
                 .unwrap_or("Active tool");
+            let cmd_str = tool
+                .markdown_spec
+                .as_deref()
+                .and_then(crate::agent::mcp::extract_command_template)
+                .unwrap_or_else(|| tool.original_name.clone());
             prompt.push_str(&format!(
-                "- `{}` (from {}): {}\n",
-                tool.namespaced_name, tool.server_name, desc
+                "- `{}` (from {}): {}\n  Usage: `{}`\n",
+                tool.original_name, tool.server_name, desc, cmd_str
             ));
-
-            if let Some(spec) = &tool.markdown_spec {
-                let text_spec = sanitize_spec_to_pure_text(spec);
-                if !text_spec.is_empty() {
-                    prompt.push_str(&format!(
-                        "\n#### Tool Specification: `{}`\n{}\n\n",
-                        tool.namespaced_name, text_spec
-                    ));
-                }
-            }
         }
         prompt.push('\n');
     }
@@ -289,27 +300,6 @@ fn json_to_markdown_bullet_text(val: &serde_json::Value, indent: usize) -> Strin
     }
 }
 
-/// Cleans any lingering JSON code fences out of tool specifications so prompt remains pure text
-fn sanitize_spec_to_pure_text(spec: &str) -> String {
-    let mut cleaned = String::new();
-    let mut skipping_json = false;
-    for line in spec.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("```json") {
-            skipping_json = true;
-            continue;
-        } else if skipping_json && trimmed.starts_with("```") {
-            skipping_json = false;
-            continue;
-        }
-        if !skipping_json {
-            cleaned.push_str(line);
-            cleaned.push('\n');
-        }
-    }
-    cleaned.trim().to_string()
-}
-
 /// Cache key for the static prompt block.
 ///
 /// Every input that can change the rendered text is folded in: the project (instructions and
@@ -320,6 +310,7 @@ fn static_prompt_cache_key(
     allowed_folders: &[String],
     prompt_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
+    dormant_mcp_servers: &[McpServer],
     mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
     capabilities: ModelCapabilities,
 ) -> String {
@@ -337,6 +328,10 @@ fn static_prompt_cache_key(
         s.name.hash(&mut h);
         s.config.hash(&mut h);
         s.is_enabled.hash(&mut h);
+    }
+    for s in dormant_mcp_servers {
+        s.id.hash(&mut h);
+        s.name.hash(&mut h);
     }
     for t in mcp_tools {
         t.namespaced_name.hash(&mut h);
@@ -368,24 +363,26 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
         ctx.allowed_folders,
         ctx.prompt_skills,
         ctx.active_mcp_servers,
+        ctx.dormant_mcp_servers,
         ctx.mcp_tools,
         ctx.capabilities,
     );
-    // A poisoned lock only means another thread panicked while holding it; the cache holds no
-    // invariants that a panic could corrupt, so recover instead of propagating.
+
     let mut guard = STATIC_PROMPT_CACHE
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some((cached_key, value)) = guard.as_ref()
+    if let Some((cached_key, prompt)) = guard.as_ref()
         && cached_key == &key
     {
-        return value.clone();
+        return prompt.clone();
     }
+
     let rendered: std::sync::Arc<str> = std::sync::Arc::from(build_static_prompt(
         ctx.project,
         ctx.allowed_folders,
         ctx.prompt_skills,
         ctx.active_mcp_servers,
+        ctx.dormant_mcp_servers,
         ctx.mcp_tools,
         ctx.capabilities,
     ));
@@ -544,13 +541,13 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let first =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         let second =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         assert_eq!(first, second, "static rendering must be deterministic");
         assert_eq!(
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false)),
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false)),
+            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false)),
+            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false)),
             "identical inputs must produce the same cache key"
         );
     }
@@ -560,7 +557,7 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let base =
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(true, false));
+            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false));
 
         // Different project instructions must not reuse the cached block.
         let mut other_project = sample_project();
@@ -570,6 +567,7 @@ mod tests {
             super::static_prompt_cache_key(
                 &other_project,
                 &folders,
+                &[],
                 &[],
                 &[],
                 &[],
@@ -588,6 +586,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 caps(true, false)
             ),
             "attached folders must invalidate the cache"
@@ -596,7 +595,7 @@ mod tests {
         // A different provider family renders different directives.
         assert_ne!(
             base,
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], caps(false, true)),
+            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(false, true)),
             "capabilities must invalidate the cache"
         );
     }
@@ -606,9 +605,9 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let freshly_rendered =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         let cached =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         assert_eq!(
             cached, freshly_rendered,
             "cache must never serve stale text"

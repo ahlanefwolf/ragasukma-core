@@ -69,12 +69,58 @@ use tokio::process::Command;
 
 pub use types::*;
 
+/// Split a shell command string into separate words, respecting quotes and escapes.
+fn split_shell_words(s: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = None;
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(next_c) = chars.next() {
+                    current.push(next_c);
+                }
+            }
+            '"' | '\'' => {
+                if in_quotes == Some(c) {
+                    in_quotes = None;
+                } else if in_quotes.is_none() {
+                    in_quotes = Some(c);
+                } else {
+                    current.push(c);
+                }
+            }
+            ' ' | '\t' if in_quotes.is_none() => {
+                if !current.is_empty() {
+                    words.push(current);
+                    current = String::new();
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
 /// Resolves executable command and arguments directly via system PATH.
 fn resolve_executable(
     command_str: &str,
     args: &[String],
 ) -> (String, Vec<String>, Option<std::path::PathBuf>) {
-    (command_str.to_string(), args.to_vec(), None)
+    let trimmed = command_str.trim().trim_matches('`').trim_matches('"').trim_matches('\'');
+    let words = split_shell_words(trimmed);
+    if words.is_empty() {
+        return (command_str.to_string(), args.to_vec(), None);
+    }
+    let binary = words[0].clone();
+    let mut final_args = words[1..].to_vec();
+    final_args.extend_from_slice(args);
+    (binary, final_args, None)
 }
 
 /// Execute JSON-RPC 2.0 request over stdio transport
@@ -494,11 +540,37 @@ pub async fn resolve_active_mcp_tools(
                         server_config: config.clone(),
                         markdown_spec: Some(tool.config),
                     });
-                }
-                loaded_from_db = true;
             }
+            loaded_from_db = true;
+        }
 
-            // 2. Fallback to live JSON-RPC list_tools if DB had no tools
+        // 2. If no tools in DB, attempt on-demand tool discovery & persistence from server configuration
+        if !loaded_from_db {
+            match discovery::sync_server_tools(s, None).await {
+                Ok(discovered) if !discovered.is_empty() => {
+                    for tool in discovered {
+                        let namespaced = format!("mcp__{}", tool.name);
+                        let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
+                        resolved.push(ActiveMcpTool {
+                            server_id: config.id.clone(),
+                            server_name: config.name.clone(),
+                            original_name: tool.name.clone(),
+                            namespaced_name: namespaced,
+                            definition: def,
+                            server_config: config.clone(),
+                            markdown_spec: Some(tool.config),
+                        });
+                    }
+                    loaded_from_db = true;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    crate::term_err!("[MCP] On-demand tool sync failed for '{}': {}", s.name, e);
+                }
+            }
+        }
+
+        // 3. Fallback: query tools dynamically via live JSON-RPC handshake
         if !loaded_from_db {
             let client = McpClient::new(config.clone());
             match client.list_tools().await {
@@ -526,7 +598,7 @@ pub async fn resolve_active_mcp_tools(
     resolved
 }
 
-/// Helper to parse tool parameters schema directly from pure Markdown specification
+/// Helper to parse tool parameters schema directly from Markdown specification
 fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
@@ -544,41 +616,55 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
 
         if in_parameters {
             // Parses format: - `param_name` (type, required/optional): description
+            // Also handles: - param_name: (type, required) description
             if let Some(bullet) = trimmed.strip_prefix('-').or_else(|| trimmed.strip_prefix('*')) {
                 let bullet_trimmed = bullet.trim();
-                let (param_part, desc_part) = bullet_trimmed.split_once(':').unwrap_or((bullet_trimmed, ""));
+                let (first_part, desc_part) = bullet_trimmed.split_once(':').unwrap_or((bullet_trimmed, ""));
                 
-                let param_name = if let Some(start) = param_part.find('`') {
-                    if let Some(end) = param_part[start + 1..].find('`') {
-                        &param_part[start + 1..start + 1 + end]
+                // Extract param name
+                let param_name = if let Some(start) = first_part.find('`') {
+                    if let Some(end) = first_part[start + 1..].find('`') {
+                        &first_part[start + 1..start + 1 + end]
                     } else {
-                        param_part.trim()
+                        first_part.trim()
                     }
                 } else {
-                    param_part.split_whitespace().next().unwrap_or("").trim()
+                    first_part.split_whitespace().next().unwrap_or("").trim()
                 };
 
-                if !param_name.is_empty() {
-                    let is_req = param_part.to_lowercase().contains("required");
-                    let ptype = if param_part.contains("number") || param_part.contains("integer") {
+                let clean_param = param_name.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+
+                if !clean_param.is_empty() {
+                    // Look for type & requirement across entire bullet line for robustness
+                    let combined_meta = format!("{} {}", first_part, desc_part).to_lowercase();
+                    let is_req = combined_meta.contains("required") && !combined_meta.contains("optional");
+                    
+                    let ptype = if combined_meta.contains("number") || combined_meta.contains("integer") || combined_meta.contains("int") || combined_meta.contains("float") {
                         "number"
-                    } else if param_part.contains("bool") {
+                    } else if combined_meta.contains("bool") {
                         "boolean"
-                    } else if param_part.contains("array") || param_part.contains("list") {
+                    } else if combined_meta.contains("array") || combined_meta.contains("list") {
                         "array"
+                    } else if combined_meta.contains("object") || combined_meta.contains("map") || combined_meta.contains("json") {
+                        "object"
                     } else {
                         "string"
                     };
 
                     let mut prop_obj = serde_json::Map::new();
                     prop_obj.insert("type".to_string(), serde_json::Value::String(ptype.to_string()));
-                    if !desc_part.trim().is_empty() {
-                        prop_obj.insert("description".to_string(), serde_json::Value::String(desc_part.trim().to_string()));
+                    
+                    // Clean description
+                    let clean_desc = desc_part
+                        .trim()
+                        .trim_start_matches(|c: char| c == '(' || c == ')' || c == ',' || c.is_whitespace());
+                    if !clean_desc.is_empty() {
+                        prop_obj.insert("description".to_string(), serde_json::Value::String(clean_desc.to_string()));
                     }
 
-                    properties.insert(param_name.to_string(), serde_json::Value::Object(prop_obj));
+                    properties.insert(clean_param.to_string(), serde_json::Value::Object(prop_obj));
                     if is_req {
-                        required.push(serde_json::Value::String(param_name.to_string()));
+                        required.push(serde_json::Value::String(clean_param.to_string()));
                     }
                 }
             }
@@ -666,50 +752,158 @@ pub async fn call_active_mcp_tool(
     Ok(output.trim().to_string())
 }
 
-/// Extracts the `## Command Template` bash/powershell fenced block from a tool
-/// markdown spec (generated by the LLM in Tahap 1).
+/// Extracts the command template from either a raw CLI command string or a
+/// markdown spec's `## Command Template` block.
 pub fn extract_command_template(spec: &str) -> Option<String> {
-    let lower = spec.to_ascii_lowercase();
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
     let marker = "## command template";
-    let idx = lower.find(marker)?;
-    let rest = &spec[idx + marker.len()..];
-    // Find the next fenced code block after the heading
-    let fence_start = rest.find("```")?;
-    let after_fence = &rest[fence_start + 3..];
-    // Skip optional language tag line (bash, powershell, sh, etc.)
-    let after_lang = if let Some(nl) = after_fence.find('\n') {
-        let first_line = after_fence[..nl].trim();
-        if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
-            &after_fence[nl + 1..]
-        } else {
-            after_fence
+    if let Some(idx) = lower.find(marker) {
+        let rest = &trimmed[idx + marker.len()..];
+        if let Some(fence_start) = rest.find("```") {
+            let after_fence = &rest[fence_start + 3..];
+            let after_lang = if let Some(nl) = after_fence.find('\n') {
+                let first_line = after_fence[..nl].trim();
+                if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
+                    &after_fence[nl + 1..]
+                } else {
+                    after_fence
+                }
+            } else {
+                after_fence
+            };
+            if let Some(end) = after_lang.find("```") {
+                let template = after_lang[..end].trim().to_string();
+                if !template.is_empty() {
+                    return Some(template);
+                }
+            }
         }
-    } else {
-        after_fence
-    };
-    let end = after_lang.find("```")?;
-    let template = after_lang[..end].trim().to_string();
-    if template.is_empty() { None } else { Some(template) }
+    }
+
+    // If it's wrapped in a code fence ```...```, unwrap it
+    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+        let inner = trimmed[3..trimmed.len() - 3].trim();
+        let stripped = if let Some(nl) = inner.find('\n') {
+            let first_line = inner[..nl].trim();
+            if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
+                &inner[nl + 1..]
+            } else {
+                inner
+            }
+        } else {
+            inner
+        };
+        let cleaned = stripped.trim().to_string();
+        if !cleaned.is_empty() {
+            return Some(cleaned);
+        }
+    }
+
+    // If it's a raw command string without markdown headings, return it directly
+    if !trimmed.contains("# ") {
+        return Some(trimmed.to_string());
+    }
+
+    None
+}
+
+/// Safely escapes a string value to be enclosed within double-quotes in a shell command.
+/// Neutralizes shell injection vectors such as $(...), `...`, quotes, variable expansions,
+/// and command separators.
+pub fn escape_shell_arg_value(val: &str) -> String {
+    let mut escaped = String::with_capacity(val.len() + 16);
+    for c in val.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '$' => escaped.push_str("\\$"),
+            '`' => escaped.push_str("\\`"),
+            '!' => escaped.push_str("\\!"),
+            '\n' => escaped.push(' '),
+            '\r' => {},
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 /// Replaces `{param}` placeholders in a command template with escaped LLM argument
-/// values. Pure function so it is unit-testable without spawning a shell.
+/// values. Also cleans up optional CLI flags (e.g. `--flag "{param}"`) when the argument
+/// is missing, null, or empty so the CLI does not fail on empty flag values.
 pub fn render_template_placeholders(template: &str, arguments: &serde_json::Value) -> String {
     let mut rendered = template.to_string();
-    if let Some(obj) = arguments.as_object() {
-        for (key, val) in obj {
-            let placeholder = format!("{{{}}}", key);
-            let value = match val {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                serde_json::Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-            rendered = rendered.replace(&placeholder, &escaped);
+    let empty_map = serde_json::Map::new();
+    let args_obj = arguments.as_object().unwrap_or(&empty_map);
+
+    // Find all {param} in the template
+    let mut placeholders = Vec::new();
+    let mut i = 0;
+    while let Some(start) = rendered[i..].find('{') {
+        let abs_start = i + start;
+        if let Some(end) = rendered[abs_start..].find('}') {
+            let abs_end = abs_start + end;
+            let param_name = &rendered[abs_start + 1..abs_end];
+            if !param_name.is_empty() && !placeholders.contains(&param_name.to_string()) {
+                placeholders.push(param_name.to_string());
+            }
+            i = abs_end + 1;
+        } else {
+            break;
         }
     }
+
+    for key in placeholders {
+        let placeholder = format!("{{{}}}", key);
+        let val_opt = args_obj.get(&key);
+        let val_str = match val_opt {
+            Some(serde_json::Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+            Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+            Some(serde_json::Value::Bool(b)) => Some(b.to_string()),
+            _ => None,
+        };
+
+        if let Some(val) = val_str {
+            let escaped = escape_shell_arg_value(&val);
+            rendered = rendered.replace(&placeholder, &escaped);
+        } else {
+            // Optional parameter was not supplied or empty.
+            // Check if it was preceded by an optional flag like: --flag "{param}" or -f "{param}"
+            let patterns_to_check = [
+                format!("\"{}\"", placeholder),
+                format!("'{}'", placeholder),
+                placeholder.clone(),
+            ];
+
+            let mut removed_flag = false;
+            for p in &patterns_to_check {
+                if let Some(p_idx) = rendered.find(p.as_str()) {
+                    let before = &rendered[..p_idx];
+                    let trimmed_before = before.trim_end();
+                    if let Some(flag_start) = trimmed_before.rfind(|c: char| c.is_whitespace()) {
+                        let candidate_flag = trimmed_before[flag_start + 1..].trim();
+                        if candidate_flag.starts_with('-') {
+                            // Erase from flag_start to p_idx + p.len()
+                            let slice_to_remove = &rendered[flag_start..p_idx + p.len()];
+                            rendered = rendered.replacen(slice_to_remove, "", 1);
+                            removed_flag = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !removed_flag {
+                // Simply replace placeholder with empty string
+                rendered = rendered.replace(&placeholder, "");
+            }
+        }
+    }
+
     rendered
 }
 
@@ -724,9 +918,13 @@ pub fn normalize_command_for_windows(cmd: &str) -> String {
         .replace("'", "\"")
 }
 
+/// Maximum allowed output bytes from an MCP CLI tool to avoid exhausting context window.
+pub const MCP_CLI_MAX_OUTPUT_BYTES: usize = 64 * 1024;
+/// Maximum timeout allowed for an MCP tool command.
+pub const MCP_CLI_TIMEOUT_SECONDS: u64 = 45;
+
 /// Renders `{param}` placeholders from the LLM arguments and executes the command
-/// template via the system shell. Escapes values so they never break out of the
-/// command (no approval required — fully automatic, per user design).
+/// template via the system shell with timeout protection and output capping.
 pub async fn run_command_template(template: &str, arguments: &serde_json::Value) -> Result<String, String> {
     let rendered = render_template_placeholders(template, arguments);
 
@@ -765,7 +963,12 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
         }
     }
 
-    let output = child.wait_with_output().await.map_err(|e| format!("Failed to run command: {}", e))?;
+    let wait_future = child.wait_with_output();
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(MCP_CLI_TIMEOUT_SECONDS), wait_future).await {
+        Ok(res) => res.map_err(|e| format!("Failed to run command: {}", e))?,
+        Err(_) => return Err(format!("Command timed out after {} seconds: {}", MCP_CLI_TIMEOUT_SECONDS, rendered)),
+    };
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut combined = String::new();
@@ -774,13 +977,31 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
         if !combined.is_empty() { combined.push('\n'); }
         combined.push_str(&stderr);
     }
+
+    let mut result_str = combined.trim().to_string();
+
+    // Output capping to protect LLM context window
+    if result_str.len() > MCP_CLI_MAX_OUTPUT_BYTES {
+        let head_bytes = MCP_CLI_MAX_OUTPUT_BYTES / 2;
+        let tail_bytes = MCP_CLI_MAX_OUTPUT_BYTES / 4;
+        let head = &result_str[..result_str.floor_char_boundary(head_bytes)];
+        let tail_start = result_str.floor_char_boundary(result_str.len().saturating_sub(tail_bytes));
+        let tail = &result_str[tail_start..];
+        result_str = format!(
+            "{}\n\n[... Truncated {} bytes of MCP output to protect context window ...]\n\n{}",
+            head,
+            result_str.len() - (head.len() + tail.len()),
+            tail
+        );
+    }
+
     if output.status.success() {
-        Ok(combined.trim().to_string())
+        Ok(result_str)
     } else {
         Err(format!(
             "Command exited with {}: {}",
             output.status,
-            combined.trim()
+            result_str
         ))
     }
 }

@@ -48,7 +48,7 @@ pub fn is_read_only_tool(name: &str) -> bool {
 /// Specialized tools (workspace inspection/editing and active MCP tools) are prioritized FIRST,
 /// while `workspace_run_command` (terminal fallback) is placed LAST.
 pub fn get_dynamic_agent_tools_schema(
-    mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
+    _mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
 ) -> Vec<serde_json::Value> {
     let mut schema = Vec::new();
 
@@ -194,25 +194,24 @@ pub fn get_dynamic_agent_tools_schema(
         }
     }));
 
-    // 2. Active Dedicated MCP External Tools (Prioritized over manual shell commands)
-    for tool in mcp_tools {
-        let desc = format!(
-            "[Dedicated Tool from {}] {}",
-            tool.server_name,
-            tool.definition
-                .description
-                .as_deref()
-                .unwrap_or("Active MCP tool")
-        );
-        schema.push(json!({
-            "type": "function",
-            "function": {
-                "name": tool.namespaced_name,
-                "description": desc,
-                "parameters": tool.definition.input_schema
+    // Meta-tool for 2-Tier On-Demand Extension Activation
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "activate_extension",
+            "description": "Activate an installed MCP extension package on-demand (e.g. 'figcraft'). Once activated, all dedicated tools provided by this extension become immediately available in your tool declaration schema.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "extension_name": {
+                        "type": "string",
+                        "description": "The exact name of the extension / MCP server to activate (e.g. 'figcraft')"
+                    }
+                },
+                "required": ["extension_name"]
             }
-        }));
-    }
+        }
+    }));
 
     // 3. Generic Shell Fallback (Always placed LAST to discourage manual shell scripts for tasks with dedicated tools)
     schema.push(json!({
@@ -883,6 +882,69 @@ pub async fn execute_tool_call(
             let res_json = serde_json::Value::Object(res_map);
 
             Ok(res_json.to_string())
+        }
+
+        "activate_extension" => {
+            let extension_name = args
+                .get("extension_name")
+                .and_then(|v| v.as_str())
+                .context("Parameter 'extension_name' is required")?;
+            crate::agent::executor::state::activate_session_extension(session_id, extension_name);
+
+            let all_servers = crate::agent::repository::list_mcp_servers()
+                .await
+                .unwrap_or_default();
+            let matched_server = all_servers
+                .into_iter()
+                .find(|s| s.name.eq_ignore_ascii_case(extension_name));
+
+            let mut details = format!(
+                "Extension '{}' has been successfully activated for this session.",
+                extension_name
+            );
+
+            if let Some(server) = matched_server {
+                let tools = crate::agent::mcp::resolve_active_mcp_tools(&[server]).await;
+                if !tools.is_empty() {
+                    details.push_str("\n\nAvailable tools from this extension:\n");
+                    for t in tools {
+                        let desc = t
+                            .definition
+                            .description
+                            .as_deref()
+                            .unwrap_or("")
+                            .trim();
+                        let desc = if desc.is_empty() {
+                            "No description provided"
+                        } else {
+                            desc
+                        };
+                        let cmd_str = t
+                            .markdown_spec
+                            .as_deref()
+                            .and_then(crate::agent::mcp::extract_command_template);
+
+                        if let Some(usage) = cmd_str {
+                            details.push_str(&format!(
+                                "- `{}`: {}\n  Usage: `{}`\n",
+                                t.original_name, desc, usage
+                            ));
+                        } else {
+                            details.push_str(&format!(
+                                "- `{}`: {}\n",
+                                t.original_name, desc
+                            ));
+                        }
+                    }
+                    details.push_str("\nYou can now execute these commands or tools directly.");
+                } else {
+                    details.push_str(" However, no tools were found or discovered for this extension.");
+                }
+            } else {
+                details.push_str(" Its dedicated tools are now available for execution.");
+            }
+
+            Ok(details)
         }
 
         _ => bail!("Unknown tool '{}'", name),

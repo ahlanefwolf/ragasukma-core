@@ -363,7 +363,11 @@ pub async fn execute_turn_tool_calls(
             format!(
                 "Notice: You have already read this exact slice of `{path}` multiple times. Its content is available in your conversation history. Please proceed with modifying the file using `workspace_edit_file` or answering the user's question directly."
             )
-        } else if tool_name.starts_with("mcp__") {
+        } else if tool_name.starts_with("mcp__")
+            || mcp_tools
+                .iter()
+                .any(|t| t.original_name == tool_name || t.namespaced_name == tool_name)
+        {
             // Dispatch to active MCP server
             match crate::agent::mcp::call_active_mcp_tool(mcp_tools, &tool_name, args_val.clone())
                 .await

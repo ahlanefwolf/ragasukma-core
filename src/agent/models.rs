@@ -174,6 +174,85 @@ fn parse_yaml_or_json_value(text: &str) -> serde_json::Value {
     serde_json::Value::Object(root)
 }
 
+/// Extract command executable and args from freeform config text or markdown
+pub fn extract_command_from_raw_config(config: &str) -> Option<String> {
+    let trimmed = config.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // 1. Backtick inline command: e.g. `wordcraft-cli mcp` or "list tools in command: `wordcraft-cli mcp`"
+    if let Some(start_idx) = trimmed.find('`')
+        && let Some(end_idx) = trimmed[start_idx + 1..].find('`')
+    {
+        let inside = trimmed[start_idx + 1..start_idx + 1 + end_idx].trim();
+        if !inside.is_empty() && !inside.contains('\n') {
+            return Some(inside.to_string());
+        }
+    }
+
+    // 2. Code blocks (```bash ... ```, ```sh ... ```, etc.)
+    for tag in &["```bash", "```sh", "```cmd", "```shell", "```"] {
+        if let Some(start_idx) = trimmed.find(tag) {
+            let after = &trimmed[start_idx + tag.len()..];
+            if let Some(end_idx) = after.find("```") {
+                let inside = after[..end_idx].trim();
+                let first_line = inside.lines().next().unwrap_or("").trim();
+                if !first_line.is_empty() {
+                    return Some(first_line.to_string());
+                }
+            }
+        }
+    }
+
+    // 3. Lines with prefixes like "command:", "command =", "run:", "exec:", "list tools in command:", "list tools:"
+    for line in trimmed.lines() {
+        let line_trimmed = line.trim();
+        let lower = line_trimmed.to_lowercase();
+        for prefix in &[
+            "list tools in command:",
+            "list tools from command:",
+            "list tools in:",
+            "list tools:",
+            "command:",
+            "command =",
+            "cmd:",
+            "run:",
+            "exec:",
+        ] {
+            if let Some(pos) = lower.find(prefix) {
+                let val = line_trimmed[pos + prefix.len()..]
+                    .trim()
+                    .trim_matches('`')
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .trim();
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+        }
+    }
+
+    // 4. Single line plain text command if it doesn't look like JSON or Markdown heading
+    if !trimmed.contains('\n')
+        && !trimmed.starts_with('{')
+        && !trimmed.starts_with('[')
+        && !trimmed.starts_with('#')
+    {
+        let cleaned = trimmed
+            .trim_matches('`')
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim();
+        if !cleaned.is_empty() {
+            return Some(cleaned.to_string());
+        }
+    }
+
+    None
+}
+
 impl McpServer {
     pub fn config_value(&self) -> serde_json::Value {
         let trimmed = self.config.trim();
@@ -287,9 +366,10 @@ impl McpServer {
 
     pub fn command(&self) -> Option<String> {
         let v = self.config_value();
-        v.get("command")
-            .and_then(|c| c.as_str())
-            .map(|s| s.to_string())
+        if let Some(cmd) = v.get("command").and_then(|c| c.as_str()) {
+            return Some(cmd.to_string());
+        }
+        extract_command_from_raw_config(&self.config)
     }
 
     pub fn url(&self) -> Option<String> {
@@ -555,5 +635,26 @@ Description here
 
         assert_eq!(server.transport(), "sse");
         assert_eq!(server.url(), Some("http://localhost:8080/sse".to_string()));
+    }
+
+    #[test]
+    fn test_mcp_server_config_freeform_and_backticks() {
+        let server1 = McpServer {
+            id: "srv4".to_string(),
+            name: "Wordcraft".to_string(),
+            config: "list tools in command: `wordcraft-cli mcp`".to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+        assert_eq!(server1.command(), Some("wordcraft-cli mcp".to_string()));
+
+        let server2 = McpServer {
+            id: "srv5".to_string(),
+            name: "Wordcraft Plain".to_string(),
+            config: "list tools in command: wordcraft-cli mcp".to_string(),
+            is_enabled: 1,
+            created_at: 0,
+        };
+        assert_eq!(server2.command(), Some("wordcraft-cli mcp".to_string()));
     }
 }

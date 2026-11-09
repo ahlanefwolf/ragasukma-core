@@ -289,9 +289,12 @@ async fn execute_session_turn_inner(
     }
     let prompt_skills =
         crate::agent::skills::scan_project_skills(project.root_path.as_deref(), &allowed_folders);
-    let active_mcp_servers = repository::get_project_active_mcp_servers(&project.id)
+    let all_mcp_servers = repository::get_project_active_mcp_servers(&project.id)
         .await
         .unwrap_or_default();
+    let (active_mcp_servers, dormant_mcp_servers): (Vec<_>, Vec<_>) = all_mcp_servers
+        .into_iter()
+        .partition(|s| state::is_extension_active(session_id, &s.name));
     let mcp_tools = crate::agent::mcp::resolve_active_mcp_tools(&active_mcp_servers).await;
     let dynamic_tools_schema = crate::agent::tools::get_dynamic_agent_tools_schema(&mcp_tools);
 
@@ -330,6 +333,7 @@ async fn execute_session_turn_inner(
         allowed_folders: &allowed_folders,
         prompt_skills: &prompt_skills,
         active_mcp_servers: &active_mcp_servers,
+        dormant_mcp_servers: &dormant_mcp_servers,
         mcp_tools: &mcp_tools,
         session_id,
         goal_id: &goal_id,
