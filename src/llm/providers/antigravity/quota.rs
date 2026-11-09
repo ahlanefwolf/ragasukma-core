@@ -19,7 +19,6 @@ pub fn fetch_account_quota(
     let access_token = account.access_token.clone().unwrap_or_default();
     let project_id = account.project_id.clone();
     let email = account.email.clone();
-    let tier_id = account.tier_id.clone();
     let id = account.id.clone();
 
     let body = if let Some(ref pid) = project_id {
@@ -162,12 +161,7 @@ pub fn fetch_account_quota(
         }
     }
 
-    // Tier / Plan name
-    let plan = tier_id.as_deref().map(|t| match t {
-        "g1-pro-tier" => "Google AI Pro".to_string(),
-        "free-tier" | "starter" => "Starter (Free)".to_string(),
-        other => other.to_string(),
-    });
+    let plan = None;
 
     let status = if fetch_err.is_some() && models_quota.is_empty() && weekly_quota.is_empty() {
         "error".to_string()

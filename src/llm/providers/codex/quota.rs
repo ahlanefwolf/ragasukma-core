@@ -47,16 +47,7 @@ pub fn fetch_account_quota(
 
     let json: serde_json::Value = res.json().context("Failed to parse WHAM usage JSON")?;
 
-    let plan = json
-        .get("plan_type")
-        .or_else(|| json.pointer("/summary/plan"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| account.chatgpt_plan_type.clone());
-
-    if plan.is_some() {
-        account.chatgpt_plan_type = plan.clone();
-    }
+    let plan = None;
 
     let rate_limit = json
         .get("rate_limit")

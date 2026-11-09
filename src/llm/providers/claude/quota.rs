@@ -92,10 +92,7 @@ pub fn fetch_account_quota(
         account_id: account.id.clone(),
         email: account.email.clone(),
         org_id: account.org_id.clone(),
-        plan: account
-            .plan_type
-            .clone()
-            .or_else(|| Some("Claude Code".to_string())),
+        plan: None,
         limit_reached,
         session_quota,
         weekly_quota,
