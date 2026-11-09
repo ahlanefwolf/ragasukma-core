@@ -68,6 +68,9 @@ pub(super) struct PostExecContext<'a> {
     pub session_id: &'a str,
     pub project_id: &'a str,
     pub allowed_folders: &'a [String],
+    /// Database handle, passed in rather than fetched from a global so the
+    /// effects can be exercised against a disposable pool in tests.
+    pub pool: &'a sqlx::SqlitePool,
 }
 
 /// Post-execution bookkeeping for the mutating/failing branch of a tool call.
@@ -87,6 +90,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
         session_id,
         project_id,
         allowed_folders,
+        pool,
         ..
     } = ctx;
 
@@ -108,13 +112,13 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 }
                 state.force_final_text_only = false;
                 state.circuit_breaker_triggered = false;
-                let _ = repository::mark_evidence_stale_by_file(project_id, path).await;
+                let _ = repository::mark_evidence_stale_by_file_with_pool(pool, project_id, path).await;
             }
 
             let targets_json =
                 serde_json::to_string(&state.locked_targets).unwrap_or_else(|_| "[]".to_string());
-            let _ = repository::lock_goal_targets(&state.goal_id, &targets_json).await;
-            let _ = repository::update_goal_phase(&state.goal_id, "verification").await;
+            let _ = repository::lock_goal_targets_with_pool(pool, &state.goal_id, &targets_json).await;
+            let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "verification").await;
 
             let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(
                 allowed_folders,
@@ -238,7 +242,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 for path in touched {
                     state.on_successful_edit(&path);
                     crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &path);
-                    let _ = repository::mark_evidence_stale_by_file(project_id, &path).await;
+                    let _ = repository::mark_evidence_stale_by_file_with_pool(pool, project_id, &path).await;
                 }
             }
 
@@ -280,7 +284,8 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                     Some("in_progress")
                 };
 
-                if let Err(e) = repository::record_verification_with_status(
+                if let Err(e) = repository::record_verification_with_status_with_pool(
+                    pool,
                     &state.goal_id,
                     state.verification_attempts as i64,
                     cmd,
@@ -343,7 +348,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 } else {
                     state.has_passed_verification = false;
                     state.current_phase = "action".to_string();
-                    let _ = repository::update_goal_phase(&state.goal_id, "action").await;
+                    let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "action").await;
 
                     let (grouped_diags, _) = group_diagnostics_by_file(tool_output);
                     for g in &grouped_diags {
@@ -385,6 +390,7 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
         is_accessing_unmodified_target,
         project_id,
         allowed_folders,
+        pool,
         ..
     } = ctx;
 
@@ -462,7 +468,7 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
                 crate::agent::evidence_ranking::EvidenceOrigin::Read,
                 0,
             );
-            if let Err(e) = repository::save_evidence_and_link(
+            if let Err(e) = repository::save_evidence_and_link_with_pool(pool, 
                 project_id,
                 file_path,
                 &file_ver,
@@ -492,7 +498,7 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
             crate::agent::evidence_ranking::EvidenceOrigin::Modified,
             0,
         );
-        if let Err(e) = repository::save_evidence_and_link(
+        if let Err(e) = repository::save_evidence_and_link_with_pool(pool, 
             project_id,
             file_path,
             &file_ver,

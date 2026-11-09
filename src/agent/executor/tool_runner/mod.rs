@@ -331,6 +331,7 @@ pub async fn execute_turn_tool_calls(
         }
 
         // Auto-invalidation and tracking on file modification
+        let db_pool = repository::pool().await;
         effects::apply_post_execution(effects::PostExecContext {
             state,
             tool_name: &tool_name,
@@ -344,6 +345,7 @@ pub async fn execute_turn_tool_calls(
             session_id,
             project_id,
             allowed_folders,
+            pool: db_pool,
         })
         .await;
 
@@ -360,6 +362,7 @@ pub async fn execute_turn_tool_calls(
             session_id,
             project_id,
             allowed_folders,
+            pool: db_pool,
         })
         .await;
 
