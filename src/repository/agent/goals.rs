@@ -18,6 +18,32 @@ pub async fn create_goal(
     constraints_json: &str,
 ) -> Result<Goal> {
     let pool = super::pool().await;
+    create_goal_with_pool(
+        pool,
+        id,
+        project_id,
+        session_id,
+        parent_goal_id,
+        title,
+        demand,
+        success_criteria_json,
+        constraints_json,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_goal_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    project_id: &str,
+    session_id: Option<&str>,
+    parent_goal_id: Option<&str>,
+    title: &str,
+    demand: &str,
+    success_criteria_json: &str,
+    constraints_json: &str,
+) -> Result<Goal> {
     let now = now_secs();
 
     // Check if goal already exists. If it exists and is in_progress, prevent unintended state overwrite.
@@ -138,6 +164,13 @@ pub async fn create_goal(
 
 pub async fn get_goal(goal_id: &str) -> Result<Option<Goal>> {
     let pool = super::pool().await;
+    get_goal_with_pool(pool, goal_id).await
+}
+
+pub async fn get_goal_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+) -> Result<Option<Goal>> {
     let goal = sqlx::query_as::<_, Goal>(
         "SELECT id, project_id, session_id, parent_goal_id, title, demand, success_criteria, constraints, phase, status, target_files, discovery_count, conclusion, created_at, updated_at, version, context_status, context_error \
          FROM goals WHERE id = ?1",
@@ -150,6 +183,13 @@ pub async fn get_goal(goal_id: &str) -> Result<Option<Goal>> {
 
 pub async fn list_session_goals(session_id: &str) -> Result<Vec<Goal>> {
     let pool = super::pool().await;
+    list_session_goals_with_pool(pool, session_id).await
+}
+
+pub async fn list_session_goals_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<Vec<Goal>> {
     let goals = sqlx::query_as::<_, Goal>(
         "SELECT id, project_id, session_id, parent_goal_id, title, demand, success_criteria, constraints, phase, status, target_files, discovery_count, conclusion, created_at, updated_at, version, context_status, context_error \
          FROM goals WHERE session_id = ?1 ORDER BY created_at DESC",
@@ -162,6 +202,13 @@ pub async fn list_session_goals(session_id: &str) -> Result<Vec<Goal>> {
 
 pub async fn list_project_goals(project_id: &str) -> Result<Vec<Goal>> {
     let pool = super::pool().await;
+    list_project_goals_with_pool(pool, project_id).await
+}
+
+pub async fn list_project_goals_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+) -> Result<Vec<Goal>> {
     let goals = sqlx::query_as::<_, Goal>(
         "SELECT id, project_id, session_id, parent_goal_id, title, demand, success_criteria, constraints, phase, status, target_files, discovery_count, conclusion, created_at, updated_at, version, context_status, context_error \
          FROM goals WHERE project_id = ?1 ORDER BY created_at DESC",
@@ -174,6 +221,14 @@ pub async fn list_project_goals(project_id: &str) -> Result<Vec<Goal>> {
 
 pub async fn update_goal_phase(goal_id: &str, phase: &str) -> Result<()> {
     let pool = super::pool().await;
+    update_goal_phase_with_pool(pool, goal_id, phase).await
+}
+
+pub async fn update_goal_phase_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    phase: &str,
+) -> Result<()> {
     let now = now_secs();
     let res = sqlx::query(
         "UPDATE goals SET phase = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3",
@@ -196,6 +251,15 @@ pub async fn transition_goal_phase(
     new_phase: &str,
 ) -> Result<()> {
     let pool = super::pool().await;
+    transition_goal_phase_with_pool(pool, goal_id, expected_phase, new_phase).await
+}
+
+pub async fn transition_goal_phase_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    expected_phase: &str,
+    new_phase: &str,
+) -> Result<()> {
     let now = now_secs();
     let res = sqlx::query(
         "UPDATE goals SET phase = ?1, version = version + 1, updated_at = ?2 \
@@ -220,6 +284,14 @@ pub async fn transition_goal_phase(
 
 pub async fn lock_goal_targets(goal_id: &str, target_files_json: &str) -> Result<()> {
     let pool = super::pool().await;
+    lock_goal_targets_with_pool(pool, goal_id, target_files_json).await
+}
+
+pub async fn lock_goal_targets_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    target_files_json: &str,
+) -> Result<()> {
     let now = now_secs();
     let res = sqlx::query(
         "UPDATE goals SET target_files = ?1, phase = 'action', version = version + 1, updated_at = ?2 \
@@ -251,6 +323,14 @@ pub async fn lock_goal_targets(goal_id: &str, target_files_json: &str) -> Result
 
 pub async fn update_goal_status(goal_id: &str, status: &str) -> Result<()> {
     let pool = super::pool().await;
+    update_goal_status_with_pool(pool, goal_id, status).await
+}
+
+pub async fn update_goal_status_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    status: &str,
+) -> Result<()> {
     let now = now_secs();
     let res = sqlx::query(
         "UPDATE goals SET status = ?1, version = version + 1, updated_at = ?2 WHERE id = ?3",
@@ -273,6 +353,15 @@ pub async fn update_goal_context_health(
     context_error: Option<&str>,
 ) -> Result<()> {
     let pool = super::pool().await;
+    update_goal_context_health_with_pool(pool, goal_id, context_status, context_error).await
+}
+
+pub async fn update_goal_context_health_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    context_status: &str,
+    context_error: Option<&str>,
+) -> Result<()> {
     let now = now_secs();
     sqlx::query(
         "UPDATE goals SET context_status = ?1, context_error = ?2, version = version + 1, updated_at = ?3 WHERE id = ?4",
@@ -297,6 +386,14 @@ pub async fn conclude_goal(goal_id: &str, status: &str, conclusion: &str) -> Res
 /// through `conclude_goal` or `conclude_goal_if_verified` instead.
 pub async fn update_goal_conclusion(goal_id: &str, conclusion: &str) -> Result<()> {
     let pool = super::pool().await;
+    update_goal_conclusion_with_pool(pool, goal_id, conclusion).await
+}
+
+pub async fn update_goal_conclusion_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    conclusion: &str,
+) -> Result<()> {
     let now = now_secs();
     let res = sqlx::query("UPDATE goals SET conclusion = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(conclusion)
@@ -321,6 +418,15 @@ pub async fn conclude_goal_if_verified(
     conclusion: &str,
 ) -> Result<()> {
     let pool = super::pool().await;
+    conclude_goal_if_verified_with_pool(pool, goal_id, status, conclusion).await
+}
+
+pub async fn conclude_goal_if_verified_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    status: &str,
+    conclusion: &str,
+) -> Result<()> {
     let now = now_secs();
 
     // BEGIN IMMEDIATE takes the write lock up front. A plain deferred BEGIN starts as a
@@ -389,6 +495,16 @@ pub async fn conclude_goal_with_verification(
     verification: Option<(&str, &str, bool)>,
 ) -> Result<()> {
     let pool = super::pool().await;
+    conclude_goal_with_verification_with_pool(pool, goal_id, status, conclusion, verification).await
+}
+
+pub async fn conclude_goal_with_verification_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    status: &str,
+    conclusion: &str,
+    verification: Option<(&str, &str, bool)>,
+) -> Result<()> {
     let now = now_secs();
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -493,6 +609,34 @@ pub async fn save_evidence_and_link(
     goal_link: Option<(&str, f64, bool)>,
 ) -> Result<EvidenceCache> {
     let pool = super::pool().await;
+    save_evidence_and_link_with_pool(
+        pool,
+        project_id,
+        file_path,
+        file_version,
+        start_line,
+        end_line,
+        symbol_name,
+        summary,
+        raw_snippet,
+        goal_link,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn save_evidence_and_link_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+    file_path: &str,
+    file_version: &str,
+    start_line: Option<i64>,
+    end_line: Option<i64>,
+    symbol_name: Option<&str>,
+    summary: &str,
+    raw_snippet: Option<&str>,
+    goal_link: Option<(&str, f64, bool)>,
+) -> Result<EvidenceCache> {
     let now = now_secs();
     let id = generate_id("ev");
 
@@ -567,6 +711,13 @@ pub async fn save_evidence_and_link(
 
 pub async fn list_evidences_by_project(project_id: &str) -> Result<Vec<EvidenceCache>> {
     let pool = super::pool().await;
+    list_evidences_by_project_with_pool(pool, project_id).await
+}
+
+pub async fn list_evidences_by_project_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+) -> Result<Vec<EvidenceCache>> {
     let items = sqlx::query_as::<_, EvidenceCache>(
         "SELECT id, project_id, file_path, file_version, start_line, end_line, symbol_name, summary, raw_snippet, is_stale, created_at, updated_at \
          FROM evidence_cache WHERE project_id = ?1 ORDER BY updated_at DESC",
@@ -579,6 +730,14 @@ pub async fn list_evidences_by_project(project_id: &str) -> Result<Vec<EvidenceC
 
 pub async fn mark_evidence_stale_by_file(project_id: &str, file_path: &str) -> Result<()> {
     let pool = super::pool().await;
+    mark_evidence_stale_by_file_with_pool(pool, project_id, file_path).await
+}
+
+pub async fn mark_evidence_stale_by_file_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+    file_path: &str,
+) -> Result<()> {
     let now = now_secs();
     sqlx::query("UPDATE evidence_cache SET is_stale = 1, updated_at = ?1 WHERE project_id = ?2 AND file_path = ?3")
         .bind(now)
@@ -596,6 +755,16 @@ pub async fn link_evidence_to_goal(
     is_active: bool,
 ) -> Result<()> {
     let pool = super::pool().await;
+    link_evidence_to_goal_with_pool(pool, goal_id, evidence_id, relevance_score, is_active).await
+}
+
+pub async fn link_evidence_to_goal_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    evidence_id: &str,
+    relevance_score: f64,
+    is_active: bool,
+) -> Result<()> {
     let active_int = if is_active { 1 } else { 0 };
 
     // The score keeps the better of the two values. Linking says "consider this file for this goal",
@@ -664,6 +833,13 @@ impl RankedEvidence {
 
 pub async fn get_active_evidences_for_goal(goal_id: &str) -> Result<Vec<EvidenceCache>> {
     let pool = super::pool().await;
+    get_active_evidences_for_goal_with_pool(pool, goal_id).await
+}
+
+pub async fn get_active_evidences_for_goal_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+) -> Result<Vec<EvidenceCache>> {
     // Ordering is applied in Rust below: the relevance score lives on `goal_evidence` while
     // `updated_at` lives on `evidence_cache`, so no single index can serve this ORDER BY and the
     // planner would materialise a TEMP B-TREE. The result set is already narrowed to one goal and
@@ -740,6 +916,30 @@ pub async fn record_verification_with_status(
     next_status: Option<&str>,
 ) -> Result<GoalVerification> {
     let pool = super::pool().await;
+    record_verification_with_status_with_pool(
+        pool,
+        goal_id,
+        iteration,
+        test_command,
+        test_output,
+        is_passed,
+        feedback,
+        next_status,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn record_verification_with_status_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+    iteration: i64,
+    test_command: &str,
+    test_output: &str,
+    is_passed: bool,
+    feedback: Option<&str>,
+    next_status: Option<&str>,
+) -> Result<GoalVerification> {
     let now = now_secs();
     let id = generate_id("verif");
     let passed_int = if is_passed { 1 } else { 0 };
@@ -799,6 +999,13 @@ pub async fn record_verification_with_status(
 
 pub async fn list_goal_verifications(goal_id: &str) -> Result<Vec<GoalVerification>> {
     let pool = super::pool().await;
+    list_goal_verifications_with_pool(pool, goal_id).await
+}
+
+pub async fn list_goal_verifications_with_pool(
+    pool: &sqlx::SqlitePool,
+    goal_id: &str,
+) -> Result<Vec<GoalVerification>> {
     let rows = sqlx::query_as::<_, GoalVerification>(
         "SELECT id, goal_id, iteration, test_command, test_output, is_passed, feedback, created_at \
          FROM goal_verifications WHERE goal_id = ?1 ORDER BY iteration ASC",
