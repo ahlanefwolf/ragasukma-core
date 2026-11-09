@@ -12,9 +12,9 @@ use std::path::Path;
 pub use dialogs::{open_path_in_file_manager, pick_folder_dialog};
 pub use editor::apply_resilient_edit;
 pub use fs::{
-    create_workspace_command, ensure_git_and_gitignore, ensure_git_and_gitignore_opt,
-    generate_file_outline, generate_smart_gitignore, resolve_allowed_path,
-    to_workspace_folder_path,
+    create_workspace_command, create_workspace_command_with_shell, ensure_git_and_gitignore,
+    ensure_git_and_gitignore_opt, generate_file_outline, generate_smart_gitignore,
+    resolve_allowed_path, to_workspace_folder_path,
 };
 pub use search::{WorkspaceFileInfo, list_workspace_files, run_workspace_grep};
 pub use tags::expand_file_tags;
@@ -213,6 +213,8 @@ pub fn get_dynamic_agent_tools_schema(
         }
     }));
 
+    let shell_info = crate::agent::terminal::active_shell_info();
+
     // 3. Generic Shell Fallback (Always placed LAST to discourage manual shell scripts for tasks with dedicated tools)
     schema.push(json!({
         "type": "function",
@@ -221,18 +223,23 @@ pub fn get_dynamic_agent_tools_schema(
             "description": format!(
                 "Execute terminal command on host OS '{}' using {}. NOTE: Always prefer dedicated workspace_* and active mcp__* tools first. Only use this command for project-wide compilation/builds (e.g. 'cargo build', 'npm run build'), running test suites ('cargo test', 'npm test'), git commits, or tasks where no dedicated tool exists. Do NOT use this with 'curl' or custom scripts when dedicated fetch/inspect tools are available.",
                 std::env::consts::OS,
-                if cfg!(target_os = "windows") { "PowerShell" } else { "user login shell (bash/zsh)" }
+                shell_info.description
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Full shell command to execute. Multiple sequential commands can be combined (use ';' on Windows PowerShell, '&&' on Unix)."
+                        "description": format!("Full shell command to execute. {}", shell_info.multiple_cmd_hint)
                     },
                     "cwd": {
                         "type": "string",
                         "description": "Working directory relative to workspace or folder alias (defaults to primary root)"
+                    },
+                    "shell": {
+                        "type": "string",
+                        "enum": ["auto", "bash", "powershell", "pwsh", "cmd", "zsh", "sh"],
+                        "description": "Optional shell interpreter override. Supported: 'auto' (default), 'bash' (Git Bash on Windows or /bin/bash on Unix), 'powershell', 'pwsh' (PowerShell Core), 'cmd' (Windows cmd.exe), 'zsh', 'sh'."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -780,7 +787,12 @@ pub async fn execute_tool_call(
                 normalize_workspace_command(command_str, &work_dir, allowed_roots);
             validate_safe_command(&effective_command)?;
 
-            let std_proc = create_workspace_command(&effective_command);
+            let requested_shell = args
+                .get("shell")
+                .and_then(|v| v.as_str())
+                .and_then(crate::agent::terminal::ShellType::parse);
+
+            let std_proc = create_workspace_command_with_shell(&effective_command, requested_shell);
             let mut proc = tokio::process::Command::from(std_proc);
             proc.current_dir(&work_dir);
             proc.kill_on_drop(true);

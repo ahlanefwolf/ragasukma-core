@@ -13,6 +13,7 @@ pub mod models;
 pub mod orchestrator;
 pub mod skills;
 pub mod snapshot;
+pub mod terminal;
 pub mod tools;
 
 pub use compressor::{

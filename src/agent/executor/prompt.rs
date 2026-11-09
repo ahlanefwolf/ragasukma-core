@@ -43,28 +43,10 @@ fn build_static_prompt(
         .as_deref()
         .unwrap_or("run project verification or test commands if available");
 
-    #[cfg(target_os = "windows")]
-    let shell_desc = "PowerShell. Use native PowerShell syntax for scripts and paths. For multiple commands in one execution, use ';' as separator (do not use '&&' as Windows PowerShell 5.1 does not support it).";
-
-    #[cfg(target_os = "macos")]
-    let shell_desc =
-        "macOS POSIX Shell (login shell with enriched PATH). Use standard Unix shell syntax.";
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let shell_desc =
-        "Linux POSIX Shell (login shell with enriched PATH). Use standard Unix/Linux shell syntax.";
-
-    #[cfg(target_os = "windows")]
-    let script_runner_desc = "Scripts: Node.js (`node`) or Python (`python` / `py -3`)";
-
-    #[cfg(not(target_os = "windows"))]
-    let script_runner_desc = "Scripts: Node.js (`node`) or Python (`python3`)";
-
-    #[cfg(target_os = "windows")]
-    let multiple_cmd_hint = "When running sequential terminal commands, combine them into a single execution to save turn latency: use ';' (e.g. `cmd1 ; cmd2`) on Windows PowerShell instead of '&&'.";
-
-    #[cfg(not(target_os = "windows"))]
-    let multiple_cmd_hint = "When running sequential terminal commands, combine them into a single execution (chain with '&&') to save turn latency.";
+    let shell_info = crate::agent::terminal::active_shell_info();
+    let shell_desc = shell_info.description;
+    let script_runner_desc = shell_info.script_runner_desc;
+    let multiple_cmd_hint = shell_info.multiple_cmd_hint;
 
     // Real limit taken from TurnState, so the prompt never advertises a budget the
     // runtime does not enforce.

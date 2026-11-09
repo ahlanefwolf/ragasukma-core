@@ -1,6 +1,4 @@
 use anyhow::{Result, bail};
-#[cfg(not(target_os = "windows"))]
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Verify that a target path is allowed within one of the project's root folders.
@@ -357,117 +355,15 @@ pub fn ensure_git_and_gitignore_opt(root_path: &Path, auto_git_init: bool) -> Re
 /// Builds a cross-platform shell Command with an enriched PATH environment so tools like
 /// npm, npx, pnpm, yarn, node, cargo, python, etc. are reliably found across Linux, macOS, and Windows.
 pub fn create_workspace_command(command_str: &str) -> std::process::Command {
-    #[cfg(target_os = "windows")]
-    {
-        let mut cmd = std::process::Command::new("powershell");
-        crate::agent::engine::configure_subprocess(&mut cmd);
-        cmd.arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-Command")
-            .arg(command_str);
+    crate::agent::terminal::build_command(command_str, None)
+}
 
-        // Enrich Windows PATH if needed
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        let mut path_entries: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
-
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let npm_roaming = PathBuf::from(&appdata).join("npm");
-            if npm_roaming.exists() && !path_entries.contains(&npm_roaming) {
-                path_entries.insert(0, npm_roaming);
-            }
-        }
-        if let Ok(userprofile) = std::env::var("USERPROFILE") {
-            let cargo_bin = PathBuf::from(&userprofile).join(".cargo").join("bin");
-            if cargo_bin.exists() && !path_entries.contains(&cargo_bin) {
-                path_entries.insert(0, cargo_bin);
-            }
-        }
-        let node_prog = PathBuf::from(r"C:\Program Files\nodejs");
-        if node_prog.exists() && !path_entries.contains(&node_prog) {
-            path_entries.insert(0, node_prog);
-        }
-
-        if let Ok(new_path) = std::env::join_paths(path_entries) {
-            cmd.env("PATH", new_path);
-        }
-        cmd
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        // Enrich Unix PATH with common Node, Python, and Rust manager directories
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        let mut path_entries: Vec<PathBuf> = std::env::split_paths(&current_path).collect();
-
-        if let Ok(home) = std::env::var("HOME") {
-            let home_path = Path::new(&home);
-            let candidates = [
-                home_path.join(".local/bin"),
-                home_path.join(".cargo/bin"),
-                home_path.join(".bun/bin"),
-                home_path.join(".volta/bin"),
-                home_path.join(".fnm/current/bin"),
-                home_path.join(".asdf/shims"),
-                home_path.join(".asdf/bin"),
-                PathBuf::from("/usr/local/bin"),
-                PathBuf::from("/opt/homebrew/bin"),
-            ];
-
-            for candidate in candidates {
-                if candidate.exists() && !path_entries.contains(&candidate) {
-                    path_entries.insert(0, candidate);
-                }
-            }
-
-            // NVM active directory or latest installed node version
-            if let Ok(nvm_bin) = std::env::var("NVM_BIN") {
-                let nvm_path = PathBuf::from(nvm_bin);
-                if nvm_path.exists() && !path_entries.contains(&nvm_path) {
-                    path_entries.insert(0, nvm_path);
-                }
-            }
-
-            let nvm_node_dir = home_path.join(".nvm/versions/node");
-            if nvm_node_dir.is_dir()
-                && let Ok(entries) = fs::read_dir(&nvm_node_dir)
-            {
-                let mut versions: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path().join("bin"))
-                    .filter(|p| p.is_dir())
-                    .collect();
-                versions.sort();
-                if let Some(latest) = versions.pop()
-                    && !path_entries.contains(&latest)
-                {
-                    path_entries.insert(0, latest);
-                }
-            }
-        }
-
-        let new_path = std::env::join_paths(path_entries).unwrap_or_else(|_| current_path.into());
-
-        let shell_var = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-        let (shell_bin, is_login) = if Path::new(&shell_var).exists() {
-            let login = shell_var.ends_with("bash") || shell_var.ends_with("zsh");
-            (shell_var, login)
-        } else if Path::new("/bin/bash").exists() {
-            ("/bin/bash".to_string(), true)
-        } else {
-            ("sh".to_string(), false)
-        };
-
-        let mut cmd = std::process::Command::new(&shell_bin);
-        if is_login {
-            cmd.arg("-l").arg("-c").arg(command_str);
-        } else {
-            cmd.arg("-c").arg(command_str);
-        }
-        cmd.env("PATH", new_path);
-        cmd
-    }
+/// Builds a shell Command with explicit shell interpreter override (bash, powershell, pwsh, cmd, zsh, sh).
+pub fn create_workspace_command_with_shell(
+    command_str: &str,
+    shell: Option<crate::agent::terminal::ShellType>,
+) -> std::process::Command {
+    crate::agent::terminal::build_command(command_str, shell)
 }
 
 /// Generate a language-agnostic structural outline for large files.
