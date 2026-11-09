@@ -1,3 +1,14 @@
+//! Executes the tool calls requested by one assistant turn.
+//!
+//! Split (Refactor #3, Stage C) from a single 1041-line file into concern
+//! modules: audit trail, argument heuristics, hard gates, dispatch and
+//! post-execution effects.
+
+mod audit;
+mod args;
+mod effects;
+mod guards;
+
 use anyhow::Result;
 use serde_json::json;
 
@@ -12,52 +23,9 @@ use crate::agent::tools::execute_tool_call;
 use crate::llm::v1_engine::V1ToolCall;
 use crate::repository::agent as repository;
 
-/// One audit record for a tool invocation.
-struct ToolAudit<'a> {
-    tool_name: &'a str,
-    target_path: Option<&'a str>,
-    command: Option<&'a str>,
-    status: &'a str,
-    reason: Option<&'a str>,
-    duration_ms: Option<i64>,
-}
-
-/// Writes an audit entry, surfacing the failure instead of discarding it.
-///
-/// Audit rows are the record of what the agent actually did on this machine. Silently
-/// dropping them would mean a broken audit trail looks identical to an idle agent, so a
-/// failed write is logged loudly. It deliberately does not abort the turn: refusing to
-/// run tools because bookkeeping failed would be worse than a flagged gap.
-async fn audit_tool_call(session_id: &str, goal_id: &str, entry: ToolAudit<'_>) {
-    let ToolAudit {
-        tool_name,
-        target_path,
-        command,
-        status,
-        reason,
-        duration_ms,
-    } = entry;
-
-    if let Err(e) = repository::record_agent_audit(
-        Some(session_id),
-        Some(goal_id),
-        tool_name,
-        target_path,
-        command,
-        status,
-        reason,
-        duration_ms,
-    )
-    .await
-    {
-        crate::term_err!(
-            "[Audit] Failed to persist audit entry (tool={}, status={}): {}",
-            tool_name,
-            status,
-            e
-        );
-    }
-}
+use audit::{ToolAudit, audit_tool_call};
+use args::infer_tool_name_from_call;
+use effects::extract_modified_paths_from_command;
 
 pub async fn execute_turn_tool_calls(
     session_id: &str,
@@ -953,89 +921,6 @@ pub async fn execute_turn_tool_calls(
     Ok(())
 }
 
-fn infer_tool_name_from_call(call_id: &str, args: &serde_json::Value) -> Option<String> {
-    // 1. Some providers embed the tool name in the call id, e.g.
-    //    `workspace_list_dir_0_9ff280cf` or `call_workspace_grep_x`.
-    const KNOWN_TOOLS: [&str; 6] = [
-        "workspace_list_dir",
-        "workspace_read_file",
-        "workspace_write_file",
-        "workspace_edit_file",
-        "workspace_grep",
-        "workspace_run_command",
-    ];
-
-    for tool in KNOWN_TOOLS {
-        if call_id.contains(tool) {
-            return Some(tool.to_string());
-        }
-    }
-
-    // 2. Fall back to the argument shape, which is a strong signal.
-    let has = |key: &str| args.get(key).is_some();
-    if has("command") {
-        return Some("workspace_run_command".to_string());
-    }
-    if has("old_text") {
-        return Some("workspace_edit_file".to_string());
-    }
-    if has("content") && has("file_path") {
-        return Some("workspace_write_file".to_string());
-    }
-    if has("pattern") {
-        return Some("workspace_grep".to_string());
-    }
-    if has("start_line") || has("end_line") {
-        return Some("workspace_read_file".to_string());
-    }
-    if has("depth") {
-        return Some("workspace_list_dir".to_string());
-    }
-
-    None
-}
-
-fn extract_modified_paths_from_command(cmd: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-
-    // 1. Python open('path', 'w'/'a') or open("path", "w"/"a")
-    if cmd.contains("open(") {
-        for part in cmd.split("open(") {
-            let trimmed = part.trim_start();
-            if (trimmed.starts_with('\'') || trimmed.starts_with('"'))
-                && let Some(quote) = trimmed.chars().next()
-            {
-                let rest = &trimmed[1..];
-                if let Some((p, post)) = rest.split_once(quote)
-                    && (post.contains("'w'")
-                        || post.contains("\"w\"")
-                        || post.contains("'a'")
-                        || post.contains("\"a\"")
-                        || post.contains("'wb'")
-                        || post.contains("\"wb\""))
-                {
-                    let clean = p.trim_start_matches("./").trim();
-                    if !clean.is_empty() && !paths.contains(&clean.to_string()) {
-                        paths.push(clean.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. touch file.txt
-    if cmd.starts_with("touch ") {
-        for arg in cmd.strip_prefix("touch ").unwrap_or("").split_whitespace() {
-            let clean = arg.trim_start_matches("./").trim();
-            if !clean.starts_with('-') && !clean.is_empty() && !paths.contains(&clean.to_string()) {
-                paths.push(clean.to_string());
-            }
-        }
-    }
-
-    paths
-}
 
 #[cfg(test)]
-#[path = "tool_runner_tests.rs"]
 mod tests;
