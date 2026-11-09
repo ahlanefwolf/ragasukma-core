@@ -1,7 +1,19 @@
 use sqlx::SqlitePool;
 
-pub mod chat_history;
-pub mod todo;
+// App-level entities (was: src/repository/*.rs)
+pub mod app;
+// Agent-domain entities (was: src/agent/repository/*.rs)
+pub mod agent;
+
+pub use app::{chat_history, todo};
+pub use app::chat_history::*;
+pub use app::todo::*;
+
+// Agent submodules are exposed both as modules and flattened.
+pub use agent::{audit, goals, messages, projects_and_sessions};
+pub use agent::{
+    generate_id, now_millis, now_secs, pool, testsupport,
+};
 
 // NOTE: the legacy SQLite-backed skill CRUD module (formerly `repository::skill`) was
 // removed. Skills are now discovered dynamically from `.skill` / `.skills` folders on
@@ -10,16 +22,6 @@ pub mod todo;
 // rewriting a shipped migration would break the `_sqlx_migrations` checksum chain for
 // existing installs); it is simply no longer read or written. Clean it up with a new
 // forward migration if/when desired.
-
-pub use chat_history::{
-    ChatHistoryPaginatedResponse, ChatHistoryRecord, ChatTurnItem, delete_history_by_date,
-    get_chat_event_sender, get_history_by_date_paginated, get_history_dates,
-    get_local_date_and_time, log_conversation_turn, save_chat_turn,
-};
-pub use todo::{
-    TodoItem, add_todo_to_db, complete_todo_in_db, delete_todo_from_db, get_active_todos_from_db,
-    get_all_todos_from_db,
-};
 
 /// Runs all SQLx migrations embedded in ragasukma-core against the given SQLite pool.
 pub async fn migrate_database(pool: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
