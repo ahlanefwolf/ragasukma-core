@@ -184,14 +184,39 @@ pub fn is_repeated_read(tool_name: &str, args: &Value, state: &TurnState) -> Opt
 ///
 /// `is_target_in_error_list` exempts targets that still have compiler errors, so
 /// a session cannot be locked out of the files it is supposed to fix.
+/// True when this call re-runs a shell verification command.
+///
+/// Only shell-execution tools are inspected; file reads, edits, and searches
+/// are never verification commands and must stay available after a pass.
+fn is_verification_command(tool_name: &str, args: &Value) -> bool {
+    let is_shell = tool_name.contains("run_command") || tool_name.contains("shell");
+    if !is_shell {
+        return false;
+    }
+    args.get("command")
+        .and_then(|c| c.as_str())
+        .is_some_and(crate::agent::languages::is_verification_command)
+}
+
 pub fn evaluate(
     tool_name: &str,
     args: &Value,
     state: &TurnState,
     is_target_in_error_list: bool,
 ) -> Option<Denial> {
-    if state.circuit_breaker_triggered || state.force_final_text_only {
+    if state.circuit_breaker_triggered {
         return Some(Denial::CircuitBreakerTriggered);
+    }
+
+    // A passed verification used to hard-close every tool for the rest of the
+    // turn. That is how a premature "VERIFICATION PASSED" became unrecoverable:
+    // the model could not even inspect files to discover that another component
+    // in the workspace was still broken. Verification success is now advisory —
+    // it only denies re-running the exact verification command that already
+    // passed (see `VerificationAlreadyPassed` below), while reads, edits, and
+    // unrelated commands stay available.
+    if state.verification_complete && is_verification_command(tool_name, args) {
+        return Some(Denial::VerificationAlreadyPassed);
     }
 
     let is_new_target = is_work_on_new_target(
@@ -267,12 +292,30 @@ mod tests {
     }
 
     #[test]
-    fn force_final_text_only_also_closes_tool_calling() {
+    fn force_final_text_only_keeps_inspection_tools_open() {
+        // Soft-nudge: a passed verification must not lock reads/searches, or a
+        // premature "VERIFICATION PASSED" can never be corrected by inspecting
+        // the rest of the workspace.
         let mut s = state();
-        s.force_final_text_only = true;
+        s.verification_complete = true;
         assert_eq!(
             evaluate("workspace_grep", &json!({"pattern": "x"}), &s, false),
-            Some(Denial::CircuitBreakerTriggered)
+            None
+        );
+    }
+
+    #[test]
+    fn force_final_text_only_still_denies_rerunning_verification() {
+        let mut s = state();
+        s.verification_complete = true;
+        assert_eq!(
+            evaluate(
+                "workspace_run_command",
+                &json!({"command": "cargo test"}),
+                &s,
+                false
+            ),
+            Some(Denial::VerificationAlreadyPassed)
         );
     }
 

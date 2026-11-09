@@ -178,6 +178,52 @@ pub fn is_executable_available(bin_name: &str, workspace_roots: &[String]) -> bo
     false
 }
 
+/// Canonical verifier command strings recognised by the framework.
+///
+/// Single source of truth for "is this command a verifier, and which one is it?"
+/// Keeping it in one place stops the guard layer, the coverage accounting, and
+/// the language detectors from disagreeing about what counts as a pass.
+pub fn known_verifier_commands() -> &'static [&'static str] {
+    &[
+        "cargo test",
+        "cargo build",
+        "cargo check",
+        "cargo clippy",
+        "cargo nextest",
+        "npm test",
+        "npm run test",
+        "npm run build",
+        "npm run lint",
+        "yarn test",
+        "yarn build",
+        "pnpm test",
+        "pnpm build",
+        "bun test",
+        "pytest",
+        "python -m pytest",
+        "python -m unittest",
+        "go test",
+        "go build",
+        "go vet",
+        "mvn test",
+        "mvn verify",
+        "gradle test",
+        "./gradlew test",
+        "dotnet test",
+        "dotnet build",
+        "mix test",
+        "phpunit",
+        "rspec",
+        "bundle exec rspec",
+        "make test",
+        "swift build",
+        "xcodebuild test",
+        "flutter test",
+        "dart test",
+        "zig build test",
+    ]
+}
+
 /// Returns the primary verification command for the detected workspace.
 /// For multi-component workspaces, chains each component verifier in a subshell.
 /// Probes host environment availability so uninstalled tools are not recommended.
@@ -283,7 +329,6 @@ pub fn is_verification_command(cmd: &str) -> bool {
     use command_rules::*;
 
     let lower = cmd.trim().to_lowercase();
-
     for sub in split_chained_commands(&lower) {
         let sub_trimmed = trim_sub_command(sub);
 

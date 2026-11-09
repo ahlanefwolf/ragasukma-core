@@ -429,18 +429,19 @@ pub fn is_command_output_error(output: &str) -> bool {
             return false;
         }
 
-        let exit_code = val.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(0);
-        let success = val.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        let status = val
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("SUCCESS");
+        // Fail-closed: a payload that looks like a command result but never states
+        // how it ended is not proof of success. Defaulting a missing `exit_code`
+        // to 0 (or `success` to true) turns a malformed payload into a green
+        // verification, which then locks the turn down as "VERIFICATION PASSED".
+        let Some(exit_code) = val.get("exit_code").and_then(|v| v.as_i64()) else {
+            return true;
+        };
+        let success = val.get("success").and_then(|v| v.as_bool());
+        let status = val.get("status").and_then(|v| v.as_str());
 
-        if !success
+        if success == Some(false)
             || exit_code != 0
-            || status == "FAILED"
-            || status == "ERROR"
-            || status == "TIMEOUT"
+            || matches!(status, Some("FAILED") | Some("ERROR") | Some("TIMEOUT"))
         {
             return true;
         }
@@ -448,6 +449,7 @@ pub fn is_command_output_error(output: &str) -> bool {
         // Process exited cleanly with code 0.
         // Warnings, deprecation notices, or info logs in stderr MUST NOT be considered errors when exit_code is 0.
         let stderr = val.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+        let stdout = val.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
         if !stderr.is_empty() {
             let lower_err = stderr.to_lowercase();
             if lower_err.contains("panic:")
@@ -458,10 +460,41 @@ pub fn is_command_output_error(output: &str) -> bool {
             }
         }
 
-        return false;
+        // Text-level backstop: some runners wrap a failing build in an envelope
+        // that still reports exit_code 0 (or reports it only in the body). Trust
+        // explicit compiler failure lines over the envelope.
+        return text_reports_command_failure(&format!("{stdout}\n{stderr}"));
     }
 
-    false
+    // 4. Non-JSON output. `workspace_run_command` normally returns a JSON
+    // envelope, but proxied/MCP runners may hand back plain text. We cannot know
+    // the exit code here, so only an explicit failure signal is treated as an
+    // error — but a plain-text failure must not be silently counted as a pass.
+    text_reports_command_failure(output)
+}
+
+/// Detects explicit failure markers in raw command output text.
+///
+/// Conservative: matches only unambiguous signals (non-zero exit-code banners,
+/// compiler error codes, and the runner's own failure banners) so ordinary log
+/// lines containing the word "error" do not flip a passing build to failing.
+fn text_reports_command_failure(text: &str) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    lower.contains("exit code: 1")
+        || lower.contains("exit code: 2")
+        || lower.contains("exit_code: 1")
+        || lower.contains("exit_code: 2")
+        || lower.contains("\"exit_code\": 1")
+        || lower.contains("\"exit_code\": 2")
+        || lower.contains("error[e")          // rustc: error[E0432]
+        || lower.contains("error: could not compile")
+        || lower.contains("failed to compile")
+        || lower.contains("build failed")
+        || lower.contains("test failed")
+        || text.lines().any(|l| l.trim_start().starts_with("error:"))
 }
 
 /// Determines if a command failure is primarily an external environment, network, port conflict,
@@ -693,5 +726,24 @@ Random console log line with no errors
 
         let diags = extract_command_diagnostics(&error_line);
         assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn missing_exit_code_is_failure_not_success() {
+        // Fail-closed: a command envelope without exit_code must not read as green.
+        let out = r#"{"command":"cargo test","stdout":"running tests"}"#;
+        assert!(is_command_output_error(out));
+    }
+
+    #[test]
+    fn non_json_compiler_error_is_failure() {
+        let out = "error[E0432]: unresolved import\n\nEXIT: 101\n";
+        assert!(is_command_output_error(out));
+    }
+
+    #[test]
+    fn clean_json_success_is_not_failure() {
+        let out = r#"{"command":"cargo test","exit_code":0,"success":true,"stdout":"ok","stderr":"warning: unused"}"#;
+        assert!(!is_command_output_error(out));
     }
 }

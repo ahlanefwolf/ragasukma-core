@@ -268,10 +268,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 let conclude_on_pass = is_passed && {
                     let cmd_lower = trimmed_cmd.to_lowercase();
                     let all_detectable_verifiers =
-                        crate::agent::languages::detect_verifiers_for_modified_files(
-                            allowed_folders,
-                            &state.modified_files,
-                        );
+                        super::scope::required_verifiers(allowed_folders, &state.modified_files);
                     all_detectable_verifiers.into_iter().all(|v| {
                         cmd_lower.contains(&v.to_lowercase())
                             || state
@@ -311,29 +308,39 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 if is_passed {
                     // Track which subdirectory was verified
                     let cmd_lower = trimmed_cmd.to_lowercase();
-                    let all_detectable_verifiers =
-                        crate::agent::languages::detect_verifiers_for_modified_files(
-                            allowed_folders,
-                            &state.modified_files,
-                        );
-                    let remaining_unverified: Vec<String> = all_detectable_verifiers
-                        .into_iter()
-                        .filter(|v| {
-                            !cmd_lower.contains(&v.to_lowercase())
-                                && !state
-                                    .executed_commands
-                                    .iter()
-                                    .any(|ec| ec.to_lowercase().contains(&v.to_lowercase()))
-                        })
-                        .collect();
 
                     if let Some(cwd) = args_val.get("cwd").and_then(|v| v.as_str()) {
                         let clean_cwd = cwd.trim_start_matches("./");
                         state.verified_subdirs.insert(clean_cwd.to_string());
                     }
 
+                    // Record this verifier as *passed* (not merely executed — a
+                    // command that ran and failed must not count as coverage).
+                    if let Some(v) = super::scope::matched_verifier(&cmd_lower) {
+                        state
+                            .passed_verifiers
+                            .insert(v.to_lowercase());
+                    }
+
+                    // Single source of truth: the same required-verifier set that
+                    // decided `conclude_on_pass` above, minus what has now passed.
+                    // The two must never disagree, or the turn concludes on one
+                    // rule and reports "remaining work" on another.
+                    let remaining_unverified: Vec<String> =
+                        super::scope::required_verifiers(allowed_folders, &state.modified_files)
+                            .into_iter()
+                            .filter(|v| {
+                                let v = v.to_lowercase();
+                                !state.passed_verifiers.contains(&v)
+                            })
+                            .collect();
+
                     if !remaining_unverified.is_empty() {
                         state.has_passed_verification = false;
+                        state.verification_complete = false;
+                        // Explicitly keep the turn open. A component pass is not a
+                        // workspace pass, and must never arm the hard stop.
+                        state.force_final_text_only = false;
                         state.last_command_had_error = false;
                         state.ephemeral_directive = Some(format!(
                             "Component check succeeded for `{cmd}`. Notice: Other modified project components still require verification (e.g. `{}`). Please proceed to verify the remaining components before concluding.",
@@ -341,6 +348,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                         ));
                     } else {
                         state.has_passed_verification = true;
+                        state.verification_complete = true;
                         state.last_command_had_error = false;
                         state.pending_error_files.clear();
                         state.current_phase = "concluded".to_string();
@@ -352,6 +360,7 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                     }
                 } else {
                     state.has_passed_verification = false;
+                    state.verification_complete = false;
                     state.current_phase = "action".to_string();
                     let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "action")
                         .await;

@@ -64,7 +64,15 @@ pub struct TurnState {
     pub pending_error_files: HashSet<String>,
     pub files_read_in_full: HashSet<String>,
     pub verified_subdirs: HashSet<String>,
+    /// Lowercased verifier strings (e.g. "cargo test") that have produced a
+    /// passing run this turn. Only passing runs are inserted, so a failed
+    /// attempt can never satisfy a coverage requirement.
+    pub passed_verifiers: HashSet<String>,
     pub force_final_text_only: bool,
+    /// Set only when every detectable verifier for the modified workspace has
+    /// produced a passing run. Unlike `force_final_text_only`, this is evidence
+    /// based: it is never derived from the model's own claim of success.
+    pub verification_complete: bool,
     pub circuit_breaker_triggered: bool,
     pub has_passed_verification: bool,
     pub verification_attempts: usize,
@@ -110,7 +118,9 @@ impl TurnState {
             pending_error_files: HashSet::new(),
             files_read_in_full: HashSet::new(),
             verified_subdirs: HashSet::new(),
+            passed_verifiers: HashSet::new(),
             force_final_text_only: false,
+            verification_complete: false,
             circuit_breaker_triggered: false,
             has_passed_verification: false,
             verification_attempts: prior_verifs_count,

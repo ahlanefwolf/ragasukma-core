@@ -8,6 +8,7 @@ mod args;
 mod audit;
 mod effects;
 mod guards;
+mod scope;
 
 use anyhow::Result;
 use serde_json::json;
