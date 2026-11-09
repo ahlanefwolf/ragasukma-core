@@ -310,6 +310,38 @@ mod tests {
                 .unwrap();
         assert_eq!(audit_count.0, 1);
     }
+
+    /// Locks in that every repository pool helper hands back the *same* pool.
+    ///
+    /// `repository::pool()`, `repository::app::pool()` and `repository::agent::pool()`
+    /// exist only so the pool source can be swapped in one place. If one of them ever
+    /// starts returning a different pool — a second `OnceCell`, a fresh connection
+    /// pool, a test-specific database — transactions spanning two halves of the
+    /// repository layer would silently stop sharing a connection, and the
+    /// goal-link evidence transaction would break without any test noticing. This
+    /// assertion is what notices.
+    #[tokio::test]
+    async fn all_pool_helpers_return_the_same_pool() {
+        let _guard = super::testsupport::db_test_lock().await;
+
+        let from_root = crate::repository::pool().await;
+        let from_app = crate::repository::app::pool().await;
+        let from_agent = crate::repository::agent::pool().await;
+        let from_db = crate::db::get_pool().await;
+
+        assert!(
+            std::ptr::eq(from_root, from_agent),
+            "repository::pool() and repository::agent::pool() returned different pools"
+        );
+        assert!(
+            std::ptr::eq(from_root, from_app),
+            "repository::pool() and repository::app::pool() returned different pools"
+        );
+        assert!(
+            std::ptr::eq(from_root, from_db),
+            "repository::pool() and db::get_pool() returned different pools"
+        );
+    }
 }
 
 /// Serializes tests that depend on global database state.
