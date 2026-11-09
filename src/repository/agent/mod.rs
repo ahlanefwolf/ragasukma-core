@@ -18,10 +18,10 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Single entry point for obtaining the database pool.
 ///
 /// Every repository function goes through this instead of touching
-/// `crate::llm::usage::get_pool()` directly, so the pool source can be swapped in one
+/// `crate::db::get_pool()` directly, so the pool source can be swapped in one
 /// place and so multi-statement operations can obtain a transaction from it.
 pub async fn pool() -> &'static sqlx::SqlitePool {
-    crate::llm::usage::get_pool().await
+    crate::db::get_pool().await
 }
 
 pub fn now_secs() -> i64 {

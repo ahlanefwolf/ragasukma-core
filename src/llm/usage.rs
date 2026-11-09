@@ -2,11 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Get-or-init the application's SQLite pool.
-///
-/// Thin wrapper kept for backwards compatibility; the implementation (and the
-/// `#[cfg(test)]` / `#[cfg(not(test))]` split) lives in [`crate::db`].
-pub use crate::db::get_pool;
+use crate::db::get_pool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LlmUsageRecord {

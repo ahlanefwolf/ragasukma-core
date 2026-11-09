@@ -175,7 +175,7 @@ impl LlmClient {
                     self.prune_history();
 
                     let u = crate::config::load_user_config();
-                    crate::llm::history::log_conversation_turn(
+                    crate::repository::chat_history::log_conversation_turn(
                         &u.user_callsign,
                         &u.assistant_name,
                         &u.personality_role,
@@ -237,7 +237,7 @@ impl LlmClient {
                     self.prune_history();
 
                     let u = crate::config::load_user_config();
-                    crate::llm::history::log_conversation_turn(
+                    crate::repository::chat_history::log_conversation_turn(
                         &u.user_callsign,
                         &u.assistant_name,
                         &u.personality_role,
@@ -307,7 +307,7 @@ impl LlmClient {
                         self.prune_history();
 
                         let u = crate::config::load_user_config();
-                        crate::llm::history::log_conversation_turn(
+                        crate::repository::chat_history::log_conversation_turn(
                             &u.user_callsign,
                             &u.assistant_name,
                             &u.personality_role,
@@ -369,7 +369,7 @@ impl LlmClient {
                 self.prune_history();
 
                 let u = crate::config::load_user_config();
-                crate::llm::history::log_conversation_turn(
+                crate::repository::chat_history::log_conversation_turn(
                     &u.user_callsign,
                     &u.assistant_name,
                     &u.personality_role,

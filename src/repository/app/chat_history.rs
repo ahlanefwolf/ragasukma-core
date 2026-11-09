@@ -147,7 +147,7 @@ pub fn log_conversation_turn(
 
     let handle = tokio::runtime::Handle::try_current().ok();
     let save_fut = async move {
-        let pool = crate::llm::usage::get_pool().await;
+        let pool = crate::db::get_pool().await;
         let _ = sqlx::query(
             r#"
             INSERT INTO chat_history (
@@ -184,7 +184,7 @@ pub fn log_conversation_turn(
 }
 
 pub async fn get_history_dates() -> Vec<String> {
-    let pool = crate::llm::usage::get_pool().await;
+    let pool = crate::db::get_pool().await;
     get_history_dates_from_pool(pool).await
 }
 
@@ -209,7 +209,7 @@ pub async fn get_history_by_date_paginated(
     limit: usize,
     order: Option<&str>,
 ) -> ChatHistoryPaginatedResponse {
-    let pool = crate::llm::usage::get_pool().await;
+    let pool = crate::db::get_pool().await;
     get_history_by_date_paginated_from_pool(pool, target_date, page, limit, order).await
 }
 
@@ -304,7 +304,7 @@ pub async fn get_history_by_date_paginated_from_pool(
 }
 
 pub async fn delete_history_by_date(target_date: &str) -> anyhow::Result<bool> {
-    let pool = crate::llm::usage::get_pool().await;
+    let pool = crate::db::get_pool().await;
     delete_history_by_date_from_pool(pool, target_date).await
 }
 
