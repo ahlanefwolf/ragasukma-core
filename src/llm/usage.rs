@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::db::get_pool;
+use crate::repository::pool as repository_pool;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct LlmUsageRecord {
@@ -50,7 +50,7 @@ pub async fn record_usage_async(
     duration_ms: u64,
     status: &str,
 ) -> anyhow::Result<LlmUsageRecord> {
-    let pool = get_pool().await;
+    let pool = repository_pool().await;
     record_usage_to_pool(
         pool,
         provider,
@@ -184,7 +184,7 @@ pub async fn get_usage_summary(
     provider_filter: Option<&str>,
     date_filter: Option<&str>,
 ) -> LlmUsageSummary {
-    let pool = get_pool().await;
+    let pool = repository_pool().await;
     get_usage_summary_from_pool(pool, provider_filter, date_filter).await
 }
 
@@ -269,7 +269,7 @@ pub async fn get_usage_records_paginated(
     page: usize,
     limit: usize,
 ) -> LlmUsagePaginatedResponse {
-    let pool = get_pool().await;
+    let pool = repository_pool().await;
     get_usage_records_paginated_from_pool(pool, provider_filter, date_filter, page, limit).await
 }
 
@@ -367,7 +367,7 @@ pub async fn get_usage_records_from_pool(
 }
 
 pub async fn clear_usage() -> anyhow::Result<()> {
-    let pool = get_pool().await;
+    let pool = repository_pool().await;
     clear_usage_from_pool(pool).await
 }
 
