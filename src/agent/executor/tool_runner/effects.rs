@@ -112,13 +112,16 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 }
                 state.force_final_text_only = false;
                 state.circuit_breaker_triggered = false;
-                let _ = repository::mark_evidence_stale_by_file_with_pool(pool, project_id, path).await;
+                let _ =
+                    repository::mark_evidence_stale_by_file_with_pool(pool, project_id, path).await;
             }
 
             let targets_json =
                 serde_json::to_string(&state.locked_targets).unwrap_or_else(|_| "[]".to_string());
-            let _ = repository::lock_goal_targets_with_pool(pool, &state.goal_id, &targets_json).await;
-            let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "verification").await;
+            let _ =
+                repository::lock_goal_targets_with_pool(pool, &state.goal_id, &targets_json).await;
+            let _ =
+                repository::update_goal_phase_with_pool(pool, &state.goal_id, "verification").await;
 
             let relevant_verifiers = crate::agent::languages::detect_verifiers_for_modified_files(
                 allowed_folders,
@@ -242,7 +245,9 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 for path in touched {
                     state.on_successful_edit(&path);
                     crate::agent::diagnostics::mark_diagnostic_file_resolved(session_id, &path);
-                    let _ = repository::mark_evidence_stale_by_file_with_pool(pool, project_id, &path).await;
+                    let _ =
+                        repository::mark_evidence_stale_by_file_with_pool(pool, project_id, &path)
+                            .await;
                 }
             }
 
@@ -348,7 +353,8 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 } else {
                     state.has_passed_verification = false;
                     state.current_phase = "action".to_string();
-                    let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "action").await;
+                    let _ = repository::update_goal_phase_with_pool(pool, &state.goal_id, "action")
+                        .await;
 
                     let (grouped_diags, _) = group_diagnostics_by_file(tool_output);
                     for g in &grouped_diags {
@@ -468,7 +474,8 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
                 crate::agent::evidence_ranking::EvidenceOrigin::Read,
                 0,
             );
-            if let Err(e) = repository::save_evidence_and_link_with_pool(pool, 
+            if let Err(e) = repository::save_evidence_and_link_with_pool(
+                pool,
                 project_id,
                 file_path,
                 &file_ver,
@@ -481,7 +488,17 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
             )
             .await
             {
-                crate::term_err!("[Evidence] Failed to cache read of {}: {}", file_path, e);
+                // A foreign-key failure here usually means the goal or project row is
+                // missing: the evidence row and its goal link are written in one
+                // transaction, so a missing goal rejects the whole insert.
+                crate::term_err!(
+                    "[Evidence] Failed to cache read of {} (project {}, goal {}): {} \
+                     — a FOREIGN KEY error means the project or goal row does not exist yet",
+                    file_path,
+                    project_id,
+                    state.goal_id,
+                    e
+                );
             }
         }
     } else if is_edit_op
@@ -498,7 +515,8 @@ pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
             crate::agent::evidence_ranking::EvidenceOrigin::Modified,
             0,
         );
-        if let Err(e) = repository::save_evidence_and_link_with_pool(pool, 
+        if let Err(e) = repository::save_evidence_and_link_with_pool(
+            pool,
             project_id,
             file_path,
             &file_ver,

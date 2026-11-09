@@ -41,14 +41,16 @@ fn test_infer_returns_none_when_unrecoverable() {
     assert_eq!(infer_tool_name_from_call("call_x", &json!({})), None);
 }
 
-/// `apply_post_inspection` used to reach for the global connection pool, so it
-/// could only be exercised against a live database. Now that the pool is
-/// passed in, one can be stood up in memory and the evidence-cache write
-/// observed directly.
-#[tokio::test]
-async fn post_inspection_caches_read_into_evidence_table() {
-    use super::effects::{PostExecContext, apply_post_inspection};
-    use crate::agent::executor::state::TurnState;
+/// An in-memory pool with migrations applied and a project + goal already
+/// seeded, returning their ids.
+///
+/// Evidence writes use `save_evidence_and_link`, which stores the slice *and*
+/// its goal link in a single transaction. A test that reaches an evidence path
+/// without a real `projects` and `goals` row will fail on a foreign key, and
+/// because the caller only logs that error the symptom is a bare "not found"
+/// rather than a clear FK message. Going through this helper keeps every
+/// evidence test from re-discovering that the hard way.
+async fn seeded_pool() -> (sqlx::SqlitePool, &'static str, &'static str) {
     use sqlx::sqlite::SqlitePoolOptions;
 
     let pool = SqlitePoolOptions::new()
@@ -69,18 +71,27 @@ async fn post_inspection_caches_read_into_evidence_table() {
     .await
     .unwrap();
 
-    // The read is cached and linked to its goal inside one transaction, so the
-    // goal row must exist first or the foreign key rejects the whole insert.
+    let goal_id = "goal_effects";
     sqlx::query(
         "INSERT INTO goals (id, project_id, title, demand, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 1000, 1000)",
     )
-    .bind("goal_effects")
+    .bind(goal_id)
     .bind(project_id)
     .bind("Cache a read")
     .bind("Exercise the post-inspection evidence write")
     .execute(&pool)
     .await
     .unwrap();
+
+    (pool, project_id, goal_id)
+}
+
+#[tokio::test]
+async fn post_inspection_caches_read_into_evidence_table() {
+    use super::effects::{PostExecContext, apply_post_inspection};
+    use crate::agent::executor::state::TurnState;
+
+    let (pool, project_id, goal_id) = seeded_pool().await;
 
     // A real file inside an allowed folder gives a genuine file_version.
     let dir = std::env::temp_dir().join(format!("effects_test_{}", std::process::id()));
@@ -91,7 +102,7 @@ async fn post_inspection_caches_read_into_evidence_table() {
     let allowed_folders = vec![dir.to_string_lossy().to_string()];
 
     let args_val = json!({ "path": file_path, "start_line": 1, "end_line": 3 });
-    let mut state = TurnState::new("goal_effects".to_string(), "action".to_string(), vec![], 0);
+    let mut state = TurnState::new(goal_id.to_string(), "action".to_string(), vec![], 0);
 
     apply_post_inspection(PostExecContext {
         state: &mut state,
@@ -121,4 +132,53 @@ async fn post_inspection_caches_read_into_evidence_table() {
     assert_eq!(is_stale, 0, "a freshly read file is not stale");
 
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The mirror of the test above: with the goal row absent, the evidence write is
+/// rejected by the goal-link foreign key and nothing is cached. Pinning this
+/// keeps the requirement visible — if the write ever starts succeeding without a
+/// goal, the "one transaction" guarantee has quietly been broken.
+#[tokio::test]
+async fn post_inspection_without_goal_row_caches_nothing() {
+    use super::effects::{PostExecContext, apply_post_inspection};
+    use crate::agent::executor::state::TurnState;
+
+    let (pool, project_id, _goal_id) = seeded_pool().await;
+    sqlx::query("DELETE FROM goals WHERE project_id = ?1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let args_val = json!({ "path": "src/sample.rs", "start_line": 1, "end_line": 3 });
+    let mut state = TurnState::new("goal_absent".to_string(), "action".to_string(), vec![], 0);
+
+    apply_post_inspection(PostExecContext {
+        state: &mut state,
+        tool_name: "workspace_read_file",
+        tool_output: "fn main() {}\n",
+        args_val: &args_val,
+        target_arg_file: Some("src/sample.rs"),
+        is_edit_op: false,
+        is_inspection: true,
+        is_accessing_unmodified_target: true,
+        is_breaker_trip: false,
+        session_id: "sess_effects",
+        project_id,
+        allowed_folders: &[],
+        pool: &pool,
+    })
+    .await;
+
+    let cached: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM evidence_cache WHERE project_id = ?1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        cached, 0,
+        "evidence must not be cached when the goal link cannot be written"
+    );
 }
