@@ -8,6 +8,10 @@ use anyhow::Result;
 
 pub async fn list_projects() -> Result<Vec<Project>> {
     let pool = super::pool().await;
+    list_projects_with_pool(pool).await
+}
+
+pub async fn list_projects_with_pool(pool: &sqlx::SqlitePool) -> Result<Vec<Project>> {
     let projects = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, root_path, custom_instructions, created_at, updated_at \
          FROM projects ORDER BY created_at DESC",
@@ -19,6 +23,10 @@ pub async fn list_projects() -> Result<Vec<Project>> {
 
 pub async fn get_project(id: &str) -> Result<Option<Project>> {
     let pool = super::pool().await;
+    get_project_with_pool(pool, id).await
+}
+
+pub async fn get_project_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<Option<Project>> {
     let project = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, root_path, custom_instructions, created_at, updated_at \
          FROM projects WHERE id = ?1",
@@ -36,6 +44,16 @@ pub async fn create_project(
     custom_instructions: Option<&str>,
 ) -> Result<Project> {
     let pool = super::pool().await;
+    create_project_with_pool(pool, name, description, root_path, custom_instructions).await
+}
+
+pub async fn create_project_with_pool(
+    pool: &sqlx::SqlitePool,
+    name: &str,
+    description: &str,
+    root_path: Option<&str>,
+    custom_instructions: Option<&str>,
+) -> Result<Project> {
     let id = generate_id("proj");
     let now = now_secs();
 
@@ -72,6 +90,17 @@ pub async fn update_project(
     custom_instructions: Option<&str>,
 ) -> Result<()> {
     let pool = super::pool().await;
+    update_project_with_pool(pool, id, name, description, root_path, custom_instructions).await
+}
+
+pub async fn update_project_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    name: &str,
+    description: &str,
+    root_path: Option<&str>,
+    custom_instructions: Option<&str>,
+) -> Result<()> {
     let now = now_secs();
 
     sqlx::query(
@@ -92,6 +121,10 @@ pub async fn update_project(
 
 pub async fn delete_project(id: &str) -> Result<()> {
     let pool = super::pool().await;
+    delete_project_with_pool(pool, id).await
+}
+
+pub async fn delete_project_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM projects WHERE id = ?1")
         .bind(id)
         .execute(pool)
@@ -105,6 +138,13 @@ pub async fn delete_project(id: &str) -> Result<()> {
 
 pub async fn list_sessions(project_id: &str) -> Result<Vec<Session>> {
     let pool = super::pool().await;
+    list_sessions_with_pool(pool, project_id).await
+}
+
+pub async fn list_sessions_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+) -> Result<Vec<Session>> {
     let sessions = sqlx::query_as::<_, Session>(
         "SELECT s.id, s.project_id, s.title, s.status, s.model, s.temperature, s.source_chat_id, s.metadata, s.created_at, s.updated_at, \
          COALESCE(SUM(m.token_usage_input), 0) AS total_tokens_input, \
@@ -124,6 +164,10 @@ pub async fn list_sessions(project_id: &str) -> Result<Vec<Session>> {
 
 pub async fn get_session(id: &str) -> Result<Option<Session>> {
     let pool = super::pool().await;
+    get_session_with_pool(pool, id).await
+}
+
+pub async fn get_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<Option<Session>> {
     let session = sqlx::query_as::<_, Session>(
         "SELECT s.id, s.project_id, s.title, s.status, s.model, s.temperature, s.source_chat_id, s.metadata, s.created_at, s.updated_at, \
          COALESCE(SUM(m.token_usage_input), 0) AS total_tokens_input, \
@@ -148,6 +192,17 @@ pub async fn create_session(
     source_chat_id: Option<&str>,
 ) -> Result<Session> {
     let pool = super::pool().await;
+    create_session_with_pool(pool, project_id, title, model, temperature, source_chat_id).await
+}
+
+pub async fn create_session_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+    title: &str,
+    model: Option<&str>,
+    temperature: Option<f64>,
+    source_chat_id: Option<&str>,
+) -> Result<Session> {
     let id = generate_id("sess");
     let now = now_secs();
     let temp = temperature.unwrap_or(0.1);
@@ -186,6 +241,13 @@ pub async fn create_session(
 
 pub async fn get_session_status(id: &str) -> Result<Option<String>> {
     let pool = super::pool().await;
+    get_session_status_with_pool(pool, id).await
+}
+
+pub async fn get_session_status_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<Option<String>> {
     let row: Option<(String,)> = sqlx::query_as("SELECT status FROM sessions WHERE id = ?1")
         .bind(id)
         .fetch_optional(pool)
@@ -195,6 +257,14 @@ pub async fn get_session_status(id: &str) -> Result<Option<String>> {
 
 pub async fn update_session_status(id: &str, status: &str) -> Result<()> {
     let pool = super::pool().await;
+    update_session_status_with_pool(pool, id, status).await
+}
+
+pub async fn update_session_status_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    status: &str,
+) -> Result<()> {
     let now = now_secs();
     sqlx::query("UPDATE sessions SET status = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(status)
@@ -207,6 +277,14 @@ pub async fn update_session_status(id: &str, status: &str) -> Result<()> {
 
 pub async fn update_session_model(id: &str, model: &str) -> Result<()> {
     let pool = super::pool().await;
+    update_session_model_with_pool(pool, id, model).await
+}
+
+pub async fn update_session_model_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    model: &str,
+) -> Result<()> {
     let now = now_secs();
     sqlx::query("UPDATE sessions SET model = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(model)
@@ -222,7 +300,10 @@ pub async fn update_session_model(id: &str, model: &str) -> Result<()> {
 /// Returns the number of sessions reset to "idle".
 pub async fn reset_stale_running_sessions() -> Result<usize> {
     let pool = super::pool().await;
+    reset_stale_running_sessions_with_pool(pool).await
+}
 
+pub async fn reset_stale_running_sessions_with_pool(pool: &sqlx::SqlitePool) -> Result<usize> {
     let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE status = 'running'")
         .fetch_one(pool)
         .await?;
@@ -253,7 +334,10 @@ pub async fn delete_session(id: &str) -> Result<()> {
     crate::agent::executor::forget_session_generation(id);
 
     let pool = super::pool().await;
+    delete_session_with_pool(pool, id).await
+}
 
+pub async fn delete_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
     // All five statements are one logical deletion. Running them outside a transaction
     // means a mid-way failure leaves a session with goals but no evidence, or evidence
     // pointing at goals that no longer exist.
@@ -300,7 +384,13 @@ pub async fn delete_session(id: &str) -> Result<()> {
 /// Returns the number of sessions removed.
 pub async fn delete_expired_sessions(cutoff_epoch_secs: i64) -> Result<u64> {
     let pool = super::pool().await;
+    delete_expired_sessions_with_pool(pool, cutoff_epoch_secs).await
+}
 
+pub async fn delete_expired_sessions_with_pool(
+    pool: &sqlx::SqlitePool,
+    cutoff_epoch_secs: i64,
+) -> Result<u64> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Remove goals (and their dependent rows) belonging to expired sessions first.
@@ -341,7 +431,10 @@ pub async fn delete_expired_sessions(cutoff_epoch_secs: i64) -> Result<u64> {
 /// Returns the number of projects removed.
 pub async fn delete_orphan_projects() -> Result<u64> {
     let pool = super::pool().await;
+    delete_orphan_projects_with_pool(pool).await
+}
 
+pub async fn delete_orphan_projects_with_pool(pool: &sqlx::SqlitePool) -> Result<u64> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Evidence is project-scoped rather than session-scoped, so clear it explicitly.
@@ -367,6 +460,10 @@ pub async fn delete_orphan_projects() -> Result<u64> {
 
 pub async fn list_mcp_servers() -> Result<Vec<McpServer>> {
     let pool = super::pool().await;
+    list_mcp_servers_with_pool(pool).await
+}
+
+pub async fn list_mcp_servers_with_pool(pool: &sqlx::SqlitePool) -> Result<Vec<McpServer>> {
     let servers = sqlx::query_as::<_, McpServer>(
         "SELECT id, name, config, is_enabled, created_at \
          FROM mcp_servers ORDER BY name ASC",
@@ -383,6 +480,16 @@ pub async fn create_or_update_mcp_server(
     is_enabled: bool,
 ) -> Result<()> {
     let pool = super::pool().await;
+    create_or_update_mcp_server_with_pool(pool, id, name, config, is_enabled).await
+}
+
+pub async fn create_or_update_mcp_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    name: &str,
+    config: &str,
+    is_enabled: bool,
+) -> Result<()> {
     let now = now_secs();
     let enabled_int = if is_enabled { 1 } else { 0 };
 
@@ -407,6 +514,10 @@ pub async fn create_or_update_mcp_server(
 
 pub async fn delete_mcp_server(id: &str) -> Result<()> {
     let pool = super::pool().await;
+    delete_mcp_server_with_pool(pool, id).await
+}
+
+pub async fn delete_mcp_server_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM mcp_servers WHERE id = ?1")
         .bind(id)
         .execute(pool)
@@ -416,6 +527,13 @@ pub async fn delete_mcp_server(id: &str) -> Result<()> {
 
 pub async fn list_mcp_server_tools(server_id: &str) -> Result<Vec<McpServerTool>> {
     let pool = super::pool().await;
+    list_mcp_server_tools_with_pool(pool, server_id).await
+}
+
+pub async fn list_mcp_server_tools_with_pool(
+    pool: &sqlx::SqlitePool,
+    server_id: &str,
+) -> Result<Vec<McpServerTool>> {
     let tools = sqlx::query_as::<_, McpServerTool>(
         "SELECT server_id, name, config \
          FROM mcp_server_tools WHERE server_id = ?1 ORDER BY name ASC",
@@ -428,6 +546,12 @@ pub async fn list_mcp_server_tools(server_id: &str) -> Result<Vec<McpServerTool>
 
 pub async fn list_all_mcp_server_tools() -> Result<Vec<McpServerTool>> {
     let pool = super::pool().await;
+    list_all_mcp_server_tools_with_pool(pool).await
+}
+
+pub async fn list_all_mcp_server_tools_with_pool(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<McpServerTool>> {
     let tools = sqlx::query_as::<_, McpServerTool>(
         "SELECT server_id, name, config \
          FROM mcp_server_tools ORDER BY server_id ASC, name ASC",
@@ -437,12 +561,17 @@ pub async fn list_all_mcp_server_tools() -> Result<Vec<McpServerTool>> {
     Ok(tools)
 }
 
-pub async fn upsert_mcp_server_tool(
+pub async fn upsert_mcp_server_tool(server_id: &str, name: &str, config: &str) -> Result<()> {
+    let pool = super::pool().await;
+    upsert_mcp_server_tool_with_pool(pool, server_id, name, config).await
+}
+
+pub async fn upsert_mcp_server_tool_with_pool(
+    pool: &sqlx::SqlitePool,
     server_id: &str,
     name: &str,
     config: &str,
 ) -> Result<()> {
-    let pool = super::pool().await;
     sqlx::query(
         "INSERT INTO mcp_server_tools (server_id, name, config) \
          VALUES (?1, ?2, ?3) \
@@ -459,6 +588,14 @@ pub async fn upsert_mcp_server_tool(
 
 pub async fn delete_mcp_server_tool(server_id: &str, name: &str) -> Result<()> {
     let pool = super::pool().await;
+    delete_mcp_server_tool_with_pool(pool, server_id, name).await
+}
+
+pub async fn delete_mcp_server_tool_with_pool(
+    pool: &sqlx::SqlitePool,
+    server_id: &str,
+    name: &str,
+) -> Result<()> {
     sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1 AND name = ?2")
         .bind(server_id)
         .bind(name)
@@ -469,6 +606,13 @@ pub async fn delete_mcp_server_tool(server_id: &str, name: &str) -> Result<()> {
 
 pub async fn delete_mcp_server_tools_by_server(server_id: &str) -> Result<()> {
     let pool = super::pool().await;
+    delete_mcp_server_tools_by_server_with_pool(pool, server_id).await
+}
+
+pub async fn delete_mcp_server_tools_by_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    server_id: &str,
+) -> Result<()> {
     sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1")
         .bind(server_id)
         .execute(pool)
@@ -480,7 +624,13 @@ pub async fn delete_mcp_server_tools_by_server(server_id: &str) -> Result<()> {
 /// If no custom project-level configuration exists yet, defaults to all globally enabled MCP servers.
 pub async fn get_project_active_mcp_servers(project_id: &str) -> Result<Vec<McpServer>> {
     let pool = super::pool().await;
+    get_project_active_mcp_servers_with_pool(pool, project_id).await
+}
 
+pub async fn get_project_active_mcp_servers_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+) -> Result<Vec<McpServer>> {
     // Check if this project has any explicit rows configured in project_mcp_servers
     let count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM project_mcp_servers WHERE project_id = ?1")
@@ -518,7 +668,15 @@ pub async fn get_project_active_mcp_servers(project_id: &str) -> Result<Vec<McpS
 /// Retrieve the list of server IDs currently active for a project.
 /// If not customized yet, returns all globally enabled server IDs.
 pub async fn get_project_mcp_server_ids(project_id: &str) -> Result<Vec<String>> {
-    let active_servers = get_project_active_mcp_servers(project_id).await?;
+    let pool = super::pool().await;
+    get_project_mcp_server_ids_with_pool(pool, project_id).await
+}
+
+pub async fn get_project_mcp_server_ids_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+) -> Result<Vec<String>> {
+    let active_servers = get_project_active_mcp_servers_with_pool(pool, project_id).await?;
     Ok(active_servers.into_iter().map(|s| s.id).collect())
 }
 
@@ -526,7 +684,15 @@ pub async fn get_project_mcp_server_ids(project_id: &str) -> Result<Vec<String>>
 /// Explicitly marks each registered server as enabled (1) or disabled (0) for this project.
 pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[String]) -> Result<()> {
     let pool = super::pool().await;
-    let all_servers = list_mcp_servers().await?;
+    set_project_mcp_servers_with_pool(pool, project_id, active_server_ids).await
+}
+
+pub async fn set_project_mcp_servers_with_pool(
+    pool: &sqlx::SqlitePool,
+    project_id: &str,
+    active_server_ids: &[String],
+) -> Result<()> {
+    let all_servers = list_mcp_servers_with_pool(pool).await?;
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
