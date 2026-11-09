@@ -14,8 +14,7 @@ fn test_infer_from_arguments_shape() {
         Some("workspace_run_command")
     );
     assert_eq!(
-        infer_tool_name_from_call("call_x", &json!({"old_text": "a", "new_text": "b"}))
-            .as_deref(),
+        infer_tool_name_from_call("call_x", &json!({"old_text": "a", "new_text": "b"})).as_deref(),
         Some("workspace_edit_file")
     );
     assert_eq!(
@@ -28,8 +27,7 @@ fn test_infer_from_arguments_shape() {
         Some("workspace_grep")
     );
     assert_eq!(
-        infer_tool_name_from_call("call_x", &json!({"path": "a.rs", "start_line": 1}))
-            .as_deref(),
+        infer_tool_name_from_call("call_x", &json!({"path": "a.rs", "start_line": 1})).as_deref(),
         Some("workspace_read_file")
     );
     assert_eq!(

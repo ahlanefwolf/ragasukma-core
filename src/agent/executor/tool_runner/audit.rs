@@ -2,7 +2,6 @@
 
 use crate::repository::agent as repository;
 
-
 /// One audit record for a tool invocation.
 pub(super) struct ToolAudit<'a> {
     pub(super) tool_name: &'a str,
@@ -49,4 +48,3 @@ pub(super) async fn audit_tool_call(session_id: &str, goal_id: &str, entry: Tool
         );
     }
 }
-

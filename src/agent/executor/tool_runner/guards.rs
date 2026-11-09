@@ -90,10 +90,7 @@ pub fn is_inspection(tool_name: &str, args: &Value) -> bool {
 
 /// True when `tool_name` reads, edits or writes a target that has not been
 /// modified yet in this turn.
-pub fn is_work_on_new_target(
-    tool_name: &str,
-    is_accessing_unmodified_target: bool,
-) -> bool {
+pub fn is_work_on_new_target(tool_name: &str, is_accessing_unmodified_target: bool) -> bool {
     matches!(
         tool_name,
         "workspace_read_file" | "workspace_edit_file" | "workspace_write_file"
@@ -167,9 +164,10 @@ pub fn is_repeated_read(tool_name: &str, args: &Value, state: &TurnState) -> Opt
         .or_else(|| args.get("path"))
         .and_then(|p| p.as_str())
         .unwrap_or("");
-    let is_exact_duplicate = state
-        .recent_read_slices
-        .contains(&(path.to_string(), start_line, end_line));
+    let is_exact_duplicate =
+        state
+            .recent_read_slices
+            .contains(&(path.to_string(), start_line, end_line));
     let same_file_count = state
         .consecutive_read_same_file
         .get(path)
@@ -280,10 +278,19 @@ mod tests {
 
     #[test]
     fn inspection_recognises_readonly_shell_commands() {
-        assert!(is_inspection("workspace_run_command", &json!({"command": "cat src/lib.rs"})));
-        assert!(is_inspection("workspace_run_command", &json!({"command": "  grep -rn TODO"})));
+        assert!(is_inspection(
+            "workspace_run_command",
+            &json!({"command": "cat src/lib.rs"})
+        ));
+        assert!(is_inspection(
+            "workspace_run_command",
+            &json!({"command": "  grep -rn TODO"})
+        ));
         assert!(is_inspection("workspace_list_dir", &json!({})));
-        assert!(!is_inspection("workspace_run_command", &json!({"command": "cargo test"})));
+        assert!(!is_inspection(
+            "workspace_run_command",
+            &json!({"command": "cargo test"})
+        ));
         assert!(!is_inspection("workspace_edit_file", &json!({})));
     }
 
@@ -304,7 +311,10 @@ mod tests {
         let mut s = state();
         s.verified_subdirs.insert("verified_dir".into());
         assert!(is_accessing_different_component(Some("other/x.rs"), &s));
-        assert!(!is_accessing_different_component(Some("verified_dir/x.rs"), &s));
+        assert!(!is_accessing_different_component(
+            Some("verified_dir/x.rs"),
+            &s
+        ));
         assert!(!is_accessing_different_component(None, &s));
     }
 
@@ -333,7 +343,12 @@ mod tests {
         s.has_passed_verification = true;
         s.pending_error_files.insert("src/a.rs".into());
         assert_eq!(
-            evaluate("workspace_read_file", &json!({"file_path": "src/b.rs"}), &s, false),
+            evaluate(
+                "workspace_read_file",
+                &json!({"file_path": "src/b.rs"}),
+                &s,
+                false
+            ),
             None
         );
     }
@@ -413,7 +428,10 @@ mod tests {
             "verification_already_passed"
         );
         assert_eq!(
-            Denial::RepeatedCommand { command: "x".into() }.reason(),
+            Denial::RepeatedCommand {
+                command: "x".into()
+            }
+            .reason(),
             "repeated_command_without_progress"
         );
         assert_eq!(
@@ -424,11 +442,17 @@ mod tests {
 
     #[test]
     fn denial_messages_name_the_offending_command_and_streak() {
-        assert!(Denial::RepeatedCommand { command: "cargo test".into() }
+        assert!(
+            Denial::RepeatedCommand {
+                command: "cargo test".into()
+            }
             .message()
-            .contains("cargo test"));
-        assert!(Denial::InspectionBudgetExhausted { streak: 21 }
-            .message()
-            .contains("21"));
+            .contains("cargo test")
+        );
+        assert!(
+            Denial::InspectionBudgetExhausted { streak: 21 }
+                .message()
+                .contains("21")
+        );
     }
 }

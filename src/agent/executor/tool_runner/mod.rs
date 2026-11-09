@@ -4,8 +4,8 @@
 //! modules: audit trail, argument heuristics, hard gates, dispatch and
 //! post-execution effects.
 
-mod audit;
 mod args;
+mod audit;
 mod effects;
 mod guards;
 
@@ -20,8 +20,8 @@ use crate::agent::tools::execute_tool_call;
 use crate::llm::v1_engine::V1ToolCall;
 use crate::repository::agent as repository;
 
-use audit::{ToolAudit, audit_tool_call};
 use args::infer_tool_name_from_call;
+use audit::{ToolAudit, audit_tool_call};
 
 pub async fn execute_turn_tool_calls(
     session_id: &str,
@@ -170,7 +170,11 @@ pub async fn execute_turn_tool_calls(
             .await;
             denial.message()
         } else if let Some(path) = guards::is_repeated_read(&tool_name, &args_val, state) {
-            let path = if path.is_empty() { "target".to_string() } else { path };
+            let path = if path.is_empty() {
+                "target".to_string()
+            } else {
+                path
+            };
             format!(
                 "Notice: You have already read this exact slice of `{path}` multiple times. Its content is available in your conversation history. Please proceed with modifying the file using `workspace_edit_file` or answering the user's question directly."
             )
@@ -496,7 +500,6 @@ pub async fn execute_turn_tool_calls(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests;
