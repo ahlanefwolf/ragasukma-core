@@ -490,10 +490,8 @@ pub async fn discover_tools(
             raw_list.len(),
             server.name
         );
-        let final_tools: Vec<DiscoveredTool> = raw_list
-            .iter()
-            .map(|raw_tool| tool_definition_to_markdown(raw_tool))
-            .collect();
+        let final_tools: Vec<DiscoveredTool> =
+            raw_list.iter().map(tool_definition_to_markdown).collect();
 
         return Ok(final_tools);
     }

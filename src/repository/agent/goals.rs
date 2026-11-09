@@ -1059,7 +1059,7 @@ mod transaction_tests {
 
         let verifs = list_goal_verifications(&goal_id).await.unwrap();
         assert_eq!(verifs.len(), 1);
-        assert_eq!(verifs[0].is_passed, true);
+        assert!(verifs[0].is_passed);
 
         let goal = get_goal(&goal_id).await.unwrap().unwrap();
         assert_eq!(goal.status, "action", "status must follow the verification");
