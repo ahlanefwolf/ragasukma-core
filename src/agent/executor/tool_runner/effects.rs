@@ -265,16 +265,17 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                 // single transaction. Recording a passing verification while silently
                 // failing to move the goal would leave it stuck in "action" forever, and
                 // a lost verification row would let the goal conclude with no evidence.
+                let required_verifiers =
+                    super::scope::required_verifiers(allowed_folders, &state.modified_files);
+
                 let conclude_on_pass = is_passed && {
                     let cmd_lower = trimmed_cmd.to_lowercase();
-                    let all_detectable_verifiers =
-                        super::scope::required_verifiers(allowed_folders, &state.modified_files);
-                    all_detectable_verifiers.into_iter().all(|v| {
-                        cmd_lower.contains(&v.to_lowercase())
+                    required_verifiers.iter().all(|v| {
+                        super::scope::is_verifier_satisfied(v, &cmd_lower)
                             || state
                                 .executed_commands
                                 .iter()
-                                .any(|ec| ec.to_lowercase().contains(&v.to_lowercase()))
+                                .any(|ec| super::scope::is_verifier_satisfied(v, ec))
                     })
                 };
 
@@ -314,26 +315,34 @@ pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
                         state.verified_subdirs.insert(clean_cwd.to_string());
                     }
 
-                    // Record this verifier as *passed* (not merely executed — a
-                    // command that ran and failed must not count as coverage).
-                    if let Some(v) = super::scope::matched_verifier(&cmd_lower) {
-                        state
-                            .passed_verifiers
-                            .insert(v.to_lowercase());
+                    // Record matched verifiers as passed
+                    for v in super::scope::matched_verifiers(&cmd_lower) {
+                        state.passed_verifiers.insert(v.to_lowercase());
+                    }
+
+                    // Also record any required verifier that this command satisfies
+                    for req_v in &required_verifiers {
+                        if super::scope::is_verifier_satisfied(req_v, &cmd_lower) {
+                            state.passed_verifiers.insert(req_v.to_lowercase());
+                        }
                     }
 
                     // Single source of truth: the same required-verifier set that
                     // decided `conclude_on_pass` above, minus what has now passed.
                     // The two must never disagree, or the turn concludes on one
                     // rule and reports "remaining work" on another.
-                    let remaining_unverified: Vec<String> =
-                        super::scope::required_verifiers(allowed_folders, &state.modified_files)
-                            .into_iter()
-                            .filter(|v| {
-                                let v = v.to_lowercase();
-                                !state.passed_verifiers.contains(&v)
-                            })
-                            .collect();
+                    let remaining_unverified: Vec<String> = required_verifiers
+                        .into_iter()
+                        .filter(|v| {
+                            let v_lower = v.to_lowercase();
+                            !state.passed_verifiers.contains(&v_lower)
+                                && !super::scope::is_verifier_satisfied(v, &cmd_lower)
+                                && !state
+                                    .executed_commands
+                                    .iter()
+                                    .any(|ec| super::scope::is_verifier_satisfied(v, ec))
+                        })
+                        .collect();
 
                     if !remaining_unverified.is_empty() {
                         state.has_passed_verification = false;
