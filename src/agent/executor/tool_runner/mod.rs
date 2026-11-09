@@ -115,23 +115,7 @@ pub async fn execute_turn_tool_calls(
 
         let is_edit_op = tool_name == "workspace_write_file" || tool_name == "workspace_edit_file";
 
-        let is_inspection = tool_name == "workspace_read_file"
-            || tool_name == "workspace_grep"
-            || tool_name == "workspace_list_dir"
-            || (tool_name == "workspace_run_command" && {
-                let cmd = args_val
-                    .get("command")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_lowercase();
-                cmd.starts_with("cat ")
-                    || cmd.starts_with("ls")
-                    || cmd.starts_with("head ")
-                    || cmd.starts_with("tail ")
-                    || cmd.starts_with("grep ")
-                    || cmd.starts_with("find ")
-            });
+        let is_inspection = guards::is_inspection(&tool_name, &args_val);
 
         let target_arg_file = args_val
             .get("file_path")
@@ -166,88 +150,15 @@ pub async fn execute_turn_tool_calls(
             })
             .unwrap_or(false);
 
-        let is_work_on_new_target = (tool_name == "workspace_read_file"
-            || tool_name == "workspace_edit_file"
-            || tool_name == "workspace_write_file")
-            && is_accessing_unmodified_target;
-
-        // Multi-component awareness: Check if accessing a file in a different subproject/folder
-        let is_accessing_different_component = target_arg_file
-            .as_ref()
-            .map(|p| {
-                let clean = p.trim_start_matches("./");
-                let components: Vec<&str> = clean.split('/').collect();
-                if components.len() >= 2 {
-                    let subdir = components[0];
-                    !state.verified_subdirs.contains(subdir) && !state.verified_subdirs.is_empty()
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
-
-        let is_post_verification_terminal_command = state.has_passed_verification
-            && !state.last_command_had_error
-            && state.pending_error_files.is_empty()
-            && tool_name == "workspace_run_command"
-            && {
-                let cmd = args_val
-                    .get("command")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_lowercase();
-                cmd.starts_with("git ")
-                    || cmd.contains("git commit")
-                    || cmd.contains("git add")
-                    || state
-                        .executed_commands
-                        .iter()
-                        .any(|ec| ec.contains(&cmd) || cmd.contains(ec))
-            };
-
-        let is_repeated_command = tool_name == "workspace_run_command" && {
-            let cmd = args_val
-                .get("command")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .trim();
-            !cmd.is_empty()
-                && state.last_executed_command.as_deref() == Some(cmd)
-                && state.consecutive_command_count >= 1
-        };
-
         let tool_start_instant = std::time::Instant::now();
         let cmd_param = args_val.get("command").and_then(|c| c.as_str());
 
         // HARD GATES & CIRCUIT BREAKERS
         let mut is_breaker_trip = false;
-        let tool_output = if state.circuit_breaker_triggered || state.force_final_text_only {
-            is_breaker_trip = true;
-            let msg = "Tool execution rejected: Tool calling is closed for this turn. Conclude your turn immediately and provide your summary to the user now.".to_string();
-            audit_tool_call(
-                session_id,
-                &state.goal_id,
-                ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: target_arg_file.as_deref(),
-                    command: cmd_param,
-                    status: "denied",
-                    reason: Some("circuit_breaker_triggered"),
-                    duration_ms: Some(0),
-                },
-            )
-            .await;
-            msg
-        } else if state.has_passed_verification
-            && !state.last_command_had_error
-            && state.pending_error_files.is_empty()
-            && !is_work_on_new_target
-            && !is_accessing_different_component
-            && (tool_name != "workspace_run_command" || is_post_verification_terminal_command)
+        let tool_output = if let Some(denial) =
+            guards::evaluate(&tool_name, &args_val, state, is_target_in_error_list)
         {
             is_breaker_trip = true;
-            let msg = "Verification has already succeeded with 0 errors. All active errors resolved. Tool calling is now closed. Conclude your turn immediately and provide your summary to the user now.".to_string();
             audit_tool_call(
                 session_id,
                 &state.goal_id,
@@ -256,78 +167,14 @@ pub async fn execute_turn_tool_calls(
                     target_path: target_arg_file.as_deref(),
                     command: cmd_param,
                     status: "denied",
-                    reason: Some("verification_already_passed"),
+                    reason: Some(denial.reason()),
                     duration_ms: Some(0),
                 },
             )
             .await;
-            msg
-        } else if is_repeated_command {
-            is_breaker_trip = true;
-            let cmd = args_val
-                .get("command")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .trim();
-            let msg = format!(
-                "Command repetition limit reached for `{cmd}`. This command was already executed without subsequent file modifications. Tool calling is now closed. Conclude your turn now and report the results directly to the user."
-            );
-            audit_tool_call(
-                session_id,
-                &state.goal_id,
-                ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: target_arg_file.as_deref(),
-                    command: Some(cmd),
-                    status: "denied",
-                    reason: Some("repeated_command_without_progress"),
-                    duration_ms: Some(0),
-                },
-            )
-            .await;
-            msg
-        } else if is_inspection && !is_target_in_error_list && state.global_inspection_streak >= 20
-        {
-            is_breaker_trip = true;
-            let msg = format!(
-                "Inspection budget reached ({} consecutive reads without code modifications). Tool calling is closed to prevent unproductive wandering. Conclude your turn now and provide your findings, answers, or plan directly to the user.",
-                state.global_inspection_streak
-            );
-            audit_tool_call(
-                session_id,
-                &state.goal_id,
-                ToolAudit {
-                    tool_name: &tool_name,
-                    target_path: target_arg_file.as_deref(),
-                    command: cmd_param,
-                    status: "denied",
-                    reason: Some("inspection_budget_exhausted"),
-                    duration_ms: Some(0),
-                },
-            )
-            .await;
-            msg
-        } else if tool_name == "workspace_read_file" && {
-            let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
-            let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
-            let path = target_arg_file.clone().unwrap_or_default();
-            let is_exact_duplicate =
-                state
-                    .recent_read_slices
-                    .contains(&(path.clone(), start_line, end_line));
-            let same_file_count = target_arg_file
-                .as_ref()
-                .map(|p| {
-                    state
-                        .consecutive_read_same_file
-                        .get(p)
-                        .copied()
-                        .unwrap_or(0)
-                })
-                .unwrap_or(0);
-            is_exact_duplicate && same_file_count >= 5
-        } {
-            let path = target_arg_file.as_deref().unwrap_or("target");
+            denial.message()
+        } else if let Some(path) = guards::is_repeated_read(&tool_name, &args_val, state) {
+            let path = if path.is_empty() { "target".to_string() } else { path };
             format!(
                 "Notice: You have already read this exact slice of `{path}` multiple times. Its content is available in your conversation history. Please proceed with modifying the file using `workspace_edit_file` or answering the user's question directly."
             )
