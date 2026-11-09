@@ -908,12 +908,7 @@ pub async fn execute_tool_call(
                 if !tools.is_empty() {
                     details.push_str("\n\nAvailable tools from this extension:\n");
                     for t in tools {
-                        let desc = t
-                            .definition
-                            .description
-                            .as_deref()
-                            .unwrap_or("")
-                            .trim();
+                        let desc = t.definition.description.as_deref().unwrap_or("").trim();
                         let desc = if desc.is_empty() {
                             "No description provided"
                         } else {
@@ -930,15 +925,14 @@ pub async fn execute_tool_call(
                                 t.original_name, desc, usage
                             ));
                         } else {
-                            details.push_str(&format!(
-                                "- `{}`: {}\n",
-                                t.original_name, desc
-                            ));
+                            details.push_str(&format!("- `{}`: {}\n", t.original_name, desc));
                         }
                     }
                     details.push_str("\nYou can now execute these commands or tools directly.");
                 } else {
-                    details.push_str(" However, no tools were found or discovered for this extension.");
+                    details.push_str(
+                        " However, no tools were found or discovered for this extension.",
+                    );
                 }
             } else {
                 details.push_str(" Its dedicated tools are now available for execution.");

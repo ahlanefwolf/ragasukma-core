@@ -5,15 +5,13 @@ pub mod app;
 // Agent-domain entities (was: src/agent/repository/*.rs)
 pub mod agent;
 
-pub use app::{chat_history, todo};
 pub use app::chat_history::*;
 pub use app::todo::*;
+pub use app::{chat_history, todo};
 
 // Agent submodules are exposed both as modules and flattened.
 pub use agent::{audit, goals, messages, projects_and_sessions};
-pub use agent::{
-    generate_id, now_millis, now_secs, pool, testsupport,
-};
+pub use agent::{generate_id, now_millis, now_secs, pool, testsupport};
 
 // NOTE: the legacy SQLite-backed skill CRUD module (formerly `repository::skill`) was
 // removed. Skills are now discovered dynamically from `.skill` / `.skills` folders on

@@ -160,7 +160,10 @@ fn is_retryable_error(err_str: &str) -> bool {
 
 /// Sleeps for `total`, waking every `RETRY_SLEEP_SLICE_MS` to check for cancellation.
 /// Returns `false` if the session was cancelled during the wait.
-fn cancellable_sleep(total: std::time::Duration, cancelled: &std::sync::atomic::AtomicBool) -> bool {
+fn cancellable_sleep(
+    total: std::time::Duration,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> bool {
     let deadline = std::time::Instant::now() + total;
     loop {
         if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
@@ -656,18 +659,15 @@ pub async fn execute_model_stream(
                     }
 
                     // Try to extract structured HTTP error info via downcast.
-                    let (is_retryable, retry_after_hdr) =
-                        if let Some(http_err) = e.downcast_ref::<crate::llm::types::LlmHttpError>()
-                        {
-                            (
-                                http_err.is_retryable(),
-                                http_err.retry_after_header.clone(),
-                            )
-                        } else {
-                            // Fallback: parse the error string (for non-HTTP errors like
-                            // connection resets, timeouts, etc.)
-                            (is_retryable_error(&err_str), None)
-                        };
+                    let (is_retryable, retry_after_hdr) = if let Some(http_err) =
+                        e.downcast_ref::<crate::llm::types::LlmHttpError>()
+                    {
+                        (http_err.is_retryable(), http_err.retry_after_header.clone())
+                    } else {
+                        // Fallback: parse the error string (for non-HTTP errors like
+                        // connection resets, timeouts, etc.)
+                        (is_retryable_error(&err_str), None)
+                    };
 
                     last_err = Some(e);
                     if attempt < MAX_STREAM_ATTEMPTS && is_retryable {
@@ -678,10 +678,8 @@ pub async fn execute_model_stream(
                         ) {
                             RetryDecision::Wait(d) => d,
                             RetryDecision::GiveUp { server_wait } => {
-                                let original = last_err
-                                    .take()
-                                    .map(|e| e.to_string())
-                                    .unwrap_or_default();
+                                let original =
+                                    last_err.take().map(|e| e.to_string()).unwrap_or_default();
                                 return Err(anyhow::anyhow!(
                                     "Provider rate limit: server asked to wait {}s before retrying \
                                      (longer than the {}s retry ceiling), so the request was not \
@@ -1064,7 +1062,11 @@ mod tests {
 
     #[test]
     fn retry_delay_honours_retry_after_header() {
-        let d = wait_of(retry_delay(1, "429 Too Many Requests, Retry-After: 4", None));
+        let d = wait_of(retry_delay(
+            1,
+            "429 Too Many Requests, Retry-After: 4",
+            None,
+        ));
         assert_eq!(d, std::time::Duration::from_millis(4_000));
     }
 
@@ -1144,7 +1146,10 @@ mod tests {
             None
         );
         // Header name with no value must not consume a later number.
-        assert_eq!(parse_retry_after_ms("retry-after missing; used 8000 tokens"), None);
+        assert_eq!(
+            parse_retry_after_ms("retry-after missing; used 8000 tokens"),
+            None
+        );
     }
 
     #[test]
@@ -1152,11 +1157,15 @@ mod tests {
         assert!(is_retryable_error("HTTP 429 Too Many Requests"));
         assert!(is_retryable_error("status: 503"));
         assert!(is_retryable_error("Anthropic 529 overloaded_error"));
-        assert!(is_retryable_error("Failed to send request: connection reset"));
+        assert!(is_retryable_error(
+            "Failed to send request: connection reset"
+        ));
         assert!(is_retryable_error("Error reading stream endpoint"));
         // Numbers that merely contain a status code must not trigger a retry.
         assert!(!is_retryable_error("prompt is 14290 tokens, max is 8192"));
-        assert!(!is_retryable_error("HTTP 400 Bad Request: invalid tool schema"));
+        assert!(!is_retryable_error(
+            "HTTP 400 Bad Request: invalid tool schema"
+        ));
         assert!(!is_retryable_error("401 Unauthorized"));
     }
 
@@ -1164,10 +1173,16 @@ mod tests {
     fn cancellable_sleep_stops_on_cancel() {
         let flag = std::sync::atomic::AtomicBool::new(true);
         let start = std::time::Instant::now();
-        assert!(!cancellable_sleep(std::time::Duration::from_secs(30), &flag));
+        assert!(!cancellable_sleep(
+            std::time::Duration::from_secs(30),
+            &flag
+        ));
         assert!(start.elapsed() < std::time::Duration::from_secs(1));
 
         let flag = std::sync::atomic::AtomicBool::new(false);
-        assert!(cancellable_sleep(std::time::Duration::from_millis(10), &flag));
+        assert!(cancellable_sleep(
+            std::time::Duration::from_millis(10),
+            &flag
+        ));
     }
 }

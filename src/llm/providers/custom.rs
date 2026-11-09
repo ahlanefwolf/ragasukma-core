@@ -38,9 +38,17 @@ pub struct CustomLlmAccount {
     pub api_key: String,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "contextWindow")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "contextWindow"
+    )]
     pub context_window: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "nativeReasoning")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "nativeReasoning"
+    )]
     pub native_reasoning: Option<bool>,
 }
 

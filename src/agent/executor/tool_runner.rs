@@ -8,9 +8,9 @@ use crate::agent::diagnostics::{
 };
 use crate::agent::events::broadcast_session_event;
 use crate::agent::models::{AgentSessionEvent, Message};
-use crate::repository::agent as repository;
 use crate::agent::tools::execute_tool_call;
 use crate::llm::v1_engine::V1ToolCall;
+use crate::repository::agent as repository;
 
 /// One audit record for a tool invocation.
 struct ToolAudit<'a> {

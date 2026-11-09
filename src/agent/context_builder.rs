@@ -167,11 +167,7 @@ pub async fn build_previous_goals_summary(
         if let Ok(verifs) = repository::list_goal_verifications(&g.id).await
             && let Some(last_v) = verifs.last()
         {
-            let status_str = if last_v.is_passed {
-                "PASSED"
-            } else {
-                "FAILED"
-            };
+            let status_str = if last_v.is_passed { "PASSED" } else { "FAILED" };
             out.push_str(&format!(
                 "  * Last Verification: `{}` ({})\n",
                 last_v.test_command, status_str

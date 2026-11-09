@@ -167,10 +167,7 @@ pub async fn get_goal(goal_id: &str) -> Result<Option<Goal>> {
     get_goal_with_pool(pool, goal_id).await
 }
 
-pub async fn get_goal_with_pool(
-    pool: &sqlx::SqlitePool,
-    goal_id: &str,
-) -> Result<Option<Goal>> {
+pub async fn get_goal_with_pool(pool: &sqlx::SqlitePool, goal_id: &str) -> Result<Option<Goal>> {
     let goal = sqlx::query_as::<_, Goal>(
         "SELECT id, project_id, session_id, parent_goal_id, title, demand, success_criteria, constraints, phase, status, target_files, discovery_count, conclusion, created_at, updated_at, version, context_status, context_error \
          FROM goals WHERE id = ?1",

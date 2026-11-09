@@ -209,19 +209,29 @@ pub fn build_claude_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
     let msg_count = claude_messages.len();
     if msg_count >= 2 {
         let prev_idx = msg_count - 2;
-        if let Some(prev_msg) = claude_messages.get_mut(prev_idx).and_then(|m| m.as_object_mut()) {
+        if let Some(prev_msg) = claude_messages
+            .get_mut(prev_idx)
+            .and_then(|m| m.as_object_mut())
+        {
             if let Some(content_arr) = prev_msg.get_mut("content").and_then(|c| c.as_array_mut()) {
                 if let Some(last_block) = content_arr.last_mut().and_then(|b| b.as_object_mut()) {
                     last_block.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
                 }
-            } else if let Some(content_str) = prev_msg.get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
-                prev_msg.insert("content".to_string(), json!([
-                    {
-                        "type": "text",
-                        "text": content_str,
-                        "cache_control": { "type": "ephemeral" }
-                    }
-                ]));
+            } else if let Some(content_str) = prev_msg
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+            {
+                prev_msg.insert(
+                    "content".to_string(),
+                    json!([
+                        {
+                            "type": "text",
+                            "text": content_str,
+                            "cache_control": { "type": "ephemeral" }
+                        }
+                    ]),
+                );
             }
         }
     }

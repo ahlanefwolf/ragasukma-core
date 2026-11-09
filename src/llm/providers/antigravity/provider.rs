@@ -496,9 +496,8 @@ impl AntigravityProvider {
                 }
                 Err(err) => {
                     let http_err = err.downcast_ref::<crate::llm::types::LlmHttpError>();
-                    let is_rate_limit = http_err
-                        .map(|h| h.status_code == 429)
-                        .unwrap_or_else(|| {
+                    let is_rate_limit =
+                        http_err.map(|h| h.status_code == 429).unwrap_or_else(|| {
                             let s = err.to_string().to_lowercase();
                             s.contains("resource_exhausted") || s.contains("quota")
                         });
@@ -751,9 +750,8 @@ impl AntigravityProvider {
                 }
                 Err(err) => {
                     let http_err = err.downcast_ref::<crate::llm::types::LlmHttpError>();
-                    let is_rate_limit = http_err
-                        .map(|h| h.status_code == 429)
-                        .unwrap_or_else(|| {
+                    let is_rate_limit =
+                        http_err.map(|h| h.status_code == 429).unwrap_or_else(|| {
                             let s = err.to_string().to_lowercase();
                             s.contains("resource_exhausted") || s.contains("quota")
                         });
@@ -875,6 +873,10 @@ mod tests {
 
         assert!(!remove_account_entries(&mut accounts, ""));
 
-        assert_eq!(accounts.len(), 1, "empty email key must not match an email-less account");
+        assert_eq!(
+            accounts.len(),
+            1,
+            "empty email key must not match an email-less account"
+        );
     }
 }

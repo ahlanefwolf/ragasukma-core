@@ -251,7 +251,12 @@ impl McpServer {
         } else {
             // 3. Fallback: attempt YAML/JSON directly on entire string
             let direct_parsed = parse_yaml_or_json_value(&self.config);
-            if direct_parsed.is_object() && !direct_parsed.as_object().map(|m| m.is_empty()).unwrap_or(true) {
+            if direct_parsed.is_object()
+                && !direct_parsed
+                    .as_object()
+                    .map(|m| m.is_empty())
+                    .unwrap_or(true)
+            {
                 Some(direct_parsed)
             } else {
                 None
@@ -273,7 +278,10 @@ impl McpServer {
         }
 
         // Check if config already has root fields
-        if val.get("command").is_some() || val.get("url").is_some() || val.get("transport").is_some() {
+        if val.get("command").is_some()
+            || val.get("url").is_some()
+            || val.get("transport").is_some()
+        {
             return val;
         }
 
@@ -292,9 +300,7 @@ impl McpServer {
                 // If inner has a single key or child with command/url, pick it
                 if let Some(obj_map) = inner.as_object() {
                     for (_k, v) in obj_map {
-                        if v.is_object()
-                            && (v.get("command").is_some() || v.get("url").is_some())
-                        {
+                        if v.is_object() && (v.get("command").is_some() || v.get("url").is_some()) {
                             return v.clone();
                         }
                     }

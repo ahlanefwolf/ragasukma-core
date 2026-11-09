@@ -77,9 +77,6 @@ impl LlmHttpError {
 
     /// Convenience: is this a status code we should retry?
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self.status_code,
-            429 | 500 | 502 | 503 | 529
-        )
+        matches!(self.status_code, 429 | 500 | 502 | 503 | 529)
     }
 }

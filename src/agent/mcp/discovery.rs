@@ -3,8 +3,8 @@ use tracing::{info, warn};
 
 use crate::agent::mcp::{McpClient, McpServerConfig, McpToolDefinition};
 use crate::agent::models::McpServer;
-use crate::repository::agent::upsert_mcp_server_tool;
 use crate::llm::client::LlmClient;
+use crate::repository::agent::upsert_mcp_server_tool;
 
 /// Tool information discovered either via LLM analysis or native JSON-RPC inspection
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,7 +50,10 @@ pub fn build_discovery_prompt(
             {
                 for (pname, pval) in props {
                     let ptype = pval.get("type").and_then(|t| t.as_str()).unwrap_or("any");
-                    let pdesc = pval.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    let pdesc = pval
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
                     if pdesc.is_empty() {
                         prompt.push_str(&format!("  * `{pname}` ({ptype})\n"));
                     } else {
@@ -77,19 +80,22 @@ pub fn build_discovery_prompt(
 /// Build a focused user prompt for the LLM runner to generate a rich specification for ONE single tool.
 /// This gives the raw `mcp_servers.config` to the LLM so it learns how the server runs.
 #[must_use]
-pub fn build_single_tool_prompt(
-    server: &McpServer,
-    tool: &McpToolDefinition,
-) -> String {
+pub fn build_single_tool_prompt(server: &McpServer, tool: &McpToolDefinition) -> String {
     let mut prompt = format!(
         "Server Name: {}\n\nServer Configuration (`mcp_servers.config`):\n```\n{}\n```\n\nTarget Tool: {}\n",
-        server.name, server.config.trim(), tool.name
+        server.name,
+        server.config.trim(),
+        tool.name
     );
 
     if let Some(ref desc) = tool.description {
         prompt.push_str(&format!("Description: {}\n", desc));
     }
-    if let Some(props) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+    if let Some(props) = tool
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+    {
         let prop_names: Vec<String> = props.keys().cloned().collect();
         prompt.push_str(&format!("Parameters: {}\n", prop_names.join(", ")));
     }
@@ -332,7 +338,11 @@ pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
     }
 
     md.push_str("## Parameters\n");
-    if let Some(props) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+    if let Some(props) = tool
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+    {
         let required_list: Vec<&str> = tool
             .input_schema
             .get("required")
@@ -366,7 +376,11 @@ pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
 
     md.push_str("\n## Command Template\n```bash\n");
     let mut cmd_parts = vec![tool.name.clone()];
-    if let Some(props) = tool.input_schema.get("properties").and_then(|p| p.as_object()) {
+    if let Some(props) = tool
+        .input_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+    {
         for (prop_name, _) in props {
             cmd_parts.push(format!("--{prop_name} \"{{{prop_name}}}\""));
         }
@@ -410,8 +424,9 @@ pub fn server_to_config(server: &McpServer) -> Option<McpServerConfig> {
 
 /// Try to perform native handshake and list tools from the MCP server
 pub async fn try_native_list_tools(server: &McpServer) -> Result<Vec<McpToolDefinition>, String> {
-    let config = server_to_config(server)
-        .ok_or_else(|| "Server does not have an active runtime transport configuration".to_string())?;
+    let config = server_to_config(server).ok_or_else(|| {
+        "Server does not have an active runtime transport configuration".to_string()
+    })?;
 
     let client = McpClient::new(config);
     let _ = client.initialize().await;
@@ -426,11 +441,18 @@ pub async fn discover_tools(
     // 1. Attempt native handshake if server has runtime configuration
     let raw_tools = match try_native_list_tools(server).await {
         Ok(tools) => {
-            info!("Native handshake retrieved {} tools for server {}", tools.len(), server.name);
+            info!(
+                "Native handshake retrieved {} tools for server {}",
+                tools.len(),
+                server.name
+            );
             Some(tools)
         }
         Err(e) => {
-            warn!("Native handshake failed or skipped for server {}: {}", server.name, e);
+            warn!(
+                "Native handshake failed or skipped for server {}: {}",
+                server.name, e
+            );
             None
         }
     };
@@ -498,7 +520,9 @@ pub async fn discover_tools(
             if !parsed.is_empty() {
                 return Ok(parsed);
             }
-            warn!("LLM discovery returned output but parsed 0 tools; evaluating markdown fallbacks.");
+            warn!(
+                "LLM discovery returned output but parsed 0 tools; evaluating markdown fallbacks."
+            );
         }
     }
 
@@ -607,8 +631,14 @@ Delete a file on disk.
         assert_eq!(tool.name, "calculate_sum");
         assert!(tool.config.contains("# calculate_sum"));
         assert!(tool.config.contains("Add two numbers together"));
-        assert!(tool.config.contains("- `a` (number, required): First number"));
-        assert!(tool.config.contains("- `b` (number, required): Second number"));
+        assert!(
+            tool.config
+                .contains("- `a` (number, required): First number")
+        );
+        assert!(
+            tool.config
+                .contains("- `b` (number, required): Second number")
+        );
         assert!(!tool.config.contains("```json"));
     }
 
@@ -633,7 +663,11 @@ Use wisely.
 "#;
 
         let sanitized = sanitize_command_template_to_single_line(multiline_spec);
-        assert!(sanitized.contains("```bash\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\"}' | figcraft-cli mcp\n```"));
+        assert!(
+            sanitized.contains(
+                "```bash\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\"}' | figcraft-cli mcp\n```"
+            )
+        );
         assert!(sanitized.contains("## Usage Guidelines"));
     }
 

@@ -222,7 +222,9 @@ fn build_static_prompt(
     }
 
     if !mcp_tools.is_empty() {
-        prompt.push_str("### 🛠️ Active External CLI Commands (Execute via `workspace_run_command`):\n");
+        prompt.push_str(
+            "### 🛠️ Active External CLI Commands (Execute via `workspace_run_command`):\n",
+        );
         prompt.push_str("The following commands are available from active extensions/servers. When needed, execute them directly via `workspace_run_command` (substitute placeholders with real values):\n");
         for tool in mcp_tools {
             let desc = tool
@@ -546,8 +548,24 @@ mod tests {
             super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         assert_eq!(first, second, "static rendering must be deterministic");
         assert_eq!(
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false)),
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false)),
+            super::static_prompt_cache_key(
+                &project,
+                &folders,
+                &[],
+                &[],
+                &[],
+                &[],
+                caps(true, false)
+            ),
+            super::static_prompt_cache_key(
+                &project,
+                &folders,
+                &[],
+                &[],
+                &[],
+                &[],
+                caps(true, false)
+            ),
             "identical inputs must produce the same cache key"
         );
     }
@@ -556,8 +574,15 @@ mod tests {
     fn cache_key_changes_when_any_rendered_input_changes() {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
-        let base =
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(true, false));
+        let base = super::static_prompt_cache_key(
+            &project,
+            &folders,
+            &[],
+            &[],
+            &[],
+            &[],
+            caps(true, false),
+        );
 
         // Different project instructions must not reuse the cached block.
         let mut other_project = sample_project();
@@ -595,7 +620,15 @@ mod tests {
         // A different provider family renders different directives.
         assert_ne!(
             base,
-            super::static_prompt_cache_key(&project, &folders, &[], &[], &[], &[], caps(false, true)),
+            super::static_prompt_cache_key(
+                &project,
+                &folders,
+                &[],
+                &[],
+                &[],
+                &[],
+                caps(false, true)
+            ),
             "capabilities must invalidate the cache"
         );
     }

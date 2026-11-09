@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -379,7 +379,11 @@ mod tests {
             vec![healthy_canonical],
             "only the file that really was restored may be reported as restored"
         );
-        assert_eq!(report.failed.len(), 1, "the failed restore must be reported");
+        assert_eq!(
+            report.failed.len(),
+            1,
+            "the failed restore must be reported"
+        );
         assert_eq!(report.failed[0].0, broken_canonical);
         assert!(!report.is_complete());
         assert_eq!(
@@ -408,8 +412,14 @@ mod tests {
         // Keep the Arc alive so the Mutex stays poisoned rather than dropped.
         drop(weak);
 
-        assert!(snap.tracked_files().is_err(), "poisoned lock must surface as an error");
-        assert!(snap.clear().is_err(), "poisoned lock must surface as an error");
+        assert!(
+            snap.tracked_files().is_err(),
+            "poisoned lock must surface as an error"
+        );
+        assert!(
+            snap.clear().is_err(),
+            "poisoned lock must surface as an error"
+        );
     }
 
     /// BUG-08: a file above the in-memory limit must not be read into RAM, and the rollback

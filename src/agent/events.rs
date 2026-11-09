@@ -230,14 +230,18 @@ mod tests {
         cleanup_session(removed); // second call must not panic
 
         // The untouched session survived; only the cleaned one is gone.
-        assert!(get_broadcasters_map()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(kept));
-        assert!(!get_broadcasters_map()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(removed));
+        assert!(
+            get_broadcasters_map()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(kept)
+        );
+        assert!(
+            !get_broadcasters_map()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(removed)
+        );
 
         // Leave no residue for other tests sharing the process-global maps.
         cleanup_session(kept);

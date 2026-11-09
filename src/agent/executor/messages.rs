@@ -133,13 +133,15 @@ pub fn prepare_turn_messages(
                 if matches!(
                     call.function.name.as_str(),
                     "workspace_write_file" | "workspace_edit_file"
-                ) && let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                ) && let Ok(args) =
+                    serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                     && let Some(path) = args.get("file_path").and_then(|v| v.as_str())
                 {
                     let clean = path.replace('\\', "/");
                     files_modified_in_window.insert(clean);
                 } else if call.function.name == "workspace_read_file"
-                    && let Ok(args) = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    && let Ok(args) =
+                        serde_json::from_str::<serde_json::Value>(&call.function.arguments)
                     && let Some(path) = args.get("file_path").and_then(|v| v.as_str())
                 {
                     let clean = path.replace('\\', "/");

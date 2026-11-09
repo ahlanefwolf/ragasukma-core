@@ -732,7 +732,11 @@ mod tests {
 
         assert!(!remove_account_entries(&mut accounts, "a@example.com"));
 
-        assert_eq!(accounts.len(), 1, "email must not be a removal key for Claude");
+        assert_eq!(
+            accounts.len(),
+            1,
+            "email must not be a removal key for Claude"
+        );
         assert_eq!(accounts[0].id, "a");
     }
 
@@ -756,7 +760,11 @@ mod tests {
 
     #[test]
     fn remove_account_entries_removes_every_duplicate_id() {
-        let mut accounts = vec![account("dup", None), account("dup", None), account("keep", None)];
+        let mut accounts = vec![
+            account("dup", None),
+            account("dup", None),
+            account("keep", None),
+        ];
 
         assert!(remove_account_entries(&mut accounts, "dup"));
 

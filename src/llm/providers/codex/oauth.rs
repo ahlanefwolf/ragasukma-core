@@ -37,9 +37,7 @@ pub fn store_oauth_state(state: &str, code_verifier: &str) {
     // Recover from a poisoned lock instead of silently dropping the state.
     // Dropping it would surface later as a confusing "invalid state" error at
     // callback time even though the real cause was an unrelated panic.
-    let mut store = OAUTH_STATE_STORE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut store = OAUTH_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
     store.retain(|_, (_, exp)| *exp > now);
     let expires_at = now + std::time::Duration::from_secs(600);
@@ -48,9 +46,7 @@ pub fn store_oauth_state(state: &str, code_verifier: &str) {
 
 pub fn take_oauth_state(state: &str) -> Option<String> {
     // `None` must mean "unknown/expired state", never "the lock was poisoned".
-    let mut store = OAUTH_STATE_STORE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut store = OAUTH_STATE_STORE.lock().unwrap_or_else(|e| e.into_inner());
     store.remove(state).map(|(v, _)| v)
 }
 

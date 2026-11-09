@@ -279,7 +279,8 @@ async fn execute_session_turn_inner(
         // was invisible. It is not fatal — the turn can proceed without a repo — but it has
         // to be visible, otherwise the project silently stays untracked and every later
         // git-based recovery step quietly does nothing.
-        if let Err(e) = crate::agent::tools::ensure_git_and_gitignore(std::path::Path::new(folder)) {
+        if let Err(e) = crate::agent::tools::ensure_git_and_gitignore(std::path::Path::new(folder))
+        {
             tracing::warn!(
                 "[Agent Turn] Could not prepare git workspace at '{}': {}",
                 folder,
@@ -412,9 +413,8 @@ async fn execute_session_turn_inner(
                     .unwrap_or(0)
             })
             .sum::<usize>();
-        let tool_tokens = estimate_tokens(
-            &serde_json::to_string(&dynamic_tools_schema).unwrap_or_default(),
-        );
+        let tool_tokens =
+            estimate_tokens(&serde_json::to_string(&dynamic_tools_schema).unwrap_or_default());
         let total_est_tokens = sys_tokens + msg_tokens + tool_tokens;
 
         tracing::info!(
@@ -710,7 +710,9 @@ async fn execute_session_turn_inner(
 
 #[cfg(test)]
 mod turn_boundary_tests {
-    use super::{claim_turn_generation, is_latest_turn, release_session_snapshots, TurnStatusGuard};
+    use super::{
+        TurnStatusGuard, claim_turn_generation, is_latest_turn, release_session_snapshots,
+    };
     use crate::repository::agent as repository;
 
     /// BUG-09 rewrite. The old test asserted that a finished *turn* emptied the backup
@@ -902,6 +904,9 @@ mod turn_boundary_tests {
         );
 
         // A session that never claimed anything is never the latest.
-        assert!(!is_latest_turn(&format!("n2-unknown-{}", std::process::id()), 1));
+        assert!(!is_latest_turn(
+            &format!("n2-unknown-{}", std::process::id()),
+            1
+        ));
     }
 }

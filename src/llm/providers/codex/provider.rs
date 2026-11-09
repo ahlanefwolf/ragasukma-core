@@ -566,19 +566,16 @@ impl CodexProvider {
                 }
                 Err(e) => {
                     let http_err = e.downcast_ref::<crate::llm::types::LlmHttpError>();
-                    let is_rate_limit = http_err
-                        .map(|h| h.status_code == 429)
-                        .unwrap_or_else(|| {
+                    let is_rate_limit =
+                        http_err.map(|h| h.status_code == 429).unwrap_or_else(|| {
                             let s = e.to_string().to_lowercase();
                             s.contains("rate limit") || s.contains("capacity")
                         });
 
-                    let is_auth_error = http_err
-                        .map(|h| h.status_code == 401)
-                        .unwrap_or_else(|| {
+                    let is_auth_error =
+                        http_err.map(|h| h.status_code == 401).unwrap_or_else(|| {
                             let s = e.to_string();
-                            s.contains("token_revoked")
-                                || s.contains("invalidated oauth token")
+                            s.contains("token_revoked") || s.contains("invalidated oauth token")
                         });
 
                     if is_rate_limit {
@@ -981,6 +978,10 @@ mod tests {
 
         assert!(!remove_account_entries(&mut accounts, ""));
 
-        assert_eq!(accounts.len(), 1, "empty email key must not match an email-less account");
+        assert_eq!(
+            accounts.len(),
+            1,
+            "empty email key must not match an email-less account"
+        );
     }
 }

@@ -112,7 +112,11 @@ fn resolve_executable(
     command_str: &str,
     args: &[String],
 ) -> (String, Vec<String>, Option<std::path::PathBuf>) {
-    let trimmed = command_str.trim().trim_matches('`').trim_matches('"').trim_matches('\'');
+    let trimmed = command_str
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'');
     let words = split_shell_words(trimmed);
     if words.is_empty() {
         return (command_str.to_string(), args.to_vec(), None);
@@ -528,18 +532,18 @@ pub async fn resolve_active_mcp_tools(
             && !db_tools.is_empty()
         {
             for tool in db_tools {
-                    let namespaced = format!("mcp__{}", tool.name);
-                    // Synthesize definition from markdown spec
-                    let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
-                    resolved.push(ActiveMcpTool {
-                        server_id: config.id.clone(),
-                        server_name: config.name.clone(),
-                        original_name: tool.name.clone(),
-                        namespaced_name: namespaced,
-                        definition: def,
-                        server_config: config.clone(),
-                        markdown_spec: Some(tool.config),
-                    });
+                let namespaced = format!("mcp__{}", tool.name);
+                // Synthesize definition from markdown spec
+                let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
+                resolved.push(ActiveMcpTool {
+                    server_id: config.id.clone(),
+                    server_name: config.name.clone(),
+                    original_name: tool.name.clone(),
+                    namespaced_name: namespaced,
+                    definition: def,
+                    server_config: config.clone(),
+                    markdown_spec: Some(tool.config),
+                });
             }
             loaded_from_db = true;
         }
@@ -617,10 +621,15 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
         if in_parameters {
             // Parses format: - `param_name` (type, required/optional): description
             // Also handles: - param_name: (type, required) description
-            if let Some(bullet) = trimmed.strip_prefix('-').or_else(|| trimmed.strip_prefix('*')) {
+            if let Some(bullet) = trimmed
+                .strip_prefix('-')
+                .or_else(|| trimmed.strip_prefix('*'))
+            {
                 let bullet_trimmed = bullet.trim();
-                let (first_part, desc_part) = bullet_trimmed.split_once(':').unwrap_or((bullet_trimmed, ""));
-                
+                let (first_part, desc_part) = bullet_trimmed
+                    .split_once(':')
+                    .unwrap_or((bullet_trimmed, ""));
+
                 // Extract param name
                 let param_name = if let Some(start) = first_part.find('`') {
                     if let Some(end) = first_part[start + 1..].find('`') {
@@ -632,34 +641,49 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
                     first_part.split_whitespace().next().unwrap_or("").trim()
                 };
 
-                let clean_param = param_name.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+                let clean_param =
+                    param_name.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
 
                 if !clean_param.is_empty() {
                     // Look for type & requirement across entire bullet line for robustness
                     let combined_meta = format!("{} {}", first_part, desc_part).to_lowercase();
-                    let is_req = combined_meta.contains("required") && !combined_meta.contains("optional");
-                    
-                    let ptype = if combined_meta.contains("number") || combined_meta.contains("integer") || combined_meta.contains("int") || combined_meta.contains("float") {
+                    let is_req =
+                        combined_meta.contains("required") && !combined_meta.contains("optional");
+
+                    let ptype = if combined_meta.contains("number")
+                        || combined_meta.contains("integer")
+                        || combined_meta.contains("int")
+                        || combined_meta.contains("float")
+                    {
                         "number"
                     } else if combined_meta.contains("bool") {
                         "boolean"
                     } else if combined_meta.contains("array") || combined_meta.contains("list") {
                         "array"
-                    } else if combined_meta.contains("object") || combined_meta.contains("map") || combined_meta.contains("json") {
+                    } else if combined_meta.contains("object")
+                        || combined_meta.contains("map")
+                        || combined_meta.contains("json")
+                    {
                         "object"
                     } else {
                         "string"
                     };
 
                     let mut prop_obj = serde_json::Map::new();
-                    prop_obj.insert("type".to_string(), serde_json::Value::String(ptype.to_string()));
-                    
+                    prop_obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String(ptype.to_string()),
+                    );
+
                     // Clean description
-                    let clean_desc = desc_part
-                        .trim()
-                        .trim_start_matches(|c: char| c == '(' || c == ')' || c == ',' || c.is_whitespace());
+                    let clean_desc = desc_part.trim().trim_start_matches(|c: char| {
+                        c == '(' || c == ')' || c == ',' || c.is_whitespace()
+                    });
                     if !clean_desc.is_empty() {
-                        prop_obj.insert("description".to_string(), serde_json::Value::String(clean_desc.to_string()));
+                        prop_obj.insert(
+                            "description".to_string(),
+                            serde_json::Value::String(clean_desc.to_string()),
+                        );
                     }
 
                     properties.insert(clean_param.to_string(), serde_json::Value::Object(prop_obj));
@@ -680,8 +704,14 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
     };
 
     let mut schema_map = serde_json::Map::new();
-    schema_map.insert("type".to_string(), serde_json::Value::String("object".to_string()));
-    schema_map.insert("properties".to_string(), serde_json::Value::Object(properties));
+    schema_map.insert(
+        "type".to_string(),
+        serde_json::Value::String("object".to_string()),
+    );
+    schema_map.insert(
+        "properties".to_string(),
+        serde_json::Value::Object(properties),
+    );
     schema_map.insert("required".to_string(), serde_json::Value::Array(required));
 
     McpToolDefinition {
@@ -825,7 +855,7 @@ pub fn escape_shell_arg_value(val: &str) -> String {
             '`' => escaped.push_str("\\`"),
             '!' => escaped.push_str("\\!"),
             '\n' => escaped.push(' '),
-            '\r' => {},
+            '\r' => {}
             other => escaped.push(other),
         }
     }
@@ -925,7 +955,10 @@ pub const MCP_CLI_TIMEOUT_SECONDS: u64 = 45;
 
 /// Renders `{param}` placeholders from the LLM arguments and executes the command
 /// template via the system shell with timeout protection and output capping.
-pub async fn run_command_template(template: &str, arguments: &serde_json::Value) -> Result<String, String> {
+pub async fn run_command_template(
+    template: &str,
+    arguments: &serde_json::Value,
+) -> Result<String, String> {
     let rendered = render_template_placeholders(template, arguments);
 
     // OS safety-net: LLM-generated templates are often written in bash idiom even
@@ -939,42 +972,67 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
     let mut shell_command = {
         let mut c = Command::new("powershell");
         c.args(["-NoProfile", "-Command", "-"]);
-        c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         c
     };
     #[cfg(not(windows))]
     let mut shell_command = {
         let mut c = Command::new("sh");
         c.arg("-c").arg(&rendered);
-        c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         c
     };
 
     #[cfg(windows)]
-    let mut child = shell_command.spawn().map_err(|e| format!("Failed to start shell: {}", e))?;
+    let mut child = shell_command
+        .spawn()
+        .map_err(|e| format!("Failed to start shell: {}", e))?;
     #[cfg(not(windows))]
-    let child = shell_command.spawn().map_err(|e| format!("Failed to start shell: {}", e))?;
+    let child = shell_command
+        .spawn()
+        .map_err(|e| format!("Failed to start shell: {}", e))?;
 
     #[cfg(windows)]
     {
         use tokio::io::AsyncWriteExt;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(rendered.as_bytes()).await.map_err(|e| format!("Failed to feed command: {}", e))?;
+            stdin
+                .write_all(rendered.as_bytes())
+                .await
+                .map_err(|e| format!("Failed to feed command: {}", e))?;
         }
     }
 
     let wait_future = child.wait_with_output();
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(MCP_CLI_TIMEOUT_SECONDS), wait_future).await {
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(MCP_CLI_TIMEOUT_SECONDS),
+        wait_future,
+    )
+    .await
+    {
         Ok(res) => res.map_err(|e| format!("Failed to run command: {}", e))?,
-        Err(_) => return Err(format!("Command timed out after {} seconds: {}", MCP_CLI_TIMEOUT_SECONDS, rendered)),
+        Err(_) => {
+            return Err(format!(
+                "Command timed out after {} seconds: {}",
+                MCP_CLI_TIMEOUT_SECONDS, rendered
+            ));
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let mut combined = String::new();
-    if !stdout.is_empty() { combined.push_str(&stdout); }
+    if !stdout.is_empty() {
+        combined.push_str(&stdout);
+    }
     if !stderr.is_empty() {
-        if !combined.is_empty() { combined.push('\n'); }
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
         combined.push_str(&stderr);
     }
 
@@ -985,7 +1043,8 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
         let head_bytes = MCP_CLI_MAX_OUTPUT_BYTES / 2;
         let tail_bytes = MCP_CLI_MAX_OUTPUT_BYTES / 4;
         let head = &result_str[..result_str.floor_char_boundary(head_bytes)];
-        let tail_start = result_str.floor_char_boundary(result_str.len().saturating_sub(tail_bytes));
+        let tail_start =
+            result_str.floor_char_boundary(result_str.len().saturating_sub(tail_bytes));
         let tail = &result_str[tail_start..];
         result_str = format!(
             "{}\n\n[... Truncated {} bytes of MCP output to protect context window ...]\n\n{}",
@@ -1000,8 +1059,7 @@ pub async fn run_command_template(template: &str, arguments: &serde_json::Value)
     } else {
         Err(format!(
             "Command exited with {}: {}",
-            output.status,
-            result_str
+            output.status, result_str
         ))
     }
 }
@@ -1066,7 +1124,10 @@ curl -s "https://api.example.com/search?q={path}"
 ```
 "#;
         let template = extract_command_template(md).expect("template should be extracted");
-        assert_eq!(template, r#"curl -s "https://api.example.com/search?q={path}""#);
+        assert_eq!(
+            template,
+            r#"curl -s "https://api.example.com/search?q={path}""#
+        );
     }
 
     #[test]
@@ -1111,19 +1172,18 @@ curl -s "https://api.example.com/search?q={path}"
     #[test]
     fn test_render_template_placeholders_no_arguments_is_identity() {
         let template = "echo hello";
-        assert_eq!(render_template_placeholders(template, &serde_json::Value::Null), template);
+        assert_eq!(
+            render_template_placeholders(template, &serde_json::Value::Null),
+            template
+        );
     }
 
     #[test]
     fn test_normalize_command_for_windows() {
         // bash idioms that commonly break PowerShell 5.1
-        let normalized = normalize_command_for_windows(
-            r#"curl -s 'https://x' && python3 script.py"#,
-        );
-        assert_eq!(
-            normalized,
-            r#"curl.exe -s "https://x" ; python script.py"#
-        );
+        let normalized =
+            normalize_command_for_windows(r#"curl -s 'https://x' && python3 script.py"#);
+        assert_eq!(normalized, r#"curl.exe -s "https://x" ; python script.py"#);
     }
 
     #[test]
