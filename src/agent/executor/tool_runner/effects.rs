@@ -51,24 +51,45 @@ pub(super) fn extract_modified_paths_from_command(cmd: &str) -> Vec<String> {
     paths
 }
 
+/// Everything the post-execution effects need, gathered in one place.
+///
+/// These fields used to arrive as positional arguments, half of them bare
+/// `bool`s, so a swapped call could not be spotted at the call site.
+pub(super) struct PostExecContext<'a> {
+    pub state: &'a mut TurnState,
+    pub tool_name: &'a str,
+    pub tool_output: &'a str,
+    pub args_val: &'a Value,
+    pub target_arg_file: Option<&'a str>,
+    pub is_edit_op: bool,
+    pub is_inspection: bool,
+    pub is_accessing_unmodified_target: bool,
+    pub is_breaker_trip: bool,
+    pub session_id: &'a str,
+    pub project_id: &'a str,
+    pub allowed_folders: &'a [String],
+}
+
 /// Post-execution bookkeeping for the mutating/failing branch of a tool call.
 ///
 /// Keeps the turn state honest after an edit or a command ran: verification
 /// flags, error queues, phase transitions and the ephemeral directive that
 /// nudges the model toward the next step.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn apply_post_execution(
-    state: &mut TurnState,
-    tool_name: &str,
-    tool_output: &str,
-    args_val: &Value,
-    target_arg_file: Option<&str>,
-    is_edit_op: bool,
-    session_id: &str,
-    project_id: &str,
-    allowed_folders: &[String],
-    is_breaker_trip: bool,
-) {
+pub(super) async fn apply_post_execution(ctx: PostExecContext<'_>) {
+    let PostExecContext {
+        state,
+        tool_name,
+        tool_output,
+        args_val,
+        target_arg_file,
+        is_edit_op,
+        is_breaker_trip,
+        session_id,
+        project_id,
+        allowed_folders,
+        ..
+    } = ctx;
+
     if is_edit_op {
         let is_edit_failed = tool_output.starts_with("Tool execution error")
             || tool_output.starts_with("Phase Gate")
@@ -352,19 +373,21 @@ pub(super) async fn apply_post_execution(
 ///
 /// Runs once the tool has executed: it turns what happened into guidance for
 /// the next step, then records the file versions the goal can cite as proof.
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn apply_post_inspection(
-    state: &mut TurnState,
-    tool_name: &str,
-    tool_output: &str,
-    args_val: &Value,
-    target_arg_file: Option<&str>,
-    is_edit_op: bool,
-    is_inspection: bool,
-    is_accessing_unmodified_target: bool,
-    project_id: &str,
-    allowed_folders: &[String],
-) {
+pub(super) async fn apply_post_inspection(ctx: PostExecContext<'_>) {
+    let PostExecContext {
+        state,
+        tool_name,
+        tool_output,
+        args_val,
+        target_arg_file,
+        is_edit_op,
+        is_inspection,
+        is_accessing_unmodified_target,
+        project_id,
+        allowed_folders,
+        ..
+    } = ctx;
+
     // If edit failed due to text mismatch or duplicate match, guide model directly back to target
     if tool_name == "workspace_edit_file" {
         if tool_output.contains("'old_text' not found") {

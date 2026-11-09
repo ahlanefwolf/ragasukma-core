@@ -331,32 +331,36 @@ pub async fn execute_turn_tool_calls(
         }
 
         // Auto-invalidation and tracking on file modification
-        effects::apply_post_execution(
+        effects::apply_post_execution(effects::PostExecContext {
             state,
-            &tool_name,
-            &tool_output,
-            &args_val,
-            target_arg_file.as_deref(),
-            is_edit_op,
-            session_id,
-            project_id,
-            allowed_folders,
-            is_breaker_trip,
-        )
-        .await;
-
-        effects::apply_post_inspection(
-            state,
-            &tool_name,
-            &tool_output,
-            &args_val,
-            target_arg_file.as_deref(),
+            tool_name: &tool_name,
+            tool_output: &tool_output,
+            args_val: &args_val,
+            target_arg_file: target_arg_file.as_deref(),
             is_edit_op,
             is_inspection,
             is_accessing_unmodified_target,
+            is_breaker_trip,
+            session_id,
             project_id,
             allowed_folders,
-        )
+        })
+        .await;
+
+        effects::apply_post_inspection(effects::PostExecContext {
+            state,
+            tool_name: &tool_name,
+            tool_output: &tool_output,
+            args_val: &args_val,
+            target_arg_file: target_arg_file.as_deref(),
+            is_edit_op,
+            is_inspection,
+            is_accessing_unmodified_target,
+            is_breaker_trip,
+            session_id,
+            project_id,
+            allowed_folders,
+        })
         .await;
 
         // Sanitize large command/terminal output before DB persistence (avoid truncating source code reads)
