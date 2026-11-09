@@ -395,7 +395,7 @@ pub(super) async fn apply_post_inspection(
     }
 
     let is_file_inspection = tool_name == "workspace_read_file" || tool_name == "workspace_grep";
-    if is_file_inspection && let Some(path) = target_arg_file.as_deref() {
+    if is_file_inspection && let Some(path) = target_arg_file {
         let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
         let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
         let is_exact_dup =
@@ -418,7 +418,7 @@ pub(super) async fn apply_post_inspection(
 
     // Auto-cache discovered file contents into Evidence Cache with true SHA-256 version
     if tool_name == "workspace_read_file" && !tool_output.starts_with("Tool execution error") {
-        if let Some(file_path) = target_arg_file.as_deref() {
+        if let Some(file_path) = target_arg_file {
             let start_line = args_val.get("start_line").and_then(|v| v.as_i64());
             let end_line = args_val.get("end_line").and_then(|v| v.as_i64());
             let preview_summary = format!(
@@ -457,7 +457,7 @@ pub(super) async fn apply_post_inspection(
         }
     } else if is_edit_op
         && !tool_output.starts_with("Tool execution error")
-        && let Some(file_path) = target_arg_file.as_deref()
+        && let Some(file_path) = target_arg_file
     {
         let preview_summary = format!("Modified/Created file {}", file_path);
         let file_ver = crate::agent::tools::fs::resolve_allowed_path(file_path, allowed_folders)
