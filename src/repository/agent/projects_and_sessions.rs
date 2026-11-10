@@ -333,6 +333,13 @@ pub async fn delete_session(id: &str) -> Result<()> {
     // disown a newer turn that is still running.
     crate::agent::executor::forget_session_generation(id);
 
+    // Reclaim the per-session process-global registries owned by `agent::events`: the event
+    // broadcaster, the running-task handle, and the cancellation flag. Those maps are populated
+    // lazily on first use, so without this a long-running host leaks one entry (plus a
+    // capacity-2048 broadcast channel) per deleted session forever. Deletion is the only point
+    // where no turn can still legitimately reference the session, so it is the safe release site.
+    crate::agent::events::cleanup_session(id);
+
     let pool = super::pool().await;
     delete_session_with_pool(pool, id).await
 }
@@ -391,6 +398,15 @@ pub async fn delete_expired_sessions_with_pool(
     pool: &sqlx::SqlitePool,
     cutoff_epoch_secs: i64,
 ) -> Result<u64> {
+    // Snapshot the ids before deleting so the matching in-memory registries can be reclaimed
+    // afterwards. The sweep otherwise leaks one `agent::events` entry (broadcaster + channel)
+    // per expired session, since this path bypasses `delete_session`'s cleanup.
+    let expired_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM sessions WHERE updated_at < ?1")
+            .bind(cutoff_epoch_secs)
+            .fetch_all(pool)
+            .await?;
+
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     // Remove goals (and their dependent rows) belonging to expired sessions first.
@@ -419,6 +435,13 @@ pub async fn delete_expired_sessions_with_pool(
         .await?;
 
     tx.commit().await?;
+
+    // Reclaim per-session in-memory registries now the rows are gone.
+    for id in &expired_ids {
+        crate::agent::executor::forget_session_generation(id);
+        crate::agent::events::cleanup_session(id);
+    }
+
     Ok(res.rows_affected())
 }
 
