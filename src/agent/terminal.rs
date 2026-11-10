@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Supported shell types across Linux, Windows, and macOS.
@@ -110,7 +110,7 @@ pub fn resolve_default_shell() -> ShellType {
                 return ShellType::Bash;
             }
         }
-        if Path::new("/bin/bash").exists() {
+        if PathBuf::from("/bin/bash").exists() {
             ShellType::Bash
         } else {
             ShellType::Sh
@@ -313,7 +313,7 @@ pub fn build_command(command_str: &str, requested_shell: Option<ShellType>) -> C
             }
             #[cfg(not(target_os = "windows"))]
             {
-                let bin = if Path::new("/bin/bash").exists() {
+                let bin = if PathBuf::from("/bin/bash").exists() {
                     "/bin/bash"
                 } else {
                     "bash"
