@@ -110,6 +110,9 @@ pub async fn run_retention_sweep() {
             Err(e) => tracing::error!("[Retention] Orphan project sweep failed: {e}"),
         }
     }
+
+    // Prune in-memory SSE broadcasters that have no active receivers or running tasks
+    crate::agent::events::prune_idle_broadcasters();
 }
 
 /// Runs the background retention loop indefinitely.

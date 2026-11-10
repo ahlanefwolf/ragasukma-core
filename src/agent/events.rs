@@ -76,6 +76,7 @@ pub fn register_session_task(session_id: &str, abort_handle: tokio::task::AbortH
 }
 
 /// Unregisters a completed task from the active running sessions registry.
+/// Also prunes the session broadcaster if no active receivers remain.
 pub fn unregister_session_task(session_id: &str) {
     let mut map = get_running_tasks_map()
         .lock()
@@ -86,6 +87,15 @@ pub fn unregister_session_task(session_id: &str) {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     cmap.remove(session_id);
+
+    let mut bmap = get_broadcasters_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(sender) = bmap.get(session_id) {
+        if sender.receiver_count() == 0 {
+            bmap.remove(session_id);
+        }
+    }
 }
 
 /// Aborts and removes an active running session task immediately.
@@ -153,10 +163,38 @@ pub fn cleanup_session(session_id: &str) {
         .remove(session_id);
 }
 
+/// Prunes all session broadcasters that have 0 active receivers and no active running task.
+pub fn prune_idle_broadcasters() {
+    let running = {
+        let rmap = get_running_tasks_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        rmap.keys().cloned().collect::<std::collections::HashSet<_>>()
+    };
+
+    let mut bmap = get_broadcasters_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    bmap.retain(|session_id, sender| {
+        running.contains(session_id) || sender.receiver_count() > 0
+    });
+}
+
 pub fn get_session_sender(session_id: &str) -> broadcast::Sender<AgentSessionEvent> {
     let mut map = get_broadcasters_map()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
+
+    // Opportunistically prune idle broadcasters if registry grows large (>64 entries)
+    if map.len() > 64 {
+        let running = get_running_tasks_map()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.retain(|s_id, sender| {
+            running.contains_key(s_id) || sender.receiver_count() > 0
+        });
+    }
+
     if let Some(sender) = map.get(session_id) {
         sender.clone()
     } else {

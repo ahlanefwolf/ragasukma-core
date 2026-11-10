@@ -314,8 +314,8 @@ fn collapse_command_lines(lines: &[&str]) -> String {
     for (i, line) in lines.iter().enumerate() {
         let mut clean = line.trim();
         // Remove trailing shell continuation backslash if present
-        if clean.ends_with('\\') {
-            clean = clean[..clean.len() - 1].trim();
+        if let Some(stripped) = clean.strip_suffix('\\') {
+            clean = stripped.trim();
         }
         if i > 0 && !joined.is_empty() && !clean.is_empty() {
             joined.push(' ');
