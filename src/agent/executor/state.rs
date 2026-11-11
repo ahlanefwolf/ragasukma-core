@@ -8,6 +8,9 @@ use crate::repository::agent as repository;
 static SESSION_ACTIVATED_EXTENSIONS: LazyLock<RwLock<HashMap<String, HashSet<String>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+static SESSION_ACTIVATED_SKILLS: LazyLock<RwLock<HashMap<String, HashSet<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
 /// Checks if an extension/MCP server has been activated for a session.
 pub fn is_extension_active(session_id: &str, server_name: &str) -> bool {
     let guard = SESSION_ACTIVATED_EXTENSIONS
@@ -28,6 +31,39 @@ pub fn activate_session_extension(session_id: &str, server_name: &str) -> bool {
         .entry(session_id.to_string())
         .or_default()
         .insert(server_name.to_lowercase())
+}
+
+/// Deactivates an extension/MCP server for a session.
+pub fn deactivate_session_extension(session_id: &str, server_name: &str) -> bool {
+    let mut guard = SESSION_ACTIVATED_EXTENSIONS
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_mut(session_id)
+        .map(|set| set.remove(&server_name.to_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Checks if a skill has been activated for a session (by slug or name).
+pub fn is_skill_active(session_id: &str, skill_identifier: &str) -> bool {
+    let guard = SESSION_ACTIVATED_SKILLS
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .get(session_id)
+        .map(|set| set.contains(&skill_identifier.to_lowercase()))
+        .unwrap_or(false)
+}
+
+/// Activates a skill for a session (tracks lowercase identifier).
+pub fn activate_session_skill(session_id: &str, skill_identifier: &str) -> bool {
+    let mut guard = SESSION_ACTIVATED_SKILLS
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(session_id.to_string())
+        .or_default()
+        .insert(skill_identifier.to_lowercase())
 }
 
 /// Retrieves all active extensions for a session.

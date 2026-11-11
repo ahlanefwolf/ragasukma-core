@@ -4,17 +4,43 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct McpServer {
     pub id: String,
+    #[serde(default)]
+    #[sqlx(default)]
     pub name: String,
+    #[serde(default = "default_mcp_type", rename = "type")]
+    #[sqlx(rename = "type")]
+    pub r#type: String, // 'stdio' | 'http'
     pub config: String, // Raw JSON or Markdown configuration
-    pub is_enabled: bool,
+    #[serde(default = "default_mcp_handshake")]
+    pub handshake: i64, // 1: handshake required, 0: direct
     pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+fn default_mcp_type() -> String {
+    "stdio".to_string()
+}
+
+fn default_mcp_handshake() -> i64 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, FromRow)]
+pub struct SessionMcpServer {
+    pub session_id: String,
+    pub server_id: String,
+    pub env: String, // JSON key-value
+    pub is_active: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, FromRow)]
 pub struct McpServerTool {
     pub server_id: String,
     pub name: String,
-    pub config: String, // Markdown tool specification/instructions
+    pub config: String, // Markdown or schema spec
 }
 
 fn extract_execution_block(content: &str) -> Option<&str> {
@@ -264,7 +290,11 @@ impl McpServer {
         };
 
         let val = parsed_val.unwrap_or_else(|| serde_json::json!({}));
-        Self::unwrap_nested_config(val, &self.name, &self.id)
+        Self::unwrap_nested_config(val, &self.id, &self.id)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.id
     }
 
     /// Unwrap nested MCP configurations (e.g. {"mcpServers": { ... }}, {"servers": { ... }}, or {"<server_name>": { ... }})
@@ -385,9 +415,11 @@ mod tests {
         let server = McpServer {
             id: "srv1".to_string(),
             name: "GitHub Server".to_string(),
+            r#type: "stdio".to_string(),
             config: r#"{"transport":"stdio","command":"npx","args":["-y","@mcp/github"],"env":{"TOKEN":"abc"}}"#.to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
 
         assert_eq!(server.transport(), "stdio");
@@ -419,9 +451,11 @@ Some notes here.
         let server = McpServer {
             id: "srv2".to_string(),
             name: "GitHub MD".to_string(),
+            r#type: "stdio".to_string(),
             config: md.to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
 
         assert_eq!(server.transport(), "stdio");
@@ -444,9 +478,11 @@ Description here
         let server = McpServer {
             id: "srv3".to_string(),
             name: "Remote MD".to_string(),
+            r#type: "stdio".to_string(),
             config: md.to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
 
         assert_eq!(server.transport(), "sse");
@@ -458,18 +494,22 @@ Description here
         let server1 = McpServer {
             id: "srv4".to_string(),
             name: "Wordcraft".to_string(),
+            r#type: "stdio".to_string(),
             config: "list tools in command: `wordcraft-cli mcp`".to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
         assert_eq!(server1.command(), Some("wordcraft-cli mcp".to_string()));
 
         let server2 = McpServer {
             id: "srv5".to_string(),
             name: "Wordcraft Plain".to_string(),
+            r#type: "stdio".to_string(),
             config: "list tools in command: wordcraft-cli mcp".to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
         assert_eq!(server2.command(), Some("wordcraft-cli mcp".to_string()));
     }

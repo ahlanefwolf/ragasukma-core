@@ -240,73 +240,83 @@ pub fn parse_tools_from_response(response: &str) -> Vec<DiscoveredTool> {
     tools
 }
 
-/// Sanitizes a Markdown tool specification so that the `## Command Template`
-/// section contains strictly a single-line execution command inside its code block.
+/// Sanitizes any raw response or Markdown tool specification into strictly a single-line execution command.
 #[must_use]
 pub fn sanitize_command_template_to_single_line(config: &str) -> String {
-    let mut result = Vec::new();
-    let mut in_command_template = false;
-    let mut in_code_block = false;
-    let mut code_block_fence = String::new();
-    let mut command_lines = Vec::new();
+    let trimmed = config.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
 
-    for line in config.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.starts_with("## ") {
-            if in_command_template && in_code_block {
-                // Closing unclosed code block before next header
-                let single_line = collapse_command_lines(&command_lines);
-                result.push(single_line);
-                result.push(code_block_fence.clone());
-                in_code_block = false;
-                command_lines.clear();
-            }
-            in_command_template = trimmed.to_lowercase().contains("command template");
-            result.push(line.to_string());
-            continue;
-        }
-
-        if in_command_template {
-            if trimmed.starts_with("```") {
-                if !in_code_block {
-                    in_code_block = true;
-                    code_block_fence = trimmed.to_string();
-                    result.push(line.to_string());
-                    command_lines.clear();
+    // 1. If it contains a `## Command Template` section, extract inside the code block
+    let lower = trimmed.to_ascii_lowercase();
+    let marker = "## command template";
+    if let Some(idx) = lower.find(marker) {
+        let rest = &trimmed[idx + marker.len()..];
+        if let Some(fence_start) = rest.find("```") {
+            let after_fence = &rest[fence_start + 3..];
+            let after_lang = if let Some(nl) = after_fence.find('\n') {
+                let first_line = after_fence[..nl].trim();
+                if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
+                    &after_fence[nl + 1..]
                 } else {
-                    // Exiting code block: collapse collected command lines into exactly one single line
-                    let single_line = collapse_command_lines(&command_lines);
-                    if !single_line.is_empty() {
-                        result.push(single_line);
-                    }
-                    result.push(line.to_string());
-                    in_code_block = false;
-                    command_lines.clear();
+                    after_fence
                 }
-                continue;
-            }
-
-            if in_code_block {
-                if !trimmed.is_empty() {
-                    command_lines.push(trimmed);
-                }
-                continue;
+            } else {
+                after_fence
+            };
+            if let Some(end) = after_lang.find("```") {
+                let inner = after_lang[..end].trim();
+                let lines: Vec<&str> = inner.lines().collect();
+                return collapse_command_lines(&lines);
             }
         }
-
-        result.push(line.to_string());
     }
 
-    if in_code_block {
-        let single_line = collapse_command_lines(&command_lines);
-        if !single_line.is_empty() {
-            result.push(single_line);
+    // 2. If it's wrapped in a code fence ```...```
+    if trimmed.contains("```") {
+        if let Some(start) = trimmed.find("```") {
+            let after_start = &trimmed[start + 3..];
+            let after_lang = if let Some(nl) = after_start.find('\n') {
+                let first_line = after_start[..nl].trim();
+                if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
+                    &after_start[nl + 1..]
+                } else {
+                    after_start
+                }
+            } else {
+                after_start
+            };
+            if let Some(end) = after_lang.find("```") {
+                let inner = after_lang[..end].trim();
+                let lines: Vec<&str> = inner.lines().collect();
+                return collapse_command_lines(&lines);
+            }
         }
-        result.push(code_block_fence);
     }
 
-    result.join("\n")
+    // 3. If it contains markdown headings (#), filter out headings and list items
+    if trimmed.contains('#') {
+        let mut cmd_lines = Vec::new();
+        for line in trimmed.lines() {
+            let l = line.trim();
+            if !l.is_empty()
+                && !l.starts_with('#')
+                && !l.starts_with('-')
+                && !l.starts_with('*')
+                && !l.to_lowercase().starts_with("external cli command")
+            {
+                cmd_lines.push(l);
+            }
+        }
+        if !cmd_lines.is_empty() {
+            return collapse_command_lines(&cmd_lines);
+        }
+    }
+
+    // 4. Default: collapse whitespace to a single line command
+    let lines: Vec<&str> = trimmed.lines().collect();
+    collapse_command_lines(&lines)
 }
 
 fn collapse_command_lines(lines: &[&str]) -> String {
@@ -325,56 +335,9 @@ fn collapse_command_lines(lines: &[&str]) -> String {
     joined
 }
 
-/// Fallback converter: converts native `McpToolDefinition` JSON into clean Markdown spec
+/// Fallback converter: converts native `McpToolDefinition` JSON into clean single-line command template
 #[must_use]
 pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
-    let mut md = format!("# {}\n\n", tool.name);
-
-    if let Some(ref desc) = tool.description {
-        md.push_str(desc);
-        md.push_str("\n\n");
-    } else {
-        md.push_str("No description provided by MCP server.\n\n");
-    }
-
-    md.push_str("## Parameters\n");
-    if let Some(props) = tool
-        .input_schema
-        .get("properties")
-        .and_then(|p| p.as_object())
-    {
-        let required_list: Vec<&str> = tool
-            .input_schema
-            .get("required")
-            .and_then(|r| r.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
-            .unwrap_or_default();
-
-        for (prop_name, prop_val) in props {
-            let prop_type = prop_val
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("any");
-            let is_req = required_list.contains(&prop_name.as_str());
-            let req_str = if is_req { "required" } else { "optional" };
-            let prop_desc = prop_val
-                .get("description")
-                .and_then(|d| d.as_str())
-                .unwrap_or("");
-
-            if prop_desc.is_empty() {
-                md.push_str(&format!("- `{prop_name}` ({prop_type}, {req_str})\n"));
-            } else {
-                md.push_str(&format!(
-                    "- `{prop_name}` ({prop_type}, {req_str}): {prop_desc}\n"
-                ));
-            }
-        }
-    } else {
-        md.push_str("No parameters required.\n");
-    }
-
-    md.push_str("\n## Command Template\n```bash\n");
     let mut cmd_parts = vec![tool.name.clone()];
     if let Some(props) = tool
         .input_schema
@@ -382,19 +345,13 @@ pub fn tool_definition_to_markdown(tool: &McpToolDefinition) -> DiscoveredTool {
         .and_then(|p| p.as_object())
     {
         for (prop_name, _) in props {
-            cmd_parts.push(format!("--{prop_name} \"{{{prop_name}}}\""));
+            cmd_parts.push(format!("--{prop_name} {{{prop_name}}}"));
         }
     }
-    md.push_str(&cmd_parts.join(" "));
-    md.push_str("\n```\n\n## Usage Guidelines\n");
-    md.push_str(&format!(
-        "External CLI command for `{}`. Execute directly via `workspace_run_command` with the parameters defined above.\n",
-        tool.name
-    ));
 
     DiscoveredTool {
         name: tool.name.clone(),
-        config: md,
+        config: cmd_parts.join(" "),
     }
 }
 
@@ -418,7 +375,7 @@ pub fn server_to_config(server: &McpServer) -> Option<McpServerConfig> {
         args,
         env,
         url: server.url(),
-        is_enabled: server.is_enabled,
+        is_enabled: true,
     })
 }
 
@@ -560,54 +517,38 @@ mod tests {
     #[test]
     fn test_parse_tools_xml_style() {
         let response = r#"
-Here are the tools found:
-
 <tool name="query_database">
-# query_database
-
-Execute a SQL query against the SQLite database.
-
-## Parameters
-- `sql` (string, required): The SQL query string.
-
-## Usage Guidelines
-Agnostic database tool.
+run_query --sql "{sql}"
 </tool>
-
 <tool name="list_tables">
-# list_tables
-
-List all available tables.
-
-## Usage Guidelines
-List tables in the database.
+list_tables
 </tool>
 "#;
 
         let tools = parse_tools_from_response(response);
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "query_database");
-        assert!(tools[0].config.contains("Execute a SQL query"));
+        assert_eq!(tools[0].config, "run_query --sql \"{sql}\"");
         assert_eq!(tools[1].name, "list_tables");
-        assert!(tools[1].config.contains("List all available tables"));
+        assert_eq!(tools[1].config, "list_tables");
     }
 
     #[test]
     fn test_parse_tools_markdown_heading_style() {
         let response = r#"
 ### TOOL: search_docs
-# search_docs
-Search internal documentation.
+search_docs --query "{query}"
 
 ### TOOL: delete_file
-# delete_file
-Delete a file on disk.
+delete_file --path "{path}"
 "#;
 
         let tools = parse_tools_from_response(response);
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "search_docs");
+        assert_eq!(tools[0].config, "search_docs --query \"{query}\"");
         assert_eq!(tools[1].name, "delete_file");
+        assert_eq!(tools[1].config, "delete_file --path \"{path}\"");
     }
 
     #[test]
@@ -627,17 +568,10 @@ Delete a file on disk.
 
         let tool = tool_definition_to_markdown(&raw);
         assert_eq!(tool.name, "calculate_sum");
-        assert!(tool.config.contains("# calculate_sum"));
-        assert!(tool.config.contains("Add two numbers together"));
-        assert!(
-            tool.config
-                .contains("- `a` (number, required): First number")
-        );
-        assert!(
-            tool.config
-                .contains("- `b` (number, required): Second number")
-        );
-        assert!(!tool.config.contains("```json"));
+        assert!(tool.config.starts_with("calculate_sum"));
+        assert!(tool.config.contains("--a {a}"));
+        assert!(tool.config.contains("--b {b}"));
+        assert!(!tool.config.contains('#'));
     }
 
     #[test]
@@ -661,12 +595,10 @@ Use wisely.
 "#;
 
         let sanitized = sanitize_command_template_to_single_line(multiline_spec);
-        assert!(
-            sanitized.contains(
-                "```bash\nprintf '%s\\n' '{\"jsonrpc\":\"2.0\"}' | figcraft-cli mcp\n```"
-            )
+        assert_eq!(
+            sanitized,
+            "printf '%s\\n' '{\"jsonrpc\":\"2.0\"}' | figcraft-cli mcp"
         );
-        assert!(sanitized.contains("## Usage Guidelines"));
     }
 
     #[test]
@@ -674,9 +606,11 @@ Use wisely.
         let server = McpServer {
             id: "figma_mcp".to_string(),
             name: "Figma Server".to_string(),
+            r#type: "stdio".to_string(),
             config: "Figma design integration CLI".to_string(),
-            is_enabled: true,
+            handshake: 1,
             created_at: 0,
+            updated_at: 0,
         };
 
         let raw_tool = McpToolDefinition {

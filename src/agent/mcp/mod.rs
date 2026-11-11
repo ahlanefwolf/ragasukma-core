@@ -127,103 +127,221 @@ fn resolve_executable(
     (binary, final_args, None)
 }
 
-/// Execute JSON-RPC 2.0 request over stdio transport
+use std::sync::LazyLock;
+use tokio::sync::Mutex as TokioMutex;
+
+/// Persistent Stdio process handle kept alive during session
+struct StdioSession {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    initialized: bool,
+}
+
+impl StdioSession {
+    async fn spawn(
+        command_str: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+    ) -> Result<Self, String> {
+        let (exec_cmd, exec_args, extra_path) = resolve_executable(command_str, args);
+
+        let mut cmd = Command::new(&exec_cmd);
+        cmd.args(&exec_args);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+
+        if let Some(bin_dir) = extra_path {
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            let bin_dir_str = bin_dir.to_string_lossy();
+            if !current_path.contains(&*bin_dir_str) {
+                #[cfg(target_os = "windows")]
+                let sep = ";";
+                #[cfg(not(target_os = "windows"))]
+                let sep = ":";
+                cmd.env("PATH", format!("{}{}{}", bin_dir_str, sep, current_path));
+            }
+        }
+
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::null());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn MCP process '{}': {}", command_str, e))?;
+
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to capture stdin of MCP process".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Failed to capture stdout of MCP process".to_string())?;
+
+        let lines = BufReader::new(stdout).lines();
+
+        Ok(Self {
+            child,
+            stdin,
+            lines,
+            initialized: false,
+        })
+    }
+
+    fn is_alive(&mut self) -> bool {
+        match self.child.try_wait() {
+            Ok(None) => true,
+            _ => false,
+        }
+    }
+
+    async fn send_raw(
+        &mut self,
+        json_val: &serde_json::Value,
+        timeout_duration: Duration,
+        expect_response_id: Option<i64>,
+    ) -> Result<serde_json::Value, String> {
+        let payload = serde_json::to_string(json_val).map_err(|e| e.to_string())?;
+        self.stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write to MCP stdin: {}", e))?;
+        self.stdin
+            .write_all(b"\n")
+            .await
+            .map_err(|e| format!("Failed to write newline to MCP stdin: {}", e))?;
+        self.stdin
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush MCP stdin: {}", e))?;
+
+        let Some(req_id) = expect_response_id else {
+            return Ok(serde_json::Value::Null);
+        };
+
+        let deadline = tokio::time::Instant::now() + timeout_duration;
+        loop {
+            let line_opt = tokio::time::timeout_at(deadline, self.lines.next_line())
+                .await
+                .map_err(|_| "Timed out waiting for MCP process response".to_string())?
+                .map_err(|e| format!("Error reading from MCP stdout: {}", e))?;
+
+            match line_opt {
+                Some(line) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        if val.get("id").and_then(|v| v.as_i64()) == Some(req_id)
+                            || val.get("result").is_some()
+                            || val.get("error").is_some()
+                        {
+                            return Ok(val);
+                        }
+                    }
+                }
+                None => return Err("MCP process closed stdout unexpectedly".to_string()),
+            }
+        }
+    }
+
+    async fn ensure_initialized(&mut self, timeout_duration: Duration) -> Result<(), String> {
+        if self.initialized {
+            return Ok(());
+        }
+
+        let init_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "clientInfo": {
+                    "name": "ragasukma",
+                    "version": "0.1.0"
+                }
+            }
+        });
+        self.send_raw(&init_req, timeout_duration, Some(1)).await?;
+
+        let notify = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        self.send_raw(&notify, timeout_duration, None).await?;
+        self.initialized = true;
+        Ok(())
+    }
+}
+
+static STDIO_POOL: LazyLock<TokioMutex<HashMap<String, StdioSession>>> =
+    LazyLock::new(|| TokioMutex::new(HashMap::new()));
+
+/// Gracefully shuts down all active persistent stdio MCP processes
+pub async fn shutdown_all_stdio_servers() {
+    let mut pool = STDIO_POOL.lock().await;
+    for (_, mut session) in pool.drain() {
+        let _ = session.child.kill().await;
+    }
+}
+
+/// Execute JSON-RPC 2.0 request over persistent stdio transport
 async fn call_stdio_rpc(
+    server_key: &str,
     command_str: &str,
     args: &[String],
     env: &HashMap<String, String>,
     request_json: &serde_json::Value,
     timeout_duration: Duration,
 ) -> Result<serde_json::Value, String> {
-    let payload = serde_json::to_string(request_json).map_err(|e| e.to_string())?;
+    let mut pool = STDIO_POOL.lock().await;
 
-    let (exec_cmd, exec_args, extra_path) = resolve_executable(command_str, args);
-
-    let mut cmd = Command::new(&exec_cmd);
-    cmd.args(&exec_args);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-
-    // Ensure PATH includes the resolved binary directory so sub-processes can run tools
-    if let Some(bin_dir) = extra_path {
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        let bin_dir_str = bin_dir.to_string_lossy();
-        if !current_path.contains(&*bin_dir_str) {
-            #[cfg(target_os = "windows")]
-            let sep = ";";
-            #[cfg(not(target_os = "windows"))]
-            let sep = ":";
-            cmd.env("PATH", format!("{}{}{}", bin_dir_str, sep, current_path));
-        }
-    }
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn process '{}': {}", command_str, e))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "Failed to capture stdin of MCP process".to_string())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture stdout of MCP process".to_string())?;
-
-    let line_writer = tokio::spawn(async move {
-        stdin
-            .write_all(payload.as_bytes())
-            .await
-            .map_err(|e| e.to_string())?;
-        stdin.write_all(b"\n").await.map_err(|e| e.to_string())?;
-        stdin.flush().await.map_err(|e| e.to_string())?;
-        Ok::<(), String>(())
-    });
-
-    let mut reader = BufReader::new(stdout).lines();
-
-    let rpc_result = tokio::select! {
-        res = line_writer => {
-            if let Err(e) = res {
-                let _ = child.kill().await;
-                return Err(format!("Failed writing to stdin: {:?}", e));
-            }
-            // Read response line
-            tokio::select! {
-                line = reader.next_line() => {
-                    match line {
-                        Ok(Some(line_str)) => {
-                            serde_json::from_str::<serde_json::Value>(&line_str)
-                                .map_err(|e| format!("Invalid JSON received from MCP process: {} (raw: {})", e, line_str))
-                        }
-                        Ok(None) => Err("MCP process closed stdout without response".to_string()),
-                        Err(e) => Err(format!("Error reading from MCP stdout: {}", e)),
-                    }
-                }
-                _ = tokio::time::sleep(timeout_duration) => {
-                    let _ = child.kill().await;
-                    Err("Timed out waiting for MCP process response".to_string())
-                }
-            }
-        }
-        _ = tokio::time::sleep(timeout_duration) => {
-            let _ = child.kill().await;
-            Err("Timed out spawning or writing to MCP process".to_string())
-        }
+    let need_spawn = match pool.get_mut(server_key) {
+        Some(proc) => !proc.is_alive(),
+        None => true,
     };
 
-    let _ = child.kill().await;
-    rpc_result
+    if need_spawn {
+        let proc = StdioSession::spawn(command_str, args, env).await?;
+        pool.insert(server_key.to_string(), proc);
+    }
+
+    let proc = pool.get_mut(server_key).expect("Process must be available");
+
+    let method = request_json
+        .get("method")
+        .and_then(|m| m.as_str())
+        .unwrap_or("");
+    if method == "initialize" {
+        proc.ensure_initialized(timeout_duration).await?;
+        return Ok(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_json.get("id").unwrap_or(&serde_json::json!(1)),
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} }
+            }
+        }));
+    }
+
+    proc.ensure_initialized(timeout_duration).await?;
+
+    let req_id = request_json.get("id").and_then(|v| v.as_i64()).unwrap_or(2);
+    proc.send_raw(request_json, timeout_duration, Some(req_id)).await
 }
 
 /// Execute JSON-RPC 2.0 request over HTTP/SSE endpoint.
 /// Supports both Direct JSON-RPC HTTP and standard MCP SSE handshake.
 async fn call_http_rpc(
     url: &str,
+    env: &HashMap<String, String>,
     request_json: &serde_json::Value,
     timeout_duration: Duration,
 ) -> Result<serde_json::Value, String> {
@@ -232,14 +350,28 @@ async fn call_http_rpc(
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-    // 1. First attempt direct POST (standard for Bun-MCP & direct JSON-RPC 2.0)
-    let resp = client
+    let mut post_req = client
         .post(url)
         .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .json(request_json)
-        .send()
-        .await;
+        .header("Accept", "application/json, text/event-stream");
+
+    for (k, v) in env {
+        if k.eq_ignore_ascii_case("authorization")
+            || k.eq_ignore_ascii_case("x-api-key")
+            || k.eq_ignore_ascii_case("api-key")
+        {
+            post_req = post_req.header(k, v);
+        } else if k.to_uppercase().ends_with("_API_KEY")
+            || k.to_uppercase().ends_with("_TOKEN")
+            || k.to_uppercase() == "API_KEY"
+        {
+            post_req = post_req.header("X-API-Key", v);
+            post_req = post_req.header("Authorization", format!("Bearer {}", v));
+        }
+    }
+
+    // 1. First attempt direct POST (standard for Bun-MCP & direct JSON-RPC 2.0)
+    let resp = post_req.json(request_json).send().await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
@@ -416,7 +548,13 @@ impl McpClient {
                 let cmd = self.config.command.as_deref().ok_or_else(|| {
                     "MCP stdio transport requires a 'command' to execute".to_string()
                 })?;
+                let server_key = if !self.config.id.is_empty() {
+                    self.config.id.as_str()
+                } else {
+                    self.config.name.as_str()
+                };
                 call_stdio_rpc(
+                    server_key,
                     cmd,
                     &self.config.args,
                     &self.config.env,
@@ -430,7 +568,7 @@ impl McpClient {
                     self.config.url.as_deref().ok_or_else(|| {
                         "MCP HTTP/SSE transport requires a valid 'url'".to_string()
                     })?;
-                call_http_rpc(url, request, self.timeout).await
+                call_http_rpc(url, &self.config.env, request, self.timeout).await
             }
             other => Err(format!(
                 "Unsupported MCP transport '{}'. Supported: stdio, sse, http",
@@ -485,19 +623,78 @@ impl McpClient {
     }
 }
 
+pub struct SessionMcpRegistry {
+    /// Mapping: session_id -> server_id -> list of tool definitions
+    pub active_tools: tokio::sync::RwLock<HashMap<String, HashMap<String, Vec<McpToolDefinition>>>>,
+    /// Mapping: session_id -> server_id -> Mcp-Session-Id for Streamable HTTP / SSE
+    pub http_sessions: tokio::sync::RwLock<HashMap<String, HashMap<String, String>>>,
+}
+
+impl SessionMcpRegistry {
+    pub fn new() -> Self {
+        Self {
+            active_tools: tokio::sync::RwLock::new(HashMap::new()),
+            http_sessions: tokio::sync::RwLock::new(HashMap::new()),
+        }
+    }
+
+    pub async fn get_tools(
+        &self,
+        session_id: &str,
+        server_id: &str,
+    ) -> Option<Vec<McpToolDefinition>> {
+        let read = self.active_tools.read().await;
+        read.get(session_id).and_then(|m| m.get(server_id).cloned())
+    }
+
+    pub async fn set_tools(
+        &self,
+        session_id: &str,
+        server_id: &str,
+        tools: Vec<McpToolDefinition>,
+    ) {
+        let mut write = self.active_tools.write().await;
+        write
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(server_id.to_string(), tools);
+    }
+
+    pub async fn remove_server(&self, session_id: &str, server_id: &str) {
+        let mut write = self.active_tools.write().await;
+        if let Some(m) = write.get_mut(session_id) {
+            m.remove(server_id);
+        }
+        let mut write_http = self.http_sessions.write().await;
+        if let Some(m) = write_http.get_mut(session_id) {
+            m.remove(server_id);
+        }
+    }
+
+    pub async fn clear_session(&self, session_id: &str) {
+        let mut write = self.active_tools.write().await;
+        write.remove(session_id);
+        let mut write_http = self.http_sessions.write().await;
+        write_http.remove(session_id);
+    }
+}
+
+pub static SESSION_MCP_REGISTRY: LazyLock<SessionMcpRegistry> =
+    LazyLock::new(SessionMcpRegistry::new);
+
 impl From<&crate::agent::models::McpServer> for McpServerConfig {
     fn from(s: &crate::agent::models::McpServer) -> Self {
         let args: Vec<String> = serde_json::from_str(&s.args_json()).unwrap_or_default();
         let env: HashMap<String, String> = serde_json::from_str(&s.env_json()).unwrap_or_default();
         Self {
             id: s.id.clone(),
-            name: s.name.clone(),
+            name: s.id.clone(),
             transport: s.transport(),
             command: s.command(),
             args,
             env,
             url: s.url(),
-            is_enabled: s.is_enabled,
+            is_enabled: true,
         }
     }
 }
@@ -514,95 +711,108 @@ pub struct ActiveMcpTool {
     pub markdown_spec: Option<String>,
 }
 
-/// Discovers tools from all active MCP servers for a project, prioritizing synced tools in DB
-/// while falling back to live `tools/list` handshake when available.
+/// Discovers tools from all active MCP servers, keeping tools in RAM and querying upstream
 pub async fn resolve_active_mcp_tools(
     servers: &[crate::agent::models::McpServer],
 ) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
     for s in servers {
-        if !s.is_enabled {
-            continue;
-        }
         let config: McpServerConfig = s.into();
 
-        // 1. First attempt to load tools from `mcp_server_tools` table
-        let mut loaded_from_db = false;
-        if let Ok(db_tools) = crate::repository::agent::list_mcp_server_tools(&s.id).await
-            && !db_tools.is_empty()
-        {
-            for tool in db_tools {
-                let namespaced = format!("mcp__{}", tool.name);
-                // Synthesize definition from markdown spec
-                let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
-                resolved.push(ActiveMcpTool {
-                    server_id: config.id.clone(),
-                    server_name: config.name.clone(),
-                    original_name: tool.name.clone(),
-                    namespaced_name: namespaced,
-                    definition: def,
-                    server_config: config.clone(),
-                    markdown_spec: Some(tool.config),
-                });
-            }
-            loaded_from_db = true;
-        }
-
-        // 2. If no tools in DB, attempt on-demand tool discovery & persistence from server configuration
-        if !loaded_from_db {
-            match discovery::sync_server_tools(s, None).await {
-                Ok(discovered) if !discovered.is_empty() => {
-                    for tool in discovered {
-                        let namespaced = format!("mcp__{}", tool.name);
-                        let def = parse_markdown_to_tool_def(&tool.name, &tool.config);
-                        resolved.push(ActiveMcpTool {
-                            server_id: config.id.clone(),
-                            server_name: config.name.clone(),
-                            original_name: tool.name.clone(),
-                            namespaced_name: namespaced,
-                            definition: def,
-                            server_config: config.clone(),
-                            markdown_spec: Some(tool.config),
-                        });
-                    }
-                    loaded_from_db = true;
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    crate::term_err!("[MCP] On-demand tool sync failed for '{}': {}", s.name, e);
+        // Query tools dynamically via JSON-RPC
+        let client = McpClient::new(config.clone());
+        match client.list_tools().await {
+            Ok(tools) => {
+                for t in tools {
+                    let namespaced = format!("mcp__{}", t.name);
+                    let md = discovery::tool_definition_to_markdown(&t);
+                    resolved.push(ActiveMcpTool {
+                        server_id: config.id.clone(),
+                        server_name: config.name.clone(),
+                        original_name: t.name.clone(),
+                        namespaced_name: namespaced,
+                        definition: t,
+                        server_config: config.clone(),
+                        markdown_spec: Some(md.config),
+                    });
                 }
             }
-        }
-
-        // 3. Fallback: query tools dynamically via live JSON-RPC handshake
-        if !loaded_from_db {
-            let client = McpClient::new(config.clone());
-            match client.list_tools().await {
-                Ok(tools) => {
-                    for t in tools {
-                        let namespaced = format!("mcp__{}", t.name);
-                        let md = discovery::tool_definition_to_markdown(&t);
-                        resolved.push(ActiveMcpTool {
-                            server_id: config.id.clone(),
-                            server_name: config.name.clone(),
-                            original_name: t.name.clone(),
-                            namespaced_name: namespaced,
-                            definition: t,
-                            server_config: config.clone(),
-                            markdown_spec: Some(md.config),
-                        });
-                    }
-                }
-                Err(e) => {
-                    crate::term_err!("[MCP] Failed to list tools from '{}': {}", s.name, e);
-                }
+            Err(e) => {
+                crate::term_err!("[MCP] Failed to list tools from '{}': {}", s.id, e);
             }
         }
     }
     resolved
 }
 
+/// Discovers tools for a specific session with session-specific env merged in RAM
+pub async fn resolve_session_mcp_tools(
+    session_id: &str,
+    servers: &[(crate::agent::models::McpServer, crate::agent::models::SessionMcpServer)],
+) -> Vec<ActiveMcpTool> {
+    let mut resolved = Vec::new();
+
+    for (s, session_state) in servers {
+        if session_state.is_active != 1 {
+            continue;
+        }
+
+        let mut config: McpServerConfig = s.into();
+        // Merge session env into config.env
+        if let Ok(session_env) = serde_json::from_str::<HashMap<String, String>>(&session_state.env) {
+            for (k, v) in session_env {
+                config.env.insert(k, v);
+            }
+        }
+
+        // Check if tools are already cached in RAM for this session
+        if let Some(cached_tools) = SESSION_MCP_REGISTRY.get_tools(session_id, &s.id).await {
+            for t in cached_tools {
+                let namespaced = format!("mcp__{}", t.name);
+                let md = discovery::tool_definition_to_markdown(&t);
+                resolved.push(ActiveMcpTool {
+                    server_id: config.id.clone(),
+                    server_name: config.name.clone(),
+                    original_name: t.name.clone(),
+                    namespaced_name: namespaced,
+                    definition: t,
+                    server_config: config.clone(),
+                    markdown_spec: Some(md.config),
+                });
+            }
+            continue;
+        }
+
+        // If not in RAM, query live via McpClient and cache in RAM
+        let client = McpClient::new(config.clone());
+        match client.list_tools().await {
+            Ok(tools) => {
+                SESSION_MCP_REGISTRY.set_tools(session_id, &s.id, tools.clone()).await;
+                for t in tools {
+                    let namespaced = format!("mcp__{}", t.name);
+                    let md = discovery::tool_definition_to_markdown(&t);
+                    resolved.push(ActiveMcpTool {
+                        server_id: config.id.clone(),
+                        server_name: config.name.clone(),
+                        original_name: t.name.clone(),
+                        namespaced_name: namespaced,
+                        definition: t,
+                        server_config: config.clone(),
+                        markdown_spec: Some(md.config),
+                    });
+                }
+            }
+            Err(e) => {
+                crate::term_err!("[MCP] Failed to list tools for session '{}' from '{}': {}", session_id, s.id, e);
+            }
+        }
+    }
+
+    resolved
+}
+
 /// Helper to parse tool parameters schema directly from Markdown specification
+#[allow(dead_code)]
 fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
@@ -697,6 +907,35 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
         }
     }
 
+    // Fallback: If no parameters were parsed from markdown (e.g. config is pure single-line command),
+    // automatically extract `{param}` placeholders directly from the command template string!
+    if properties.is_empty() {
+        let mut idx = 0;
+        while let Some(start) = config[idx..].find('{') {
+            let actual_start = idx + start + 1;
+            if let Some(end) = config[actual_start..].find('}') {
+                let raw_param = &config[actual_start..actual_start + end];
+                let clean_param = raw_param.trim();
+                if !clean_param.is_empty() && !clean_param.contains(' ') {
+                    let mut prop_obj = serde_json::Map::new();
+                    prop_obj.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("string".to_string()),
+                    );
+                    prop_obj.insert(
+                        "description".to_string(),
+                        serde_json::Value::String(format!("Argument for parameter {}", clean_param)),
+                    );
+                    properties.insert(clean_param.to_string(), serde_json::Value::Object(prop_obj));
+                    required.push(serde_json::Value::String(clean_param.to_string()));
+                }
+                idx = actual_start + end + 1;
+            } else {
+                break;
+            }
+        }
+    }
+
     let description = if !desc_lines.is_empty() {
         desc_lines.join(" ")
     } else {
@@ -737,49 +976,62 @@ pub async fn call_active_mcp_tool(
             )
         })?;
 
-    // 1. Skill paradigm: if the tool's markdown spec carries a Command Template
-    //    (generated by the LLM in Tahap 1), execute it directly. Arguments from the
-    //    LLM are substituted into `{param}` placeholders. The LLM stays in control:
-    //    it chooses the arguments each call and may improvise its own commands via
-    //    workspace_run_command at any time (Tahap 2 is never locked to a template).
+    let transport = matched.server_config.transport.to_lowercase();
+    if transport != "disabled" && !transport.is_empty() {
+        let client = McpClient::new(matched.server_config.clone());
+        match client.call_tool(&matched.original_name, arguments.clone()).await {
+            Ok(res) => {
+                if res.is_error {
+                    let err_texts: Vec<String> = res
+                        .content
+                        .iter()
+                        .map(|c| {
+                            if let Some(t) = c.get("text").and_then(|v| v.as_str()) {
+                                t.to_string()
+                            } else {
+                                c.to_string()
+                            }
+                        })
+                        .collect();
+                    return Err(format!("MCP tool error: {}", err_texts.join("\n")));
+                }
+
+                let mut output = String::new();
+                for item in res.content {
+                    if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                        output.push_str(text);
+                    } else if let Some(s) = item.as_str() {
+                        output.push_str(s);
+                    } else {
+                        output.push_str(&item.to_string());
+                    }
+                    output.push('\n');
+                }
+
+                return Ok(output.trim().to_string());
+            }
+            Err(e) => {
+                // If native JSON-RPC failed and there is a command template, fall back to template
+                if let Some(spec) = &matched.markdown_spec
+                    && let Some(template) = extract_command_template(spec)
+                {
+                    return run_command_template(&template, &arguments).await;
+                }
+                return Err(e);
+            }
+        }
+    }
+
     if let Some(spec) = &matched.markdown_spec
         && let Some(template) = extract_command_template(spec)
     {
         return run_command_template(&template, &arguments).await;
     }
 
-    // 2. Fallback: native MCP JSON-RPC tools/call
-    let client = McpClient::new(matched.server_config.clone());
-    let res = client.call_tool(&matched.original_name, arguments).await?;
-
-    if res.is_error {
-        let err_texts: Vec<String> = res
-            .content
-            .iter()
-            .map(|c| {
-                if let Some(t) = c.get("text").and_then(|v| v.as_str()) {
-                    t.to_string()
-                } else {
-                    c.to_string()
-                }
-            })
-            .collect();
-        return Err(format!("MCP tool error: {}", err_texts.join("\n")));
-    }
-
-    let mut output = String::new();
-    for item in res.content {
-        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-            output.push_str(text);
-        } else if let Some(s) = item.as_str() {
-            output.push_str(s);
-        } else {
-            output.push_str(&item.to_string());
-        }
-        output.push('\n');
-    }
-
-    Ok(output.trim().to_string())
+    Err(format!(
+        "MCP tool '{}' has no active transport or executable template",
+        called_name
+    ))
 }
 
 /// Extracts the command template from either a raw CLI command string or a

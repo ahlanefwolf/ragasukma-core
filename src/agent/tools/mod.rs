@@ -48,7 +48,7 @@ pub fn is_read_only_tool(name: &str) -> bool {
 /// Specialized tools (workspace inspection/editing and active MCP tools) are prioritized FIRST,
 /// while `workspace_run_command` (terminal fallback) is placed LAST.
 pub fn get_dynamic_agent_tools_schema(
-    _mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
+    mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
 ) -> Vec<serde_json::Value> {
     let mut schema = Vec::new();
 
@@ -212,6 +212,122 @@ pub fn get_dynamic_agent_tools_schema(
             }
         }
     }));
+
+    // Meta-tool for On-Demand Skill Activation from .skill / .skills catalog
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": "Load and activate specialized skill guidelines on-demand from the workspace's .skill or .skills catalog. Returns the complete instructions and persona guidelines for the skill.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "The slug or name of the skill to use (e.g. 'code-check')"
+                    }
+                },
+                "required": ["skill_name"]
+            }
+        }
+    }));
+
+    // Dynamic MCP Management Tools (Session & Catalog Lifecycle)
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "mcp_register_server",
+            "description": "Register or update an MCP server blueprint globally into the system catalog (mcp_servers). Specify server id (e.g. 'figcraft', 'cartesia'), transport type ('stdio' or 'http'), command or URL, and optional args.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "Unique identifier for the MCP server (e.g. 'figcraft', 'cartesia', 'playwright')"
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["stdio", "http"],
+                        "description": "Transport protocol: 'stdio' for local CLI commands or 'http' for remote SSE/HTTP endpoints"
+                    },
+                    "command_or_url": {
+                        "type": "string",
+                        "description": "The executable CLI command (e.g. 'figcraft-cli') or HTTP endpoint URL (e.g. 'https://mcp.cartesia.ai/mcp')"
+                    },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "CLI arguments for stdio transport (e.g. ['mcp'])"
+                    }
+                },
+                "required": ["server_id", "type", "command_or_url"]
+            }
+        }
+    }));
+
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "mcp_configure_session",
+            "description": "Configure an MCP server for the current chat session. Injects session-specific credentials (such as API keys or auth tokens) and toggles active status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "The identifier of the registered MCP server to configure"
+                    },
+                    "env": {
+                        "type": "object",
+                        "description": "Key-value map of environment variables or secret API tokens for this session (e.g. {'CARTESIA_API_KEY': 'sk_...'})"
+                    },
+                    "is_active": {
+                        "type": "boolean",
+                        "description": "Whether this server should be active (true) or deactivated (false) in the current session"
+                    }
+                },
+                "required": ["server_id"]
+            }
+        }
+    }));
+
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "mcp_list_available",
+            "description": "List all registered MCP servers in the global catalog and check their status in the current session.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    }));
+
+    // 2.5 Active Project MCP Tools (Registered directly as native LLM functions)
+    for tool in mcp_tools {
+        let desc = tool
+            .definition
+            .description
+            .clone()
+            .unwrap_or_else(|| format!("Active MCP tool '{}' from server '{}'", tool.original_name, tool.server_name));
+        let params = if tool.definition.input_schema.is_object() {
+            tool.definition.input_schema.clone()
+        } else {
+            json!({
+                "type": "object",
+                "properties": {}
+            })
+        };
+
+        schema.push(json!({
+            "type": "function",
+            "function": {
+                "name": tool.namespaced_name,
+                "description": desc,
+                "parameters": params
+            }
+        }));
+    }
 
     let shell_info = crate::agent::terminal::active_shell_info();
 
@@ -908,7 +1024,7 @@ pub async fn execute_tool_call(
                 .unwrap_or_default();
             let matched_server = all_servers
                 .into_iter()
-                .find(|s| s.name.eq_ignore_ascii_case(extension_name));
+                .find(|s| s.name.eq_ignore_ascii_case(extension_name) || s.id.eq_ignore_ascii_case(extension_name));
 
             let mut details = format!(
                 "Extension '{}' has been successfully activated for this session.",
@@ -951,6 +1067,185 @@ pub async fn execute_tool_call(
             }
 
             Ok(details)
+        }
+
+        "use_skill" => {
+            let skill_name = args
+                .get("skill_name")
+                .or_else(|| args.get("name"))
+                .or_else(|| args.get("slug"))
+                .and_then(|v| v.as_str())
+                .context("Parameter 'skill_name' is required")?;
+
+            crate::agent::executor::state::activate_session_skill(session_id, skill_name);
+
+            let session = crate::repository::agent::get_session(session_id)
+                .await?
+                .context("Session not found")?;
+            let project = crate::repository::agent::get_project(&session.project_id)
+                .await?
+                .context("Project not found")?;
+            let allowed_folders =
+                crate::agent::executor::parse_project_folders(project.root_path.as_deref());
+
+            let all_skills = crate::agent::skills::scan_project_skills(
+                project.root_path.as_deref(),
+                &allowed_folders,
+            );
+
+            let needle = skill_name.to_lowercase();
+            let matched_skill = all_skills.into_iter().find(|s| {
+                s.slug.to_lowercase() == needle
+                    || s.name.to_lowercase() == needle
+                    || s.id.to_lowercase() == needle
+                    || needle.contains(&s.slug.to_lowercase())
+            });
+
+            if let Some(skill) = matched_skill {
+                crate::agent::executor::state::activate_session_skill(session_id, &skill.slug);
+                crate::agent::executor::state::activate_session_skill(session_id, &skill.name);
+                Ok(format!(
+                    "Skill '{}' ({}) loaded and activated successfully.\n\n### Instructions for Skill: {}\n{}",
+                    skill.name, skill.slug, skill.name, skill.system_prompt
+                ))
+            } else {
+                Ok(format!(
+                    "Skill '{}' was not found in the workspace or global .skill/.skills directories. Please check available skills in the system prompt.",
+                    skill_name
+                ))
+            }
+        }
+
+        "mcp_register_server" => {
+            let server_id = args
+                .get("server_id")
+                .or_else(|| args.get("id"))
+                .and_then(|v| v.as_str())
+                .context("Parameter 'server_id' is required")?
+                .trim();
+            if server_id.is_empty() {
+                bail!("Parameter 'server_id' cannot be empty");
+            }
+
+            let transport_type = args
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stdio")
+                .to_lowercase();
+
+            let command_or_url = args
+                .get("command_or_url")
+                .or_else(|| args.get("command"))
+                .or_else(|| args.get("url"))
+                .and_then(|v| v.as_str())
+                .context("Parameter 'command_or_url' is required")?
+                .trim();
+            if command_or_url.is_empty() {
+                bail!("Parameter 'command_or_url' cannot be empty");
+            }
+
+            let config_json = if transport_type == "http" {
+                serde_json::json!({
+                    "url": command_or_url
+                })
+            } else {
+                let args_list: Vec<String> = args
+                    .get("args")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                serde_json::json!({
+                    "command": command_or_url,
+                    "args": args_list
+                })
+            };
+
+            crate::repository::agent::create_or_update_mcp_server(
+                server_id,
+                server_id,
+                &config_json.to_string(),
+                true,
+            )
+            .await?;
+
+            Ok(format!(
+                "MCP server '{}' ({}) successfully registered.\nConfiguration: {}\nYou can activate it using `activate_extension(extension_name: \"{}\")`.",
+                server_id, transport_type, config_json, server_id
+            ))
+        }
+
+        "mcp_configure_session" => {
+            let server_id = args
+                .get("server_id")
+                .or_else(|| args.get("id"))
+                .and_then(|v| v.as_str())
+                .context("Parameter 'server_id' is required")?
+                .trim();
+            if server_id.is_empty() {
+                bail!("Parameter 'server_id' cannot be empty");
+            }
+
+            let is_active = args
+                .get("is_active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let env_str = if let Some(env_val) = args.get("env") {
+                if env_val.is_object() {
+                    env_val.to_string()
+                } else {
+                    "{}".to_string()
+                }
+            } else {
+                "{}".to_string()
+            };
+
+            crate::repository::agent::upsert_session_mcp_server(
+                session_id,
+                server_id,
+                &env_str,
+                is_active,
+            )
+            .await?;
+
+            if is_active {
+                crate::agent::executor::state::activate_session_extension(session_id, server_id);
+            } else {
+                crate::agent::executor::state::deactivate_session_extension(session_id, server_id);
+            }
+
+            Ok(format!(
+                "MCP server '{}' session configuration updated: is_active={}, env configured.",
+                server_id, is_active
+            ))
+        }
+
+        "mcp_list_available" => {
+            let servers = crate::repository::agent::list_mcp_servers().await?;
+            if servers.is_empty() {
+                return Ok("No MCP servers are currently registered in the system catalog.".to_string());
+            }
+
+            let session_configs = crate::repository::agent::list_session_mcp_servers(session_id)
+                .await
+                .unwrap_or_default();
+            let mut output = String::from("### 🌐 System MCP Servers:\n");
+            for s in servers {
+                let session_info = session_configs.iter().find(|sc| sc.server_id == s.id);
+                let status_str = match session_info {
+                    Some(sc) if sc.is_active == 1 => "Active in current session",
+                    Some(_) => "Disabled in current session",
+                    None => "Dormant (available to activate)",
+                };
+                output.push_str(&format!("- `{}` (type: {}): {}\n", s.id, s.r#type, status_str));
+            }
+            output.push_str("\nTo activate a dormant server in this session, call `activate_extension(extension_name: \"<server_id>\")`.");
+            Ok(output)
         }
 
         _ => bail!("Unknown tool '{}'", name),

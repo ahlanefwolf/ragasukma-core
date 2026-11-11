@@ -13,6 +13,8 @@ pub struct PromptSkill {
     #[serde(default = "default_active")]
     pub is_active: i64,
     #[serde(default)]
+    pub is_pinned: bool,
+    #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
     pub updated_at: i64,

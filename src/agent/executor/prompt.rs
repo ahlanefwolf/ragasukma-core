@@ -12,6 +12,7 @@ pub struct AgentPromptContext<'a> {
     pub project: &'a Project,
     pub allowed_folders: &'a [String],
     pub prompt_skills: &'a [PromptSkill],
+    pub available_skills: &'a [PromptSkill],
     pub active_mcp_servers: &'a [McpServer],
     pub dormant_mcp_servers: &'a [McpServer],
     pub mcp_tools: &'a [crate::agent::mcp::ActiveMcpTool],
@@ -30,9 +31,10 @@ fn build_static_prompt(
     project: &Project,
     allowed_folders: &[String],
     prompt_skills: &[PromptSkill],
+    available_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
     dormant_mcp_servers: &[McpServer],
-    mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
+    _mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
     capabilities: ModelCapabilities,
 ) -> String {
     let os_name = std::env::consts::OS;
@@ -139,6 +141,20 @@ fn build_static_prompt(
         }
     }
 
+    if !available_skills.is_empty() {
+        prompt.push_str("### 💡 Available Skills (On-Demand Activation):\n");
+        prompt.push_str("The following specialized skills are available dynamically in this workspace. Call `use_skill(skill_name: \"<name_or_slug>\")` when a task matches to immediately load its complete instructions and rules:\n");
+        for skill in available_skills {
+            let desc = if skill.description.trim().is_empty() {
+                skill.name.as_str()
+            } else {
+                skill.description.trim()
+            };
+            prompt.push_str(&format!("- `{}`: {}\n", skill.slug, desc));
+        }
+        prompt.push('\n');
+    }
+
     // Tool-calling directives. Each numbered rule states a preference, not an
     // absolute the runtime silently contradicts. The runtime accepts several tool
     // calls per message and executes them in order, so the prompt says so plainly.
@@ -178,110 +194,29 @@ fn build_static_prompt(
     );
 
     if !active_mcp_servers.is_empty() {
-        prompt.push_str("### ⚡ Active Project External MCP Servers:\n\n");
-
-        for (idx, server) in active_mcp_servers.iter().enumerate() {
-            let text_config = format_mcp_config_as_pure_text(&server.config);
+        prompt.push_str("### ⚡ Active Project MCP Extensions:\n");
+        for server in active_mcp_servers {
             prompt.push_str(&format!(
-                "#### {}. MCP Server: \"{}\"\n{}\n\n",
-                idx + 1,
-                server.name,
-                text_config.trim()
+                "- Extension `{}` is active with its dedicated MCP tools available in your tool declaration schema.\n",
+                server.name
             ));
         }
+        prompt.push('\n');
     }
 
     if !dormant_mcp_servers.is_empty() {
-        prompt.push_str("### 🔌 Available Extensions (On-Demand Activation):\n");
-        prompt.push_str("To optimize context tokens, the following extensions are installed in dormant mode. When a user task requires one of these extensions, call `activate_extension(extension_name: \"<name>\")` to load its dedicated tools into your tool declaration schema:\n");
+        prompt.push_str("### 💤 Available MCP Extensions (Dormant):\n");
         for server in dormant_mcp_servers {
             prompt.push_str(&format!(
-                "- `{}`: Call `activate_extension(extension_name: \"{}\")` when needed.\n",
+                "- `{}` (Activate on-demand using `activate_extension(extension_name: \"{}\")`)\n",
                 server.name, server.name
             ));
         }
         prompt.push('\n');
     }
+    prompt.push_str("You can dynamically register new MCP servers requested by the user using `mcp_register_server`, list servers with `mcp_list_available`, and inject session credentials or toggle status using `mcp_configure_session`.\n\n");
 
-    if !mcp_tools.is_empty() {
-        prompt.push_str(
-            "### 🛠️ Active External CLI Commands (Execute via `workspace_run_command`):\n",
-        );
-        prompt.push_str("The following commands are available from active extensions/servers. When needed, execute them directly via `workspace_run_command` (substitute placeholders with real values):\n");
-        for tool in mcp_tools {
-            let desc = tool
-                .definition
-                .description
-                .as_deref()
-                .unwrap_or("Active tool");
-            let cmd_str = tool
-                .markdown_spec
-                .as_deref()
-                .and_then(crate::agent::mcp::extract_command_template)
-                .unwrap_or_else(|| tool.original_name.clone());
-            prompt.push_str(&format!(
-                "- `{}` (from {}): {}\n  Usage: `{}`\n",
-                tool.original_name, tool.server_name, desc, cmd_str
-            ));
-        }
-        prompt.push('\n');
-    }
     prompt
-}
-
-/// Formats MCP server configuration as pure text, converting any JSON structures into clean Markdown list items.
-fn format_mcp_config_as_pure_text(raw_config: &str) -> String {
-    let trimmed = raw_config.trim();
-    if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
-        || (trimmed.starts_with('[') && trimmed.ends_with(']')))
-        && let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
-    {
-        return json_to_markdown_bullet_text(&val, 0);
-    }
-    trimmed.to_string()
-}
-
-fn json_to_markdown_bullet_text(val: &serde_json::Value, indent: usize) -> String {
-    let pad = "  ".repeat(indent);
-    match val {
-        serde_json::Value::Object(map) => {
-            let mut out = String::new();
-            for (k, v) in map {
-                match v {
-                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                        out.push_str(&format!("{pad}- **{k}**:\n"));
-                        out.push_str(&json_to_markdown_bullet_text(v, indent + 1));
-                    }
-                    serde_json::Value::String(s) => {
-                        out.push_str(&format!("{pad}- **{k}**: {s}\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!("{pad}- **{k}**: {v}\n"));
-                    }
-                }
-            }
-            out
-        }
-        serde_json::Value::Array(arr) => {
-            let mut out = String::new();
-            for item in arr {
-                match item {
-                    serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
-                        out.push_str(&json_to_markdown_bullet_text(item, indent + 1));
-                    }
-                    serde_json::Value::String(s) => {
-                        out.push_str(&format!("{pad}- {s}\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!("{pad}- {item}\n"));
-                    }
-                }
-            }
-            out
-        }
-        serde_json::Value::String(s) => format!("{pad}{s}\n"),
-        _ => format!("{pad}{val}\n"),
-    }
 }
 
 /// Cache key for the static prompt block.
@@ -293,6 +228,7 @@ fn static_prompt_cache_key(
     project: &Project,
     allowed_folders: &[String],
     prompt_skills: &[PromptSkill],
+    available_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
     dormant_mcp_servers: &[McpServer],
     mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
@@ -307,14 +243,18 @@ fn static_prompt_cache_key(
         s.name.hash(&mut h);
         s.system_prompt.hash(&mut h);
     }
+    for s in available_skills {
+        s.slug.hash(&mut h);
+        s.name.hash(&mut h);
+        s.description.hash(&mut h);
+    }
     for s in active_mcp_servers {
         s.id.hash(&mut h);
         s.name.hash(&mut h);
         s.config.hash(&mut h);
-        s.is_enabled.hash(&mut h);
+        s.handshake.hash(&mut h);
     }
     for s in dormant_mcp_servers {
-        s.id.hash(&mut h);
         s.name.hash(&mut h);
     }
     for t in mcp_tools {
@@ -346,6 +286,7 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
         ctx.project,
         ctx.allowed_folders,
         ctx.prompt_skills,
+        ctx.available_skills,
         ctx.active_mcp_servers,
         ctx.dormant_mcp_servers,
         ctx.mcp_tools,
@@ -365,6 +306,7 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
         ctx.project,
         ctx.allowed_folders,
         ctx.prompt_skills,
+        ctx.available_skills,
         ctx.active_mcp_servers,
         ctx.dormant_mcp_servers,
         ctx.mcp_tools,
@@ -525,9 +467,9 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let first =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
         let second =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
         assert_eq!(first, second, "static rendering must be deterministic");
         assert_eq!(
             super::static_prompt_cache_key(
@@ -537,11 +479,13 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 caps(true, false)
             ),
             super::static_prompt_cache_key(
                 &project,
                 &folders,
+                &[],
                 &[],
                 &[],
                 &[],
@@ -563,6 +507,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             caps(true, false),
         );
 
@@ -574,6 +519,7 @@ mod tests {
             super::static_prompt_cache_key(
                 &other_project,
                 &folders,
+                &[],
                 &[],
                 &[],
                 &[],
@@ -594,6 +540,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 caps(true, false)
             ),
             "attached folders must invalidate the cache"
@@ -609,6 +556,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 caps(false, true)
             ),
             "capabilities must invalidate the cache"
@@ -620,9 +568,9 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let freshly_rendered =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
         let cached =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
         assert_eq!(
             cached, freshly_rendered,
             "cache must never serve stale text"

@@ -146,6 +146,13 @@ pub fn parse_skill_file(path: &Path) -> Option<PromptSkill> {
         .cloned()
         .unwrap_or_else(|| "[]".to_string());
 
+    let is_pinned = frontmatter_map
+        .get("pinned")
+        .or_else(|| frontmatter_map.get("is_pinned"))
+        .or_else(|| frontmatter_map.get("always_active"))
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
     let system_prompt = if !body.trim().is_empty() {
         body.trim().to_string()
     } else {
@@ -163,6 +170,7 @@ pub fn parse_skill_file(path: &Path) -> Option<PromptSkill> {
         tags,
         file_path: Some(path.to_string_lossy().to_string()),
         is_active: 1,
+        is_pinned,
         created_at: 0,
         updated_at: 0,
     })
@@ -377,8 +385,10 @@ pub fn save_skill_to_dir(
     fs::write(&file_path, content)
         .with_context(|| format!("Failed to write skill file {:?}", file_path))?;
 
+    let id = format!("skill_{}", clean_slug);
+
     Ok(PromptSkill {
-        id: format!("skill_{}", clean_slug),
+        id,
         name: name.to_string(),
         slug: clean_slug,
         description: description.to_string(),
@@ -386,6 +396,7 @@ pub fn save_skill_to_dir(
         tags: tags_formatted,
         file_path: Some(file_path.to_string_lossy().to_string()),
         is_active: 1,
+        is_pinned: false,
         created_at: 0,
         updated_at: 0,
     })

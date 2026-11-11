@@ -502,3 +502,59 @@ async fn test_workspace_grep_with_folder_arg_and_edit_file_schema() {
 
     let _ = std_fs::remove_dir_all(&temp_dir);
 }
+
+#[tokio::test]
+async fn test_mcp_dynamic_tools_registration_and_configuration() {
+    let roots: Vec<String> = vec![];
+    let project = crate::repository::agent::create_project("test_proj", "test_desc", None, None).await.unwrap();
+    let session = crate::repository::agent::create_session(&project.id, "test_session", None, None, None).await.unwrap();
+    let test_session = session.id;
+
+    // 1. Register dummy test MCP server
+    let reg_out = execute_tool_call(
+        "mcp_register_server",
+        &serde_json::json!({
+            "server_id": "test-dummy-server",
+            "type": "stdio",
+            "command_or_url": "dummy-cli",
+            "args": ["serve"]
+        }),
+        &roots,
+        &test_session,
+    )
+    .await
+    .unwrap();
+
+    assert!(reg_out.contains("test-dummy-server"));
+    assert!(reg_out.contains("successfully registered"));
+
+    // 2. Configure session credentials & active flag
+    let conf_out = execute_tool_call(
+        "mcp_configure_session",
+        &serde_json::json!({
+            "server_id": "test-dummy-server",
+            "env": { "TEST_KEY": "dummy_secret_value" },
+            "is_active": true
+        }),
+        &roots,
+        &test_session,
+    )
+    .await
+    .unwrap();
+
+    assert!(conf_out.contains("test-dummy-server"));
+    assert!(conf_out.contains("session configuration updated"));
+
+    // 3. List available MCP servers and verify test-dummy-server is active in current session
+    let list_out = execute_tool_call(
+        "mcp_list_available",
+        &serde_json::json!({}),
+        &roots,
+        &test_session,
+    )
+    .await
+    .unwrap();
+
+    assert!(list_out.contains("test-dummy-server"));
+    assert!(list_out.contains("Active in current session"));
+}

@@ -1,5 +1,5 @@
 use super::{generate_id, now_secs};
-use crate::agent::models::{McpServer, McpServerTool, Project, Session};
+use crate::agent::models::{McpServer, McpServerTool, Project, Session, SessionMcpServer};
 use anyhow::Result;
 
 // ============================================================================
@@ -488,12 +488,35 @@ pub async fn list_mcp_servers() -> Result<Vec<McpServer>> {
 
 pub async fn list_mcp_servers_with_pool(pool: &sqlx::SqlitePool) -> Result<Vec<McpServer>> {
     let servers = sqlx::query_as::<_, McpServer>(
-        "SELECT id, name, config, is_enabled, created_at \
-         FROM mcp_servers ORDER BY name ASC",
+        "SELECT id, id as name, type, config, handshake, created_at, updated_at \
+         FROM mcp_servers \
+         ORDER BY id ASC",
     )
     .fetch_all(pool)
     .await?;
+
     Ok(servers)
+}
+
+pub async fn get_mcp_server(id: &str) -> Result<Option<McpServer>> {
+    let pool = super::pool().await;
+    get_mcp_server_with_pool(pool, id).await
+}
+
+pub async fn get_mcp_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+) -> Result<Option<McpServer>> {
+    let server = sqlx::query_as::<_, McpServer>(
+        "SELECT id, id as name, type, config, handshake, created_at, updated_at \
+         FROM mcp_servers \
+         WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(server)
 }
 
 pub async fn create_or_update_mcp_server(
@@ -509,25 +532,28 @@ pub async fn create_or_update_mcp_server(
 pub async fn create_or_update_mcp_server_with_pool(
     pool: &sqlx::SqlitePool,
     id: &str,
-    name: &str,
+    _name: &str,
     config: &str,
-    is_enabled: bool,
+    _is_enabled: bool,
 ) -> Result<()> {
     let now = now_secs();
-    let enabled_int = if is_enabled { 1 } else { 0 };
+    let r#type = if config.contains("\"url\"") || config.contains("'url'") {
+        "http"
+    } else {
+        "stdio"
+    };
 
     sqlx::query(
-        "INSERT INTO mcp_servers (id, name, config, is_enabled, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) \
+        "INSERT INTO mcp_servers (id, type, config, handshake, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 1, ?4, ?4) \
          ON CONFLICT(id) DO UPDATE SET \
-            name = excluded.name, \
+            type = excluded.type, \
             config = excluded.config, \
-            is_enabled = excluded.is_enabled",
+            updated_at = excluded.updated_at",
     )
     .bind(id)
-    .bind(name)
+    .bind(r#type)
     .bind(config)
-    .bind(enabled_int)
     .bind(now)
     .execute(pool)
     .await?;
@@ -548,148 +574,218 @@ pub async fn delete_mcp_server_with_pool(pool: &sqlx::SqlitePool, id: &str) -> R
     Ok(())
 }
 
-pub async fn list_mcp_server_tools(server_id: &str) -> Result<Vec<McpServerTool>> {
+// ============================================================================
+// SESSION MCP SERVERS (DYNAMIC PER-SESSION & ENV)
+// ============================================================================
+
+pub async fn list_session_mcp_servers(session_id: &str) -> Result<Vec<SessionMcpServer>> {
     let pool = super::pool().await;
-    list_mcp_server_tools_with_pool(pool, server_id).await
+    list_session_mcp_servers_with_pool(pool, session_id).await
 }
 
-pub async fn list_mcp_server_tools_with_pool(
+pub async fn list_session_mcp_servers_with_pool(
     pool: &sqlx::SqlitePool,
-    server_id: &str,
-) -> Result<Vec<McpServerTool>> {
-    let tools = sqlx::query_as::<_, McpServerTool>(
-        "SELECT server_id, name, config \
-         FROM mcp_server_tools WHERE server_id = ?1 ORDER BY name ASC",
+    session_id: &str,
+) -> Result<Vec<SessionMcpServer>> {
+    let rows = sqlx::query_as::<_, SessionMcpServer>(
+        "SELECT session_id, server_id, env, is_active, created_at, updated_at \
+         FROM session_mcp_servers \
+         WHERE session_id = ?1 \
+         ORDER BY server_id ASC",
     )
-    .bind(server_id)
+    .bind(session_id)
     .fetch_all(pool)
     .await?;
-    Ok(tools)
+
+    Ok(rows)
+}
+
+pub async fn get_session_active_mcp_servers(
+    session_id: &str,
+) -> Result<Vec<(McpServer, SessionMcpServer)>> {
+    let pool = super::pool().await;
+    get_session_active_mcp_servers_with_pool(pool, session_id).await
+}
+
+pub async fn get_session_active_mcp_servers_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<Vec<(McpServer, SessionMcpServer)>> {
+    let rows = sqlx::query_as::<_, McpServer>(
+        "SELECT s.id, s.type, s.config, s.handshake, s.created_at, s.updated_at \
+         FROM session_mcp_servers sms \
+         JOIN mcp_servers s ON s.id = sms.server_id \
+         WHERE sms.session_id = ?1 AND sms.is_active = 1 \
+         ORDER BY s.id ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+
+    let session_rows = sqlx::query_as::<_, SessionMcpServer>(
+        "SELECT session_id, server_id, env, is_active, created_at, updated_at \
+         FROM session_mcp_servers \
+         WHERE session_id = ?1 AND is_active = 1 \
+         ORDER BY server_id ASC",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut result = Vec::new();
+    for s in rows {
+        if let Some(sms) = session_rows.iter().find(|item| item.server_id == s.id) {
+            result.push((s, sms.clone()));
+        }
+    }
+
+    Ok(result)
+}
+
+pub async fn upsert_session_mcp_server(
+    session_id: &str,
+    server_id: &str,
+    env: &str,
+    is_active: bool,
+) -> Result<()> {
+    let pool = super::pool().await;
+    upsert_session_mcp_server_with_pool(pool, session_id, server_id, env, is_active).await
+}
+
+pub async fn upsert_session_mcp_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+    env: &str,
+    is_active: bool,
+) -> Result<()> {
+    let now = now_secs();
+    let active_int = if is_active { 1 } else { 0 };
+
+    sqlx::query(
+        "INSERT INTO session_mcp_servers (session_id, server_id, env, is_active, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
+         ON CONFLICT(session_id, server_id) DO UPDATE SET \
+            env = excluded.env, \
+            is_active = excluded.is_active, \
+            updated_at = excluded.updated_at",
+    )
+    .bind(session_id)
+    .bind(server_id)
+    .bind(env)
+    .bind(active_int)
+    .bind(now)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn set_session_mcp_server_active(
+    session_id: &str,
+    server_id: &str,
+    is_active: bool,
+) -> Result<()> {
+    let pool = super::pool().await;
+    set_session_mcp_server_active_with_pool(pool, session_id, server_id, is_active).await
+}
+
+pub async fn set_session_mcp_server_active_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+    is_active: bool,
+) -> Result<()> {
+    let now = now_secs();
+    let active_int = if is_active { 1 } else { 0 };
+
+    sqlx::query(
+        "UPDATE session_mcp_servers SET is_active = ?1, updated_at = ?2 \
+         WHERE session_id = ?3 AND server_id = ?4",
+    )
+    .bind(active_int)
+    .bind(now)
+    .bind(session_id)
+    .bind(server_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn delete_session_mcp_server(session_id: &str, server_id: &str) -> Result<()> {
+    let pool = super::pool().await;
+    delete_session_mcp_server_with_pool(pool, session_id, server_id).await
+}
+
+pub async fn delete_session_mcp_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+) -> Result<()> {
+    sqlx::query("DELETE FROM session_mcp_servers WHERE session_id = ?1 AND server_id = ?2")
+        .bind(session_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+// Deprecated compatibility stubs for tools table
+pub async fn list_mcp_server_tools(_server_id: &str) -> Result<Vec<McpServerTool>> {
+    Ok(Vec::new())
+}
+
+pub async fn list_mcp_server_tools_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str) -> Result<Vec<McpServerTool>> {
+    Ok(Vec::new())
 }
 
 pub async fn list_all_mcp_server_tools() -> Result<Vec<McpServerTool>> {
-    let pool = super::pool().await;
-    list_all_mcp_server_tools_with_pool(pool).await
+    Ok(Vec::new())
 }
 
-pub async fn list_all_mcp_server_tools_with_pool(
-    pool: &sqlx::SqlitePool,
-) -> Result<Vec<McpServerTool>> {
-    let tools = sqlx::query_as::<_, McpServerTool>(
-        "SELECT server_id, name, config \
-         FROM mcp_server_tools ORDER BY server_id ASC, name ASC",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(tools)
+pub async fn list_all_mcp_server_tools_with_pool(_pool: &sqlx::SqlitePool) -> Result<Vec<McpServerTool>> {
+    Ok(Vec::new())
 }
 
-pub async fn upsert_mcp_server_tool(server_id: &str, name: &str, config: &str) -> Result<()> {
-    let pool = super::pool().await;
-    upsert_mcp_server_tool_with_pool(pool, server_id, name, config).await
-}
-
-pub async fn upsert_mcp_server_tool_with_pool(
-    pool: &sqlx::SqlitePool,
-    server_id: &str,
-    name: &str,
-    config: &str,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO mcp_server_tools (server_id, name, config) \
-         VALUES (?1, ?2, ?3) \
-         ON CONFLICT(server_id, name) DO UPDATE SET \
-            config = excluded.config",
-    )
-    .bind(server_id)
-    .bind(name)
-    .bind(config)
-    .execute(pool)
-    .await?;
+pub async fn upsert_mcp_server_tool(_server_id: &str, _name: &str, _config: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_mcp_server_tool(server_id: &str, name: &str) -> Result<()> {
-    let pool = super::pool().await;
-    delete_mcp_server_tool_with_pool(pool, server_id, name).await
-}
-
-pub async fn delete_mcp_server_tool_with_pool(
-    pool: &sqlx::SqlitePool,
-    server_id: &str,
-    name: &str,
-) -> Result<()> {
-    sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1 AND name = ?2")
-        .bind(server_id)
-        .bind(name)
-        .execute(pool)
-        .await?;
+pub async fn upsert_mcp_server_tool_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str, _name: &str, _config: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_mcp_server_tools_by_server(server_id: &str) -> Result<()> {
-    let pool = super::pool().await;
-    delete_mcp_server_tools_by_server_with_pool(pool, server_id).await
-}
-
-pub async fn delete_mcp_server_tools_by_server_with_pool(
-    pool: &sqlx::SqlitePool,
-    server_id: &str,
-) -> Result<()> {
-    sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1")
-        .bind(server_id)
-        .execute(pool)
-        .await?;
+pub async fn delete_mcp_server_tool(_server_id: &str, _name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Retrieve MCP servers that are active for a specific project.
-/// If no custom project-level configuration exists yet, defaults to all globally enabled MCP servers.
-pub async fn get_project_active_mcp_servers(project_id: &str) -> Result<Vec<McpServer>> {
+pub async fn delete_mcp_server_tool_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str, _name: &str) -> Result<()> {
+    Ok(())
+}
+
+pub async fn delete_mcp_server_tools_by_server(_server_id: &str) -> Result<()> {
+    Ok(())
+}
+
+pub async fn delete_mcp_server_tools_by_server_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str) -> Result<()> {
+    Ok(())
+}
+
+/// Retrieve MCP servers that are active.
+pub async fn get_project_active_mcp_servers(_project_id: &str) -> Result<Vec<McpServer>> {
     let pool = super::pool().await;
-    get_project_active_mcp_servers_with_pool(pool, project_id).await
+    list_mcp_servers_with_pool(pool).await
 }
 
 pub async fn get_project_active_mcp_servers_with_pool(
     pool: &sqlx::SqlitePool,
-    project_id: &str,
+    _project_id: &str,
 ) -> Result<Vec<McpServer>> {
-    // Check if this project has any explicit rows configured in project_mcp_servers
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM project_mcp_servers WHERE project_id = ?1")
-            .bind(project_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-
-    if count == 0 {
-        // Default: Return all globally enabled MCP servers
-        let servers = sqlx::query_as::<_, McpServer>(
-            "SELECT id, name, config, is_enabled, created_at \
-             FROM mcp_servers WHERE is_enabled = 1 ORDER BY name ASC",
-        )
-        .fetch_all(pool)
-        .await?;
-        return Ok(servers);
-    }
-
-    // Explicit project selection: only where project_mcp_servers.is_enabled = 1 AND mcp_servers.is_enabled = 1
-    let servers = sqlx::query_as::<_, McpServer>(
-        "SELECT ms.id, ms.name, ms.config, ms.is_enabled, ms.created_at \
-         FROM mcp_servers ms \
-         JOIN project_mcp_servers pms ON ms.id = pms.server_id \
-         WHERE pms.project_id = ?1 AND pms.is_enabled = 1 AND ms.is_enabled = 1 \
-         ORDER BY ms.name ASC",
-    )
-    .bind(project_id)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(servers)
+    list_mcp_servers_with_pool(pool).await
 }
 
-/// Retrieve the list of server IDs currently active for a project.
-/// If not customized yet, returns all globally enabled server IDs.
 pub async fn get_project_mcp_server_ids(project_id: &str) -> Result<Vec<String>> {
     let pool = super::pool().await;
     get_project_mcp_server_ids_with_pool(pool, project_id).await
@@ -703,45 +799,14 @@ pub async fn get_project_mcp_server_ids_with_pool(
     Ok(active_servers.into_iter().map(|s| s.id).collect())
 }
 
-/// Update active MCP servers for a project.
-/// Explicitly marks each registered server as enabled (1) or disabled (0) for this project.
-pub async fn set_project_mcp_servers(project_id: &str, active_server_ids: &[String]) -> Result<()> {
-    let pool = super::pool().await;
-    set_project_mcp_servers_with_pool(pool, project_id, active_server_ids).await
+pub async fn set_project_mcp_servers(_project_id: &str, _active_server_ids: &[String]) -> Result<()> {
+    Ok(())
 }
 
 pub async fn set_project_mcp_servers_with_pool(
-    pool: &sqlx::SqlitePool,
-    project_id: &str,
-    active_server_ids: &[String],
+    _pool: &sqlx::SqlitePool,
+    _project_id: &str,
+    _active_server_ids: &[String],
 ) -> Result<()> {
-    let all_servers = list_mcp_servers_with_pool(pool).await?;
-
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-
-    sqlx::query("DELETE FROM project_mcp_servers WHERE project_id = ?1")
-        .bind(project_id)
-        .execute(&mut *tx)
-        .await?;
-
-    for s in all_servers {
-        let is_active = if active_server_ids.contains(&s.id) {
-            1
-        } else {
-            0
-        };
-        sqlx::query(
-            "INSERT INTO project_mcp_servers (project_id, server_id, is_enabled) \
-             VALUES (?1, ?2, ?3)",
-        )
-        .bind(project_id)
-        .bind(&s.id)
-        .bind(is_active)
-        .execute(&mut *tx)
-        .await?;
-    }
-
-    tx.commit().await?;
-
     Ok(())
 }
