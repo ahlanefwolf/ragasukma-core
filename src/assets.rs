@@ -1,9 +1,40 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Environment variable that explicitly turns dev mode on (`1`/`true`/`yes`/`on`)
+/// or off (`0`/`false`/`no`/`off`), regardless of build profile.
+pub const DEV_MODE_ENV: &str = "RAGASUKMA_DEV";
+
+/// Whether runtime data (DB, accounts, config, music) should live in the
+/// current directory's `assets/` folder instead of the per-user data directory.
+///
+/// Dev mode is only inferred for **debug builds** started from a directory that
+/// contains a `Cargo.toml`. Release binaries therefore never write their data
+/// into whatever Rust project the user happens to launch them from.
+/// Set `RAGASUKMA_DEV` to force the behaviour either way.
+pub fn is_dev_mode() -> bool {
+    resolve_dev_mode(
+        std::env::var(DEV_MODE_ENV).ok().as_deref(),
+        cfg!(debug_assertions),
+        Path::new("Cargo.toml").exists(),
+    )
+}
+
+/// Pure decision logic behind [`is_dev_mode`], kept separate so it can be tested
+/// without mutating process-wide environment variables or the working directory.
+fn resolve_dev_mode(env_value: Option<&str>, debug_build: bool, cargo_toml_in_cwd: bool) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("1" | "true" | "yes" | "on") => true,
+        Some("0" | "false" | "no" | "off") => false,
+        // Unset, empty, or unrecognised values fall back to auto-detection.
+        _ => debug_build && cargo_toml_in_cwd,
+    }
+}
 
 pub fn get_assets_dir() -> PathBuf {
-    // 1. In dev mode (Cargo.toml exists), prioritize local assets/ in project root
-    if PathBuf::from("Cargo.toml").exists() {
+    // 1. In dev mode (debug build run from a crate root, or RAGASUKMA_DEV=1),
+    //    prioritize local assets/ in the project root
+    if is_dev_mode() {
         let local = PathBuf::from("assets");
         let _ = fs::create_dir_all(&local);
         return local;
@@ -75,7 +106,7 @@ pub fn find_file_in_candidates(filename: &str) -> PathBuf {
     }
 
     // 6. Dev mode candidates
-    if PathBuf::from("Cargo.toml").exists() {
+    if is_dev_mode() {
         candidates.push(PathBuf::from(format!("assets/{}", filename)));
         candidates.push(PathBuf::from(filename));
         candidates.push(PathBuf::from(format!("../assets/{}", filename)));
@@ -133,7 +164,7 @@ pub fn find_all_file_candidates(filename: &str) -> Vec<PathBuf> {
     }
 
     // 6. Dev mode candidates
-    if PathBuf::from("Cargo.toml").exists() {
+    if is_dev_mode() {
         candidates.push(PathBuf::from(format!("assets/{}", filename)));
         candidates.push(PathBuf::from(filename));
         candidates.push(PathBuf::from(format!("../assets/{}", filename)));
@@ -154,4 +185,39 @@ pub fn find_all_file_candidates(filename: &str) -> Vec<PathBuf> {
         }
     }
     existing
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_dev_mode;
+
+    #[test]
+    fn auto_detect_requires_debug_build_and_cargo_toml() {
+        assert!(resolve_dev_mode(None, true, true));
+        assert!(!resolve_dev_mode(None, true, false));
+        // Release binary launched from some other Rust project must not use ./assets
+        assert!(!resolve_dev_mode(None, false, true));
+        assert!(!resolve_dev_mode(None, false, false));
+    }
+
+    #[test]
+    fn env_override_forces_dev_mode_on() {
+        for v in ["1", "true", "TRUE", " yes ", "on"] {
+            assert!(resolve_dev_mode(Some(v), false, false), "value {v:?}");
+        }
+    }
+
+    #[test]
+    fn env_override_forces_dev_mode_off() {
+        for v in ["0", "false", "No", "off"] {
+            assert!(!resolve_dev_mode(Some(v), true, true), "value {v:?}");
+        }
+    }
+
+    #[test]
+    fn unrecognised_env_value_falls_back_to_auto_detect() {
+        assert!(resolve_dev_mode(Some(""), true, true));
+        assert!(resolve_dev_mode(Some("maybe"), true, true));
+        assert!(!resolve_dev_mode(Some("maybe"), false, true));
+    }
 }

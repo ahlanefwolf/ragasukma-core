@@ -309,7 +309,9 @@ async fn call_stdio_rpc(
         pool.insert(server_key.to_string(), proc);
     }
 
-    let proc = pool.get_mut(server_key).expect("Process must be available");
+    let proc = pool
+        .get_mut(server_key)
+        .ok_or_else(|| format!("Process must be available for MCP server '{server_key}'"))?;
 
     let method = request_json
         .get("method")

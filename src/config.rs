@@ -250,7 +250,7 @@ pub fn get_app_cache_dir() -> PathBuf {
 }
 
 pub fn get_music_dir() -> PathBuf {
-    if PathBuf::from("Cargo.toml").exists() {
+    if crate::assets::is_dev_mode() {
         let local = PathBuf::from("assets").join("music");
         if local.exists() {
             return local;

@@ -27,3 +27,15 @@ __pycache__/
 venv/
 *.log
 
+# Local runtime data (dev mode writes into ./assets) - never commit
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+assets/*_accounts.json
+assets/api_llm_accounts.json
+assets/config.json
+assets/config-ai.json
+

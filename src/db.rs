@@ -187,11 +187,13 @@ pub fn get_db_path() -> PathBuf {
         return PathBuf::from(custom);
     }
 
-    // 2. In dev mode (Cargo.toml exists) prefer the *nearest* existing assets/ragasukma.db,
-    //    walking up from the current directory. This lets `cargo run` from a workspace root
-    //    pick up the real DB in a member crate's assets/ instead of silently creating an
-    //    empty one next to the root.
-    if PathBuf::from("Cargo.toml").exists() {
+    // 2. In dev mode (debug build run from a crate root, or RAGASUKMA_DEV=1) prefer the
+    //    *nearest* existing assets/ragasukma.db, walking up from the current directory.
+    //    This lets `cargo run` from a workspace root pick up the real DB in a member
+    //    crate's assets/ instead of silently creating an empty one next to the root.
+    //    Release binaries never take this branch implicitly, so launching them from an
+    //    unrelated Rust project cannot plant a database inside that project.
+    if crate::assets::is_dev_mode() {
         if let Ok(cwd) = std::env::current_dir() {
             for dir in cwd.ancestors() {
                 let candidate = dir.join("assets").join("ragasukma.db");
