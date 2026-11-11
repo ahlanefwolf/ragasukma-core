@@ -3,65 +3,65 @@
   <img src="icons/128x128@2x.png" alt="Ragasukma Logo" width="120" height="120" />
 
   # Ragasukma Core
-  **Mesin Utama Asisten Pengerjaan Berkas dan Kode**
+  **The Core Engine for Autonomous File and Project Assistance**
 
   [![License: MIT](https://img.shields.io/badge/License-MIT-F2B5D4?style=flat-square)](LICENSE)
   [![Donate](https://img.shields.io/badge/Donate-SociaBuzz-FF7043?style=flat-square)](https://sociabuzz.com/ahlanefwolf)
 
   <p align="center">
-    Bagian inti yang bertugas membaca folder proyek, mengubah isi berkas secara aman,
-    memeriksa kebenaran hasil kerja, dan mengingat riwayat pekerjaan Anda.
+    The background engine that navigates your project folders, makes safe file edits,
+    verifies work accuracy, and preserves your working history locally.
   </p>
 
 </div>
 
 ---
 
-## Apa Itu Ragasukma Core?
+## What is Ragasukma Core?
 
-Ragasukma Core adalah otak di balik layar yang menjalankan seluruh pekerjaan asisten. Bagian ini tidak memiliki tampilan visual sendiri, melainkan bekerja sebagai penggerak utama.
+Ragasukma Core is the background intelligence that executes all assistant tasks. It does not have its own user interface; instead, it acts as the primary engine.
 
-Ibarat kendaraan:
-- **Ragasukma Core** adalah mesin yang bekerja di balik kap.
-- Tampilan luar seperti layar dan tombol kendali disediakan oleh aplikasi tampilan (seperti Ragasukma TUI).
-
----
-
-## Fungsi Utama
-
-### Menyelesaikan Pekerjaan Secara Mandiri
-Anda cukup memberi perintah dengan kalimat biasa, misalnya memperbaiki kesalahan, menambahkan bagian baru, atau merapikan isi berkas. Asisten akan meneliti masalahnya, mengerjakannya langkah demi langkah, dan memastikan hasilnya selesai dengan tuntas.
-
-### Membaca dan Menulis Berkas Proyek
-Asisten dapat menelusuri folder kerja Anda, membaca berkas yang dibutuhkan, mencari kata atau bagian tertentu, dan memperbarui isinya secara tepat tanpa mengubah bagian lain yang tidak bersangkutan.
-
-### Memeriksa Sendiri Kebenaran Hasilnya
-Berbeda dengan asisten percakapan biasa yang hanya memberikan teks, sistem ini langsung menguji apakah perubahan yang dibuat benar-benar dapat berjalan dan tidak menimbulkan kerusakan pada berkas lain.
-
-### Pengaman Pembatalan (Undo)
-Setiap kali melakukan perubahan, sistem menyimpan titik pengaman. Apabila hasil perubahan dirasa kurang sesuai atau salah arah, Anda dapat mengembalikan seluruh berkas ke kondisi semula dengan aman.
-
-### Mengingat Riwayat Tanpa Perlu Internet
-Semua percakapan, catatan langkah, dan riwayat pekerjaan disimpan di komputer Anda sendiri dalam satu berkas berkas data lokal. Komputer bisa dimatikan kapan saja, dan pekerjaan dapat dilanjutkan kembali tanpa ada yang hilang.
-
-### Mendukung Banyak Akun dan Otak Sekaligus
-Sistem dapat dihubungkan ke berbagai layanan kecerdasan buatan sekaligus, mencatat penggunaan kuota masing-masing, dan berpindah antar-layanan sesuai kebutuhan.
-
-### Menambah Kemampuan Sesuai Kebutuhan
-Anda dapat menyambungkan kemampuan tambahan baru, seperti pencarian informasi lanjutan atau alat pengolah data khusus, tanpa perlu mengubah cara kerja utama sistem.
+Think of it like a vehicle:
+- **Ragasukma Core** is the engine running under the hood.
+- Visual elements such as screens, buttons, and controls are provided by interface applications (such as Ragasukma TUI).
 
 ---
 
-## Siapa yang Membutuhkan Bagian Ini?
+## Core Capabilities
 
-- **Jika Anda hanya ingin langsung memakai aplikasi:** Anda tidak perlu menyentuh atau mengatur bagian ini. Cukup gunakan **[Ragasukma TUI](../ragasukma-tui)** yang sudah siap pakai.
-- **Jika Anda ingin memasang mesin ini ke dalam aplikasi buatan sendiri:** Bagian ini dapat langsung dipasangkan sebagai inti pemroses pekerjaan.
+### Autonomous Task Execution
+You give instructions in plain language—such as fixing a bug, adding a new section, or cleaning up existing files. The assistant investigates the problem, executes the work step by step, and ensures the job is fully done.
+
+### Safe File Reading and Editing
+The assistant explores your workspace folders, inspects necessary files, searches for exact words or sections, and updates content precisely without touching unrelated parts.
+
+### Self-Verification of Results
+Unlike conversational chatbots that only suggest text, this system directly runs checks to verify that every modification works properly and does not break surrounding files.
+
+### Built-in Undo Protection
+Every time changes are made, a safety checkpoint is saved. If any outcome does not match what you expected, you can revert all files back to their original state with complete confidence.
+
+### Offline History and Privacy
+All conversations, action steps, and task histories are saved directly on your local computer in a single local database file. You can close or power down your machine anytime, then resume exactly where you left off.
+
+### Multi-Account and Multi-Model Support
+Connect multiple artificial intelligence services simultaneously, track quota usage across each one, and switch between services seamlessly whenever needed.
+
+### Extensible Skills
+Easily plug in additional capabilities—such as web research tools or custom data inspectors—without altering the engine's core operation.
 
 ---
 
-## Lisensi
+## Who is this for?
 
-Dirilis di bawah lisensi [MIT License](LICENSE) — bebas digunakan, dimodifikasi, dan dibagikan.
+- **If you just want to use the assistant directly:** You do not need to install or configure this package manually. Simply use **[Ragasukma TUI](../ragasukma-tui)**, which is ready out of the box.
+- **If you want to embed this engine into your own custom app:** This core can be integrated directly as the underlying execution driver.
 
-Dibuat oleh **Ahlan Saputra** ([@ahlanefwolf](https://github.com/ahlanefwolf)).  
-Hak Cipta (c) 2026 Ahlan Saputra.
+---
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute.
+
+Crafted by **Ahlan Saputra** ([@ahlanefwolf](https://github.com/ahlanefwolf)).  
+Copyright (c) 2026 Ahlan Saputra.
