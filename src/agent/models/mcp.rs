@@ -294,7 +294,11 @@ impl McpServer {
     }
 
     pub fn name(&self) -> &str {
-        &self.id
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
     }
 
     /// Unwrap nested MCP configurations (e.g. {"mcpServers": { ... }}, {"servers": { ... }}, or {"<server_name>": { ... }})

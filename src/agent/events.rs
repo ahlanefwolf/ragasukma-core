@@ -91,10 +91,10 @@ pub fn unregister_session_task(session_id: &str) {
     let mut bmap = get_broadcasters_map()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(sender) = bmap.get(session_id) {
-        if sender.receiver_count() == 0 {
-            bmap.remove(session_id);
-        }
+    if let Some(sender) = bmap.get(session_id)
+        && sender.receiver_count() == 0
+    {
+        bmap.remove(session_id);
     }
 }
 

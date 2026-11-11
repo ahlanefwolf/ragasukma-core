@@ -192,10 +192,7 @@ impl StdioSession {
     }
 
     fn is_alive(&mut self) -> bool {
-        match self.child.try_wait() {
-            Ok(None) => true,
-            _ => false,
-        }
+        matches!(self.child.try_wait(), Ok(None))
     }
 
     async fn send_raw(
@@ -235,13 +232,12 @@ impl StdioSession {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        if val.get("id").and_then(|v| v.as_i64()) == Some(req_id)
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+                        && (val.get("id").and_then(|v| v.as_i64()) == Some(req_id)
                             || val.get("result").is_some()
-                            || val.get("error").is_some()
-                        {
-                            return Ok(val);
-                        }
+                            || val.get("error").is_some())
+                    {
+                        return Ok(val);
                     }
                 }
                 None => return Err("MCP process closed stdout unexpectedly".to_string()),
@@ -628,6 +624,12 @@ pub struct SessionMcpRegistry {
     pub active_tools: tokio::sync::RwLock<HashMap<String, HashMap<String, Vec<McpToolDefinition>>>>,
     /// Mapping: session_id -> server_id -> Mcp-Session-Id for Streamable HTTP / SSE
     pub http_sessions: tokio::sync::RwLock<HashMap<String, HashMap<String, String>>>,
+}
+
+impl Default for SessionMcpRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionMcpRegistry {

@@ -27,6 +27,7 @@ pub struct AgentPromptContext<'a> {
 /// listings are identical for every turn of a session. Rebuilding them each turn is pure waste:
 /// it re-runs verification detection, re-serialises MCP configs, and re-allocates a long string
 /// that the model never sees change. The result is cached by [`static_prompt_cache_key`].
+#[allow(clippy::too_many_arguments)]
 fn build_static_prompt(
     project: &Project,
     allowed_folders: &[String],
@@ -224,6 +225,7 @@ fn build_static_prompt(
 /// Every input that can change the rendered text is folded in: the project (instructions and
 /// identity), attached folders, skill set, MCP server configs, and resolved MCP tools. Same key
 /// means byte-identical output, so a hit is always safe.
+#[allow(clippy::too_many_arguments)]
 fn static_prompt_cache_key(
     project: &Project,
     allowed_folders: &[String],

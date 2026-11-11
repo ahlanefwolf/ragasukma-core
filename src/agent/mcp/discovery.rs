@@ -274,24 +274,22 @@ pub fn sanitize_command_template_to_single_line(config: &str) -> String {
     }
 
     // 2. If it's wrapped in a code fence ```...```
-    if trimmed.contains("```") {
-        if let Some(start) = trimmed.find("```") {
-            let after_start = &trimmed[start + 3..];
-            let after_lang = if let Some(nl) = after_start.find('\n') {
-                let first_line = after_start[..nl].trim();
-                if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
-                    &after_start[nl + 1..]
-                } else {
-                    after_start
-                }
+    if let Some(start) = trimmed.find("```") {
+        let after_start = &trimmed[start + 3..];
+        let after_lang = if let Some(nl) = after_start.find('\n') {
+            let first_line = after_start[..nl].trim();
+            if first_line.is_empty() || first_line.split_whitespace().count() <= 2 {
+                &after_start[nl + 1..]
             } else {
                 after_start
-            };
-            if let Some(end) = after_lang.find("```") {
-                let inner = after_lang[..end].trim();
-                let lines: Vec<&str> = inner.lines().collect();
-                return collapse_command_lines(&lines);
             }
+        } else {
+            after_start
+        };
+        if let Some(end) = after_lang.find("```") {
+            let inner = after_lang[..end].trim();
+            let lines: Vec<&str> = inner.lines().collect();
+            return collapse_command_lines(&lines);
         }
     }
 
