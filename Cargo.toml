@@ -1,6 +1,6 @@
 [package]
 name = "ragasukma-core"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["Ahlan Saputra <hlnsptr@gmail.com>"]
 description = "Headless autonomous agent runtime, tool registry, and multi-provider LLM engine for Ragasukma"
