@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 /// Verify that a target path is allowed within one of the project's root folders.
 /// Seamlessly supports multi-root workspaces, folder aliases, and relative paths across all platforms.
+/// Enforces strict boundary checks to prevent path traversal and escaping via symlinks or `..`.
 pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<PathBuf> {
     if allowed_roots.is_empty() {
         bail!("Workspace has no registered root folders.");
@@ -10,101 +11,185 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
 
     let trimmed = raw_path.trim();
     let cleaned = trimmed
-        .strip_prefix("@")
-        .or_else(|| trimmed.strip_prefix("./@"))
+        .strip_prefix("@/")
+        .or_else(|| trimmed.strip_prefix('@'))
         .unwrap_or(trimmed);
 
     let input_path = Path::new(cleaned);
 
-    // 1. If absolute path: verify it starts with an allowed root
+    // Canonicalize all allowed roots for strict boundary comparison
+    let canon_roots: Vec<PathBuf> = allowed_roots
+        .iter()
+        .map(|r| {
+            let p = Path::new(r);
+            p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+        })
+        .collect();
+
+    let is_inside_canon_roots = |cand: &Path| -> bool {
+        canon_roots.iter().any(|r| cand.starts_with(r))
+    };
+
+    // 1. Direct absolute path resolution with boundary check
     if input_path.is_absolute() {
-        let canonical = if input_path.exists() {
-            input_path
-                .canonicalize()
-                .unwrap_or_else(|_| input_path.to_path_buf())
-        } else if let Some(parent) = input_path.parent() {
-            if parent.exists() {
-                parent
-                    .canonicalize()
-                    .unwrap_or_else(|_| parent.to_path_buf())
-                    .join(input_path.file_name().unwrap_or_default())
-            } else {
-                input_path.to_path_buf()
+        if let Ok(canonical) = input_path.canonicalize() {
+            if is_inside_canon_roots(&canonical) {
+                return Ok(canonical);
             }
-        } else {
-            input_path.to_path_buf()
-        };
-
-        let is_inside = allowed_roots.iter().any(|r| {
-            let r_path = Path::new(r);
-            let r_canon = r_path
-                .canonicalize()
-                .unwrap_or_else(|_| r_path.to_path_buf());
-            canonical.starts_with(&r_canon)
-        });
-
-        if !is_inside {
             bail!(
                 "Access denied: path '{}' is outside allowed workspace folders ({:?})",
                 raw_path,
                 allowed_roots
             );
         }
-        return Ok(canonical);
+
+        let mut ancestor = input_path.parent();
+        while let Some(a) = ancestor {
+            if a.exists() {
+                break;
+            }
+            ancestor = a.parent();
+        }
+
+        if let Some(existing_ancestor) = ancestor {
+            let canon_ancestor = existing_ancestor
+                .canonicalize()
+                .unwrap_or_else(|_| existing_ancestor.to_path_buf());
+
+            if !is_inside_canon_roots(&canon_ancestor) {
+                bail!(
+                    "Access denied: path '{}' is outside allowed workspace folders ({:?})",
+                    raw_path,
+                    allowed_roots
+                );
+            }
+
+            let Ok(rel) = input_path.strip_prefix(existing_ancestor) else {
+                bail!("Access denied: Path '{raw_path}' cannot be relativized to ancestor");
+            };
+
+            for comp in rel.components() {
+                if comp == std::path::Component::ParentDir {
+                    bail!("Access denied: Path '{raw_path}' contains parent traversal");
+                }
+            }
+
+            let target = canon_ancestor.join(rel);
+            if is_inside_canon_roots(&target) {
+                return Ok(target);
+            }
+        }
+
+        bail!(
+            "Access denied: path '{}' is outside allowed workspace folders ({:?})",
+            raw_path,
+            allowed_roots
+        );
     }
 
-    // 2. Relative path: Check if path matches an existing file/dir in any allowed root directly
-    for root in allowed_roots {
-        let candidate = Path::new(root).join(input_path);
-        if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or(candidate));
+    // Reject raw relative paths with leading traversal that attempt to escape workspace
+    let mut normalized_components = Vec::new();
+    for comp in input_path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if normalized_components.is_empty() {
+                    bail!(
+                        "Access denied: path '{}' escapes allowed workspace roots ({:?})",
+                        raw_path,
+                        allowed_roots
+                    );
+                }
+                normalized_components.pop();
+            }
+            std::path::Component::Normal(c) => normalized_components.push(c),
+            _ => {}
         }
     }
 
-    // 3. Multi-root folder alias matching:
-    // e.g. input_path is "frontend" or "frontend/src/App.tsx", matching root ".../frontend"
-    for root in allowed_roots {
+    let normalized_rel: PathBuf = normalized_components.into_iter().collect();
+
+    // 2. Multi-root folder alias matching
+    for (idx, root) in allowed_roots.iter().enumerate() {
         let root_p = Path::new(root);
         if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str()) {
-            if input_path == Path::new(folder_name) {
-                return Ok(root_p
-                    .canonicalize()
-                    .unwrap_or_else(|_| root_p.to_path_buf()));
+            if normalized_rel == Path::new(folder_name) || input_path == Path::new(folder_name) {
+                return Ok(canon_roots[idx].clone());
             }
-            if let Ok(rel) = input_path.strip_prefix(folder_name) {
+
+            let stripped = normalized_rel
+                .strip_prefix(folder_name)
+                .ok()
+                .or_else(|| input_path.strip_prefix(folder_name).ok());
+
+            if let Some(rel) = stripped {
                 let candidate = root_p.join(rel);
-                if candidate.exists() {
-                    return Ok(candidate.canonicalize().unwrap_or(candidate));
+                if candidate.exists()
+                    && let Ok(canon) = candidate.canonicalize()
+                    && (canon.starts_with(&canon_roots[idx]) || is_inside_canon_roots(&canon))
+                {
+                    return Ok(canon);
                 }
             }
+        }
+    }
+
+    // 3. Relative path: Check if path matches an existing file/dir in any allowed root directly
+    for (idx, root) in allowed_roots.iter().enumerate() {
+        let candidate = Path::new(root).join(&normalized_rel);
+        if candidate.exists()
+            && let Ok(canon) = candidate.canonicalize()
+            && (canon.starts_with(&canon_roots[idx]) || is_inside_canon_roots(&canon))
+        {
+            return Ok(canon);
         }
     }
 
     // 4. For new files or directories that do not exist yet (e.g. write_file)
     let candidate = if let Some(matched_alias_path) = allowed_roots.iter().find_map(|root| {
         let root_p = Path::new(root);
-        if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str())
-            && let Ok(rel) = input_path.strip_prefix(folder_name)
-        {
-            return Some(root_p.join(rel));
+        if let Some(folder_name) = root_p.file_name().and_then(|n| n.to_str()) {
+            if let Ok(rel) = normalized_rel.strip_prefix(folder_name) {
+                return Some(root_p.join(rel));
+            }
+            if let Ok(rel) = input_path.strip_prefix(folder_name) {
+                return Some(root_p.join(rel));
+            }
         }
         None
     }) {
         matched_alias_path
     } else {
         // 5. Default fallback to primary root folder
-        Path::new(&allowed_roots[0]).join(input_path)
+        Path::new(&allowed_roots[0]).join(&normalized_rel)
     };
 
     // Verify candidate path does not escape allowed workspace roots via ".." or symlinks
+    let mut ancestor = candidate.parent();
+    while let Some(a) = ancestor {
+        if a.exists() {
+            break;
+        }
+        ancestor = a.parent();
+    }
+
     let target_canonical = if candidate.exists() {
         candidate.canonicalize().unwrap_or(candidate)
-    } else if let Some(parent) = candidate.parent() {
-        if parent.exists() {
-            parent
-                .canonicalize()
-                .unwrap_or_else(|_| parent.to_path_buf())
-                .join(candidate.file_name().unwrap_or_default())
+    } else if let Some(existing_ancestor) = ancestor {
+        let canon_ancestor = existing_ancestor
+            .canonicalize()
+            .unwrap_or_else(|_| existing_ancestor.to_path_buf());
+        if let Ok(rel) = candidate.strip_prefix(existing_ancestor) {
+            for comp in rel.components() {
+                if comp == std::path::Component::ParentDir {
+                    bail!(
+                        "Access denied: path '{}' escapes allowed workspace roots ({:?})",
+                        raw_path,
+                        allowed_roots
+                    );
+                }
+            }
+            canon_ancestor.join(rel)
         } else {
             candidate
         }
@@ -112,23 +197,72 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
         candidate
     };
 
-    let is_inside = allowed_roots.iter().any(|r| {
-        let r_path = Path::new(r);
-        let r_canon = r_path
-            .canonicalize()
-            .unwrap_or_else(|_| r_path.to_path_buf());
-        target_canonical.starts_with(&r_canon)
-    });
-
-    if !is_inside {
-        bail!(
-            "Access denied: path '{}' escapes allowed workspace roots ({:?})",
-            raw_path,
-            allowed_roots
-        );
+    if is_inside_canon_roots(&target_canonical) {
+        return Ok(target_canonical);
     }
 
-    Ok(target_canonical)
+    bail!(
+        "Access denied: path '{}' escapes allowed workspace roots ({:?})",
+        raw_path,
+        allowed_roots
+    );
+}
+
+/// Atomically write content to a file, replacing it safely to prevent corruption.
+/// Writes to a temporary file in the same directory, flushes, syncs to disk, and renames.
+pub fn atomic_write_file(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let temp_name = format!(
+        ".tmp_{}_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+    );
+    let temp_path = parent.join(temp_name);
+
+    let mut temp_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
+
+    let write_res = (|| -> Result<()> {
+        temp_file.write_all(content.as_ref())?;
+        temp_file.flush()?;
+        temp_file.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_res {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
+    }
+    drop(temp_file);
+
+    if path.exists() && cfg!(windows) {
+        if let Err(_rename_err) = std::fs::rename(&temp_path, path) {
+            let _ = std::fs::remove_file(path);
+            if let Err(replace_err) = std::fs::rename(&temp_path, path) {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(replace_err.into());
+            }
+        }
+    } else if let Err(e) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e.into());
+    }
+
+    Ok(())
 }
 
 /// Convert any full path into a clean, workspace-relative path prefixed with its registered root folder name.

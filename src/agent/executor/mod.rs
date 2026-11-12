@@ -254,6 +254,9 @@ pub async fn execute_session_turn(
     session_id: &str,
     model_override: Option<&str>,
 ) -> Result<TurnOutcome> {
+    let session_lock = crate::agent::events::get_session_execution_lock(session_id);
+    let _session_permit = session_lock.lock().await;
+
     let mut guard = TurnStatusGuard::new(session_id);
     let result = execute_session_turn_inner(session_id, model_override).await;
     guard.finish().await;

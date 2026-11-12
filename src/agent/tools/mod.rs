@@ -12,9 +12,9 @@ use std::path::Path;
 pub use dialogs::{open_path_in_file_manager, pick_folder_dialog};
 pub use editor::apply_resilient_edit;
 pub use fs::{
-    create_workspace_command, create_workspace_command_with_shell, ensure_git_and_gitignore,
-    ensure_git_and_gitignore_opt, generate_file_outline, generate_smart_gitignore,
-    resolve_allowed_path, to_workspace_folder_path,
+    atomic_write_file, create_workspace_command, create_workspace_command_with_shell,
+    ensure_git_and_gitignore, ensure_git_and_gitignore_opt, generate_file_outline,
+    generate_smart_gitignore, resolve_allowed_path, to_workspace_folder_path,
 };
 pub use search::{WorkspaceFileInfo, list_workspace_files, run_workspace_grep};
 pub use tags::expand_file_tags;
@@ -698,7 +698,7 @@ pub async fn execute_tool_call(
                 std_fs::create_dir_all(parent)
                     .with_context(|| format!("Failed to create directories for '{}'", file_path))?;
             }
-            std_fs::write(&resolved, content)
+            atomic_write_file(&resolved, content.as_bytes())
                 .with_context(|| format!("Failed to write to '{}'", file_path))?;
 
             Ok(json!({
@@ -816,7 +816,7 @@ pub async fn execute_tool_call(
 
             let updated_content = apply_resilient_edit(&content, old_text, new_text, file_path)?;
 
-            std_fs::write(&resolved, &updated_content)?;
+            atomic_write_file(&resolved, updated_content.as_bytes())?;
 
             let display_path = to_workspace_folder_path(&resolved, allowed_roots);
             let result_json = serde_json::json!({

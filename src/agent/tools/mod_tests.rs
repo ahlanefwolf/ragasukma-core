@@ -161,6 +161,52 @@ fn test_expand_file_tags_no_tags() {
 }
 
 #[test]
+fn test_resolve_allowed_path_traversal_rejection() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "ragasukma_sec_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = fs::create_dir_all(&temp_dir);
+    let roots = vec![temp_dir.to_string_lossy().to_string()];
+
+    // Should reject ../ escaping
+    assert!(resolve_allowed_path("../outside.txt", &roots).is_err());
+    assert!(resolve_allowed_path("../../outside.txt", &roots).is_err());
+    assert!(resolve_allowed_path("subdir/../../outside.txt", &roots).is_err());
+
+    // Should allow valid relative path inside roots
+    let valid_path = temp_dir.join("inside.txt");
+    let _ = fs::write(&valid_path, "test");
+    assert!(resolve_allowed_path("inside.txt", &roots).is_ok());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_atomic_write_file_success() {
+    let temp_dir = std::env::temp_dir().join(format!(
+        "ragasukma_atomic_test_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = fs::create_dir_all(&temp_dir);
+    let target_file = temp_dir.join("atomic_target.txt");
+
+    assert!(atomic_write_file(&target_file, b"first content").is_ok());
+    assert_eq!(fs::read_to_string(&target_file).unwrap(), "first content");
+
+    assert!(atomic_write_file(&target_file, b"overwritten atomic content").is_ok());
+    assert_eq!(fs::read_to_string(&target_file).unwrap(), "overwritten atomic content");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
 fn test_create_workspace_command_execution() {
     let mut cmd = create_workspace_command("echo '__agent_shell_ok__'");
     let output = cmd.output().expect("Failed to execute test command");

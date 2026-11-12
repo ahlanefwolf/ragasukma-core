@@ -15,6 +15,9 @@ static RUNNING_SESSION_TASKS: OnceLock<Mutex<HashMap<String, tokio::task::AbortH
 static SESSION_CANCELLATION_FLAGS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     OnceLock::new();
 
+static SESSION_EXECUTION_LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    OnceLock::new();
+
 fn get_broadcasters_map() -> &'static Mutex<HashMap<String, broadcast::Sender<AgentSessionEvent>>> {
     SESSION_BROADCASTERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -25,6 +28,17 @@ fn get_running_tasks_map() -> &'static Mutex<HashMap<String, tokio::task::AbortH
 
 fn get_cancellation_flags_map() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     SESSION_CANCELLATION_FLAGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Retrieves or creates an exclusive per-session execution lock.
+pub fn get_session_execution_lock(session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut map = SESSION_EXECUTION_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 /// Retrieves or creates an atomic cancellation flag for a session.
@@ -95,6 +109,16 @@ pub fn unregister_session_task(session_id: &str) {
         && sender.receiver_count() == 0
     {
         bmap.remove(session_id);
+    }
+
+    let mut lmap = SESSION_EXECUTION_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(lock) = lmap.get(session_id)
+        && Arc::strong_count(lock) <= 1
+    {
+        lmap.remove(session_id);
     }
 }
 
