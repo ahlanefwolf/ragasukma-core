@@ -215,7 +215,8 @@ fn build_static_prompt(
         }
         prompt.push('\n');
     }
-    prompt.push_str("You can dynamically register new MCP servers requested by the user using `mcp_register_server`, list servers with `mcp_list_available`, and inject session credentials or toggle status using `mcp_configure_session`.\n\n");
+    prompt.push_str("You can dynamically register new MCP servers requested by the user using `mcp_register_server`, list servers with `mcp_list_available`, and inject session credentials or toggle status using `mcp_configure_session`.\n");
+    prompt.push_str("IMPORTANT: Whenever you need to use an MCP server or spawn its process in the current chat session, ALWAYS ensure it is activated for this session using `mcp_configure_session(server_id: \"...\", is_active: true)` (injecting any required session credentials/env). Never assume an MCP server is active solely because it exists in the catalog.\n\n");
 
     prompt
 }

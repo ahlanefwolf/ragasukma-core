@@ -610,7 +610,7 @@ impl AntigravityProvider {
             .header("Content-Type", "application/json")
             .header("User-Agent", ANTIGRAVITY_USER_AGENT)
             .header("X-Client-Name", "antigravity")
-            .header("X-Client-Version", "2.11.0")
+            .header("X-Client-Version", ANTIGRAVITY_IDE_VERSION)
             .json(&payload)
             .send()
             .context("Failed to send request to Antigravity stream endpoint")?;

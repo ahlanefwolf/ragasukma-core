@@ -588,7 +588,7 @@ pub async fn list_session_mcp_servers_with_pool(
     session_id: &str,
 ) -> Result<Vec<SessionMcpServer>> {
     let rows = sqlx::query_as::<_, SessionMcpServer>(
-        "SELECT session_id, server_id, env, is_active, created_at, updated_at \
+        "SELECT session_id, server_id, env, is_active, pid, created_at, updated_at \
          FROM session_mcp_servers \
          WHERE session_id = ?1 \
          ORDER BY server_id ASC",
@@ -623,7 +623,7 @@ pub async fn get_session_active_mcp_servers_with_pool(
     .await?;
 
     let session_rows = sqlx::query_as::<_, SessionMcpServer>(
-        "SELECT session_id, server_id, env, is_active, created_at, updated_at \
+        "SELECT session_id, server_id, env, is_active, pid, created_at, updated_at \
          FROM session_mcp_servers \
          WHERE session_id = ?1 AND is_active = 1 \
          ORDER BY server_id ASC",
@@ -728,6 +728,36 @@ pub async fn delete_session_mcp_server_with_pool(
         .bind(server_id)
         .execute(pool)
         .await?;
+
+    Ok(())
+}
+
+pub async fn update_session_mcp_server_pid(
+    session_id: &str,
+    server_id: &str,
+    pid: Option<i64>,
+) -> Result<()> {
+    let pool = super::pool().await;
+    update_session_mcp_server_pid_with_pool(pool, session_id, server_id, pid).await
+}
+
+pub async fn update_session_mcp_server_pid_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+    pid: Option<i64>,
+) -> Result<()> {
+    let now = now_secs();
+    sqlx::query(
+        "UPDATE session_mcp_servers SET pid = ?1, updated_at = ?2 \
+         WHERE session_id = ?3 AND server_id = ?4",
+    )
+    .bind(pid)
+    .bind(now)
+    .bind(session_id)
+    .bind(server_id)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

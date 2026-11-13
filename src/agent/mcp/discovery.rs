@@ -374,6 +374,7 @@ pub fn server_to_config(server: &McpServer) -> Option<McpServerConfig> {
         env,
         url: server.url(),
         is_enabled: true,
+        session_id: None,
     })
 }
 

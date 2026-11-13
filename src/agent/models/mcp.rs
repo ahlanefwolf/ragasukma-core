@@ -32,6 +32,9 @@ pub struct SessionMcpServer {
     pub server_id: String,
     pub env: String, // JSON key-value
     pub is_active: i64,
+    #[serde(default)]
+    #[sqlx(default)]
+    pub pid: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }

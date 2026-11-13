@@ -47,6 +47,8 @@ pub mod types {
         pub env: HashMap<String, String>,
         pub url: Option<String>,
         pub is_enabled: bool,
+        #[serde(default)]
+        pub session_id: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,9 +290,29 @@ pub async fn shutdown_all_stdio_servers() {
     }
 }
 
+/// Gracefully shuts down all active persistent stdio MCP processes belonging to a given session
+pub async fn shutdown_session_stdio_servers(session_id: &str) {
+    let mut pool = STDIO_POOL.lock().await;
+    let prefix = format!("{}:", session_id);
+    let keys_to_remove: Vec<String> = pool
+        .keys()
+        .filter(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+
+    for key in keys_to_remove {
+        if let Some(mut session) = pool.remove(&key) {
+            let _ = session.child.kill().await;
+        }
+    }
+}
+
 /// Execute JSON-RPC 2.0 request over persistent stdio transport
+#[allow(clippy::too_many_arguments)]
 async fn call_stdio_rpc(
     server_key: &str,
+    session_id: Option<&str>,
+    server_id: &str,
     command_str: &str,
     args: &[String],
     env: &HashMap<String, String>,
@@ -306,6 +328,18 @@ async fn call_stdio_rpc(
 
     if need_spawn {
         let proc = StdioSession::spawn(command_str, args, env).await?;
+        if let (Some(pid), Some(sid)) = (proc.child.id(), session_id) {
+            let s_id = sid.to_string();
+            let srv_id = server_id.to_string();
+            tokio::spawn(async move {
+                let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
+                    &s_id,
+                    &srv_id,
+                    Some(pid as i64),
+                )
+                .await;
+            });
+        }
         pool.insert(server_key.to_string(), proc);
     }
 
@@ -546,13 +580,19 @@ impl McpClient {
                 let cmd = self.config.command.as_deref().ok_or_else(|| {
                     "MCP stdio transport requires a 'command' to execute".to_string()
                 })?;
-                let server_key = if !self.config.id.is_empty() {
+                let server_id = if !self.config.id.is_empty() {
                     self.config.id.as_str()
                 } else {
                     self.config.name.as_str()
                 };
+                let server_key = match &self.config.session_id {
+                    Some(sid) if !sid.is_empty() => format!("{sid}:{server_id}"),
+                    _ => server_id.to_string(),
+                };
                 call_stdio_rpc(
-                    server_key,
+                    &server_key,
+                    self.config.session_id.as_deref(),
+                    server_id,
                     cmd,
                     &self.config.args,
                     &self.config.env,
@@ -680,6 +720,7 @@ impl SessionMcpRegistry {
         write.remove(session_id);
         let mut write_http = self.http_sessions.write().await;
         write_http.remove(session_id);
+        shutdown_session_stdio_servers(session_id).await;
     }
 }
 
@@ -699,6 +740,7 @@ impl From<&crate::agent::models::McpServer> for McpServerConfig {
             env,
             url: s.url(),
             is_enabled: true,
+            session_id: None,
         }
     }
 }
@@ -762,6 +804,7 @@ pub async fn resolve_session_mcp_tools(
         }
 
         let mut config: McpServerConfig = s.into();
+        config.session_id = Some(session_id.to_string());
         // Merge session env into config.env
         if let Ok(session_env) = serde_json::from_str::<HashMap<String, String>>(&session_state.env) {
             for (k, v) in session_env {
