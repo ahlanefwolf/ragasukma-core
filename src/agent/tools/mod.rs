@@ -1123,6 +1123,14 @@ pub async fn execute_tool_call(
                     "Extension '{}' (server_id: '{}') activated and synced in database (`session_mcp_servers.is_active = 1`, live OS PID: `{}`).",
                     server.name, server.id, live_pid
                 );
+                crate::agent::events::broadcast_session_event(
+                    session_id,
+                    crate::agent::models::AgentSessionEvent::StepInfo {
+                        iteration: 0,
+                        action: "mcp_updated".to_string(),
+                        details: Some(server.id.clone()),
+                    },
+                );
 
                 if !tools.is_empty() {
                     details.push_str("\n\nAvailable tools from this extension:\n");
@@ -1294,6 +1302,14 @@ pub async fn execute_tool_call(
                 true,
             )
             .await?;
+            crate::agent::events::broadcast_session_event(
+                session_id,
+                crate::agent::models::AgentSessionEvent::StepInfo {
+                    iteration: 0,
+                    action: "mcp_updated".to_string(),
+                    details: Some(server_id.to_string()),
+                },
+            );
 
             Ok(format!(
                 "MCP server '{}' (name: '{}', type: '{}') synced to database (`mcp_servers`).\nConfiguration: {}\nYou can activate and spawn it in this session using `mcp_configure_session(server_id: \"{}\", is_active: true)`.",
@@ -1392,6 +1408,14 @@ pub async fn execute_tool_call(
 
                 let tool_names: Vec<String> =
                     tools.iter().map(|t| t.namespaced_name.clone()).collect();
+                crate::agent::events::broadcast_session_event(
+                    session_id,
+                    crate::agent::models::AgentSessionEvent::StepInfo {
+                        iteration: 0,
+                        action: "mcp_updated".to_string(),
+                        details: Some(server.id.clone()),
+                    },
+                );
                 Ok(format!(
                     "MCP server '{}' activated and synced with database & runtime:\n- Database `session_mcp_servers`: `is_active = 1`, `pid = {}`\n- Spawned OS Process PID: `{}`\n- Discovered Tools ({}): {}",
                     server.id,
@@ -1418,6 +1442,14 @@ pub async fn execute_tool_call(
                 )
                 .await?;
                 crate::agent::executor::state::deactivate_session_extension(session_id, &server_id);
+                crate::agent::events::broadcast_session_event(
+                    session_id,
+                    crate::agent::models::AgentSessionEvent::StepInfo {
+                        iteration: 0,
+                        action: "mcp_updated".to_string(),
+                        details: Some(server_id.clone()),
+                    },
+                );
 
                 Ok(format!(
                     "MCP server '{}' deactivated and synced with database & OS runtime:\n- Runtime OS process (previous PID: `{}`) and its child process tree have been killed/terminated.\n- Database `session_mcp_servers` updated: `is_active = 0`, `pid = NULL`.",
@@ -1455,12 +1487,28 @@ pub async fn execute_tool_call(
 
             if scope == "session" {
                 crate::repository::agent::remove_session_mcp_server(session_id, &server_id).await?;
+                crate::agent::events::broadcast_session_event(
+                    session_id,
+                    crate::agent::models::AgentSessionEvent::StepInfo {
+                        iteration: 0,
+                        action: "mcp_updated".to_string(),
+                        details: Some(server_id.clone()),
+                    },
+                );
                 Ok(format!(
                     "MCP server '{}' removed from current session (`session_mcp_servers` row deleted and session runtime OS process terminated).",
                     server_id
                 ))
             } else {
                 crate::repository::agent::delete_mcp_server(&server_id).await?;
+                crate::agent::events::broadcast_session_event(
+                    session_id,
+                    crate::agent::models::AgentSessionEvent::StepInfo {
+                        iteration: 0,
+                        action: "mcp_updated".to_string(),
+                        details: Some(server_id.clone()),
+                    },
+                );
                 Ok(format!(
                     "MCP server '{}' deleted globally (`mcp_servers` and all `session_mcp_servers` rows deleted, and all running OS processes across sessions terminated).",
                     server_id
