@@ -232,18 +232,22 @@ pub fn get_dynamic_agent_tools_schema(
         }
     }));
 
-    // Dynamic MCP Management Tools (Session & Catalog Lifecycle)
+    // Dynamic MCP Management Tools (On-Demand Full Database & Runtime Process Sync)
     schema.push(json!({
         "type": "function",
         "function": {
             "name": "mcp_register_server",
-            "description": "Register or update an MCP server blueprint globally into the system catalog (mcp_servers). Specify server id (e.g. 'figcraft', 'cartesia'), transport type ('stdio' or 'http'), command or URL, and optional args.",
+            "description": "Register or update an MCP server in the global database catalog (mcp_servers). If the server is already running, its old runtime process is restarted/cleared so the new config takes effect.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "server_id": {
                         "type": "string",
-                        "description": "Unique identifier for the MCP server (e.g. 'figcraft', 'cartesia', 'playwright')"
+                        "description": "Unique identifier for the MCP server (e.g. 'gridcraft', 'figcraft', 'playwright')"
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional display name for the MCP server (defaults to server_id)"
                     },
                     "type": {
                         "type": "string",
@@ -252,12 +256,16 @@ pub fn get_dynamic_agent_tools_schema(
                     },
                     "command_or_url": {
                         "type": "string",
-                        "description": "The executable CLI command (e.g. 'figcraft-cli') or HTTP endpoint URL (e.g. 'https://mcp.cartesia.ai/mcp')"
+                        "description": "The executable CLI command (e.g. '/usr/bin/gridcraft') or HTTP endpoint URL (e.g. 'https://mcp.cartesia.ai/mcp')"
                     },
                     "args": {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "CLI arguments for stdio transport (e.g. ['mcp'])"
+                    },
+                    "env": {
+                        "type": "object",
+                        "description": "Optional default environment variables stored in mcp_servers.config"
                     }
                 },
                 "required": ["server_id", "type", "command_or_url"]
@@ -269,7 +277,7 @@ pub fn get_dynamic_agent_tools_schema(
         "type": "function",
         "function": {
             "name": "mcp_configure_session",
-            "description": "Configure an MCP server for the current chat session. Injects session-specific credentials (such as API keys or auth tokens) and toggles active status.",
+            "description": "Activate or deactivate an MCP server for the current chat session with full database (session_mcp_servers) and OS process runtime sync. Setting is_active=true writes to DB, immediately spawns the MCP server process, performs handshake/tool discovery, and records the OS PID in DB. Setting is_active=false immediately kills the running OS process (and its child tree), clears runtime state, and updates DB (is_active=0, pid=NULL).",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -279,11 +287,34 @@ pub fn get_dynamic_agent_tools_schema(
                     },
                     "env": {
                         "type": "object",
-                        "description": "Key-value map of environment variables or secret API tokens for this session (e.g. {'CARTESIA_API_KEY': 'sk_...'})"
+                        "description": "Optional key-value map of session environment variables or secret API tokens (e.g. {'API_KEY': 'sk_...'})"
                     },
                     "is_active": {
                         "type": "boolean",
-                        "description": "Whether this server should be active (true) or deactivated (false) in the current session"
+                        "description": "true to activate & spawn the MCP server process in this session; false to kill its OS process and deactivate it in DB"
+                    }
+                },
+                "required": ["server_id"]
+            }
+        }
+    }));
+
+    schema.push(json!({
+        "type": "function",
+        "function": {
+            "name": "mcp_remove_server",
+            "description": "Delete/remove an MCP server and immediately kill any running OS processes for it. Use scope='session' to remove it only from the current session (session_mcp_servers), or scope='global' (default) to delete it completely from the global catalog (mcp_servers) and all sessions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "The identifier of the MCP server to remove/delete"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["global", "session"],
+                        "description": "'global' (default) deletes from mcp_servers & all sessions; 'session' removes only from current session_mcp_servers"
                     }
                 },
                 "required": ["server_id"]
@@ -295,21 +326,40 @@ pub fn get_dynamic_agent_tools_schema(
         "type": "function",
         "function": {
             "name": "mcp_list_available",
-            "description": "List all registered MCP servers in the global catalog and check their status in the current session.",
+            "description": "On-demand inspection of registered MCP servers in the database (mcp_servers & session_mcp_servers), synced with live OS process status/PID, full config (command, args, url, env), and session env. Call this ONLY when the user request or task involves MCP servers or external extensions.",
             "parameters": {
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "server_id": {
+                        "type": "string",
+                        "description": "Optional MCP server ID to inspect a specific server's config and live session status/PID."
+                    }
+                }
             }
         }
     }));
 
     // 2.5 Active Project MCP Tools (Registered directly as native LLM functions)
+    let mut seen_names: std::collections::HashSet<String> = schema
+        .iter()
+        .filter_map(|item| {
+            item.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
     for tool in mcp_tools {
+        if !seen_names.insert(tool.namespaced_name.clone()) {
+            continue;
+        }
         let desc = tool
             .definition
             .description
             .clone()
-            .unwrap_or_else(|| format!("Active MCP tool '{}' from server '{}'", tool.original_name, tool.server_name));
+            .unwrap_or_else(|| format!("Execute MCP tool '{}'", tool.original_name));
+        let prefixed_desc = format!("[MCP: {}] {}", tool.server_name, desc);
         let params = if tool.definition.input_schema.is_object() {
             tool.definition.input_schema.clone()
         } else {
@@ -323,7 +373,7 @@ pub fn get_dynamic_agent_tools_schema(
             "type": "function",
             "function": {
                 "name": tool.namespaced_name,
-                "description": desc,
+                "description": prefixed_desc,
                 "parameters": params
             }
         }));
@@ -1016,8 +1066,11 @@ pub async fn execute_tool_call(
             let extension_name = args
                 .get("extension_name")
                 .and_then(|v| v.as_str())
-                .context("Parameter 'extension_name' is required")?;
-            crate::agent::executor::state::activate_session_extension(session_id, extension_name);
+                .context("Parameter 'extension_name' is required")?
+                .trim();
+            if extension_name.is_empty() {
+                bail!("Parameter 'extension_name' cannot be empty");
+            }
 
             let all_servers = crate::repository::agent::list_mcp_servers()
                 .await
@@ -1026,13 +1079,51 @@ pub async fn execute_tool_call(
                 .into_iter()
                 .find(|s| s.name.eq_ignore_ascii_case(extension_name) || s.id.eq_ignore_ascii_case(extension_name));
 
-            let mut details = format!(
-                "Extension '{}' has been successfully activated for this session.",
-                extension_name
-            );
-
             if let Some(server) = matched_server {
-                let tools = crate::agent::mcp::resolve_active_mcp_tools(&[server]).await;
+                let existing_env = crate::repository::agent::list_session_mcp_servers(session_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|sc| sc.server_id == server.id)
+                    .map(|sc| sc.env)
+                    .unwrap_or_else(|| "{}".to_string());
+
+                crate::repository::agent::upsert_session_mcp_server(
+                    session_id,
+                    &server.id,
+                    &existing_env,
+                    true,
+                )
+                .await?;
+                crate::agent::executor::state::activate_session_extension(session_id, &server.id);
+
+                let active_for_server: Vec<_> =
+                    crate::repository::agent::get_session_active_mcp_servers(session_id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|(srv, _)| srv.id == server.id)
+                        .collect();
+                let tools = crate::agent::mcp::resolve_session_mcp_tools(
+                    session_id,
+                    &active_for_server,
+                )
+                .await;
+
+                let live_pid = crate::repository::agent::list_session_mcp_servers(session_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|sc| sc.server_id == server.id)
+                    .and_then(|sc| sc.pid)
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "none (http or not spawned)".to_string());
+
+                let mut details = format!(
+                    "Extension '{}' (server_id: '{}') activated and synced in database (`session_mcp_servers.is_active = 1`, live OS PID: `{}`).",
+                    server.name, server.id, live_pid
+                );
+
                 if !tools.is_empty() {
                     details.push_str("\n\nAvailable tools from this extension:\n");
                     for t in tools {
@@ -1049,24 +1140,29 @@ pub async fn execute_tool_call(
 
                         if let Some(usage) = cmd_str {
                             details.push_str(&format!(
-                                "- `{}`: {}\n  Usage: `{}`\n",
-                                t.original_name, desc, usage
+                                "- `{}` (server tool `{}`): {}\n  Usage: `{}`\n",
+                                t.namespaced_name, t.original_name, desc, usage
                             ));
                         } else {
-                            details.push_str(&format!("- `{}`: {}\n", t.original_name, desc));
+                            details.push_str(&format!(
+                                "- `{}` (server tool `{}`): {}\n",
+                                t.namespaced_name, t.original_name, desc
+                            ));
                         }
                     }
-                    details.push_str("\nYou can now execute these commands or tools directly.");
+                    details.push_str("\nYou can now execute these tools directly.");
                 } else {
                     details.push_str(
-                        " However, no tools were found or discovered for this extension.",
+                        " However, no tools were discovered or the server handshake failed.",
                     );
                 }
+                Ok(details)
             } else {
-                details.push_str(" Its dedicated tools are now available for execution.");
+                bail!(
+                    "MCP server '{}' not found in the database catalog (`mcp_servers`). Call `mcp_list_available` to inspect registered servers or `mcp_register_server` to register it first.",
+                    extension_name
+                );
             }
-
-            Ok(details)
         }
 
         "use_skill" => {
@@ -1144,10 +1240,29 @@ pub async fn execute_tool_call(
                 bail!("Parameter 'command_or_url' cannot be empty");
             }
 
+            let server_name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(server_id);
+
+            let env_obj = args
+                .get("env")
+                .filter(|v| v.is_object())
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+
             let config_json = if transport_type == "http" {
-                serde_json::json!({
-                    "url": command_or_url
-                })
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "url".to_string(),
+                    serde_json::Value::String(command_or_url.to_string()),
+                );
+                if env_obj.as_object().is_some_and(|m| !m.is_empty()) {
+                    map.insert("env".to_string(), env_obj);
+                }
+                serde_json::Value::Object(map)
             } else {
                 let args_list: Vec<String> = args
                     .get("args")
@@ -1159,34 +1274,41 @@ pub async fn execute_tool_call(
                     })
                     .unwrap_or_default();
 
-                serde_json::json!({
-                    "command": command_or_url,
-                    "args": args_list
-                })
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "command".to_string(),
+                    serde_json::Value::String(command_or_url.to_string()),
+                );
+                map.insert("args".to_string(), serde_json::json!(args_list));
+                if env_obj.as_object().is_some_and(|m| !m.is_empty()) {
+                    map.insert("env".to_string(), env_obj);
+                }
+                serde_json::Value::Object(map)
             };
 
+            crate::agent::mcp::shutdown_server_across_all_sessions(server_id).await;
             crate::repository::agent::create_or_update_mcp_server(
                 server_id,
-                server_id,
+                server_name,
                 &config_json.to_string(),
                 true,
             )
             .await?;
 
             Ok(format!(
-                "MCP server '{}' ({}) successfully registered.\nConfiguration: {}\nYou can activate it using `activate_extension(extension_name: \"{}\")`.",
-                server_id, transport_type, config_json, server_id
+                "MCP server '{}' (name: '{}', type: '{}') synced to database (`mcp_servers`).\nConfiguration: {}\nYou can activate and spawn it in this session using `mcp_configure_session(server_id: \"{}\", is_active: true)`.",
+                server_id, server_name, transport_type, config_json, server_id
             ))
         }
 
         "mcp_configure_session" => {
-            let server_id = args
+            let server_id_arg = args
                 .get("server_id")
                 .or_else(|| args.get("id"))
                 .and_then(|v| v.as_str())
                 .context("Parameter 'server_id' is required")?
                 .trim();
-            if server_id.is_empty() {
+            if server_id_arg.is_empty() {
                 bail!("Parameter 'server_id' cannot be empty");
             }
 
@@ -1195,56 +1317,205 @@ pub async fn execute_tool_call(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
 
+            let all_servers = crate::repository::agent::list_mcp_servers()
+                .await
+                .unwrap_or_default();
+            let matched_server = all_servers
+                .into_iter()
+                .find(|s| s.id.eq_ignore_ascii_case(server_id_arg) || s.name.eq_ignore_ascii_case(server_id_arg));
+
+            let server_id = matched_server
+                .as_ref()
+                .map(|s| s.id.clone())
+                .unwrap_or_else(|| server_id_arg.to_string());
+
+            let existing_sess_entry = crate::repository::agent::list_session_mcp_servers(session_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|sc| sc.server_id == server_id);
+
             let env_str = if let Some(env_val) = args.get("env") {
                 if env_val.is_object() {
                     env_val.to_string()
                 } else {
-                    "{}".to_string()
+                    existing_sess_entry
+                        .as_ref()
+                        .map(|sc| sc.env.clone())
+                        .unwrap_or_else(|| "{}".to_string())
                 }
             } else {
-                "{}".to_string()
+                existing_sess_entry
+                    .as_ref()
+                    .map(|sc| sc.env.clone())
+                    .unwrap_or_else(|| "{}".to_string())
             };
 
-            crate::repository::agent::upsert_session_mcp_server(
-                session_id,
-                server_id,
-                &env_str,
-                is_active,
-            )
-            .await?;
-
             if is_active {
-                crate::agent::executor::state::activate_session_extension(session_id, server_id);
+                let server = matched_server.with_context(|| {
+                    format!(
+                        "MCP server '{}' not found in `mcp_servers`. Call `mcp_list_available` or `mcp_register_server` first.",
+                        server_id_arg
+                    )
+                })?;
+
+                crate::repository::agent::upsert_session_mcp_server(
+                    session_id,
+                    &server.id,
+                    &env_str,
+                    true,
+                )
+                .await?;
+                crate::agent::executor::state::activate_session_extension(session_id, &server.id);
+
+                let active_for_server: Vec<_> =
+                    crate::repository::agent::get_session_active_mcp_servers(session_id)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|(srv, _)| srv.id == server.id)
+                        .collect();
+                let tools = crate::agent::mcp::resolve_session_mcp_tools(
+                    session_id,
+                    &active_for_server,
+                )
+                .await;
+
+                let live_pid = crate::repository::agent::list_session_mcp_servers(session_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|sc| sc.server_id == server.id)
+                    .and_then(|sc| sc.pid)
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "none (http or not spawned)".to_string());
+
+                let tool_names: Vec<String> =
+                    tools.iter().map(|t| t.namespaced_name.clone()).collect();
+                Ok(format!(
+                    "MCP server '{}' activated and synced with database & runtime:\n- Database `session_mcp_servers`: `is_active = 1`, `pid = {}`\n- Spawned OS Process PID: `{}`\n- Discovered Tools ({}): {}",
+                    server.id,
+                    live_pid,
+                    live_pid,
+                    tool_names.len(),
+                    if tool_names.is_empty() {
+                        "none".to_string()
+                    } else {
+                        tool_names.join(", ")
+                    }
+                ))
             } else {
-                crate::agent::executor::state::deactivate_session_extension(session_id, server_id);
+                let previous_pid = existing_sess_entry
+                    .and_then(|sc| sc.pid)
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "none".to_string());
+
+                crate::repository::agent::upsert_session_mcp_server(
+                    session_id,
+                    &server_id,
+                    &env_str,
+                    false,
+                )
+                .await?;
+                crate::agent::executor::state::deactivate_session_extension(session_id, &server_id);
+
+                Ok(format!(
+                    "MCP server '{}' deactivated and synced with database & OS runtime:\n- Runtime OS process (previous PID: `{}`) and its child process tree have been killed/terminated.\n- Database `session_mcp_servers` updated: `is_active = 0`, `pid = NULL`.",
+                    server_id, previous_pid
+                ))
+            }
+        }
+
+        "mcp_remove_server" => {
+            let server_id_arg = args
+                .get("server_id")
+                .or_else(|| args.get("id"))
+                .and_then(|v| v.as_str())
+                .context("Parameter 'server_id' is required")?
+                .trim();
+            if server_id_arg.is_empty() {
+                bail!("Parameter 'server_id' cannot be empty");
             }
 
-            Ok(format!(
-                "MCP server '{}' session configuration updated: is_active={}, env configured.",
-                server_id, is_active
-            ))
+            let scope = args
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("global")
+                .trim()
+                .to_lowercase();
+
+            let all_servers = crate::repository::agent::list_mcp_servers()
+                .await
+                .unwrap_or_default();
+            let server_id = all_servers
+                .into_iter()
+                .find(|s| s.id.eq_ignore_ascii_case(server_id_arg) || s.name.eq_ignore_ascii_case(server_id_arg))
+                .map(|s| s.id)
+                .unwrap_or_else(|| server_id_arg.to_string());
+
+            if scope == "session" {
+                crate::repository::agent::remove_session_mcp_server(session_id, &server_id).await?;
+                Ok(format!(
+                    "MCP server '{}' removed from current session (`session_mcp_servers` row deleted and session runtime OS process terminated).",
+                    server_id
+                ))
+            } else {
+                crate::repository::agent::delete_mcp_server(&server_id).await?;
+                Ok(format!(
+                    "MCP server '{}' deleted globally (`mcp_servers` and all `session_mcp_servers` rows deleted, and all running OS processes across sessions terminated).",
+                    server_id
+                ))
+            }
         }
 
         "mcp_list_available" => {
-            let servers = crate::repository::agent::list_mcp_servers().await?;
-            if servers.is_empty() {
-                return Ok("No MCP servers are currently registered in the system catalog.".to_string());
-            }
-
+            let filter_id = args
+                .get("server_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty());
+            let all_servers = crate::repository::agent::list_mcp_servers()
+                .await
+                .unwrap_or_default();
             let session_configs = crate::repository::agent::list_session_mcp_servers(session_id)
                 .await
                 .unwrap_or_default();
-            let mut output = String::from("### 🌐 System MCP Servers:\n");
-            for s in servers {
-                let session_info = session_configs.iter().find(|sc| sc.server_id == s.id);
-                let status_str = match session_info {
-                    Some(sc) if sc.is_active == 1 => "Active in current session",
-                    Some(_) => "Disabled in current session",
-                    None => "Dormant (available to activate)",
-                };
-                output.push_str(&format!("- `{}` (type: {}): {}\n", s.id, s.r#type, status_str));
+
+            let servers: Vec<_> = all_servers
+                .into_iter()
+                .filter(|s| filter_id.is_none_or(|fid| s.id == fid || s.name == fid))
+                .collect();
+
+            if servers.is_empty() {
+                if let Some(fid) = filter_id {
+                    return Ok(format!(
+                        "No MCP server matching '{}' found in the catalog. Use `mcp_register_server` to add one.",
+                        fid
+                    ));
+                }
+                return Ok("No MCP servers registered in the global catalog. Use `mcp_register_server` to add one.".to_string());
             }
-            output.push_str("\nTo activate a dormant server in this session, call `activate_extension(extension_name: \"<server_id>\")`.");
+
+            let mut output = String::from("### Registered MCP Servers (On-Demand Catalog):\n");
+            for s in servers {
+                let sess_entry = session_configs.iter().find(|sc| sc.server_id == s.id);
+                let status_str = match sess_entry {
+                    Some(sc) if sc.is_active != 0 => "✅ Active in current session",
+                    Some(_) => "⏸️ Disabled in current session",
+                    None => "💤 Dormant (Not configured for this session)",
+                };
+                let pid_str = sess_entry
+                    .and_then(|sc| sc.pid)
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "none".to_string());
+                let sess_env_str = sess_entry
+                    .map(|sc| sc.env.as_str())
+                    .unwrap_or("{}");
+                output.push_str(&format!(
+                    "- **`{}`** (name: `{}`, type: `{}`)\n  - Status: {} (PID: `{}`)\n  - Server Config (`mcp_servers.config`): `{}`\n  - Session Env (`session_mcp_servers.env`): `{}`\n",
+                    s.id, s.name, s.r#type, status_str, pid_str, s.config, sess_env_str
+                ));
+            }
             Ok(output)
         }
 

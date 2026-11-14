@@ -322,35 +322,46 @@ pub async fn reset_stale_running_sessions_with_pool(pool: &sqlx::SqlitePool) -> 
 }
 
 pub async fn delete_session(id: &str) -> Result<()> {
-    // The session is going away, so its in-memory file backups must go with it. This is the
-    // release point for the snapshot store: a turn boundary must keep the backups (the
-    // rollback contract is per session), a deletion must not.
-    crate::agent::snapshot::release_session(id);
-
-    // Same reasoning for the per-session turn generation counter: no turn can still be in
-    // flight once the session is deleted, so this is the only safe point to reclaim it.
-    // `is_latest_turn` deliberately never prunes the entry, because a stale cleanup must not
-    // disown a newer turn that is still running.
-    crate::agent::executor::forget_session_generation(id);
-
-    // Reclaim the per-session process-global registries owned by `agent::events`: the event
-    // broadcaster, the running-task handle, and the cancellation flag. Those maps are populated
-    // lazily on first use, so without this a long-running host leaks one entry (plus a
-    // capacity-2048 broadcast channel) per deleted session forever. Deletion is the only point
-    // where no turn can still legitimately reference the session, so it is the safe release site.
-    crate::agent::events::cleanup_session(id);
-
     let pool = super::pool().await;
     delete_session_with_pool(pool, id).await
 }
 
 pub async fn delete_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
-    // All five statements are one logical deletion. Running them outside a transaction
-    // means a mid-way failure leaves a session with goals but no evidence, or evidence
-    // pointing at goals that no longer exist.
+    // 1. Fetch all (server_id, pid) registered for this session before deleting rows
+    let mcp_rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+
+    // 2. Stop in-memory MCP runtime and persistent stdio processes for this session
+    crate::agent::mcp::SESSION_MCP_REGISTRY
+        .clear_session(id)
+        .await;
+
+    // 3. Terminate any recorded OS PID that may still be alive
+    for (_server_id, pid_opt) in mcp_rows {
+        if let Some(pid) = pid_opt {
+            crate::agent::mcp::kill_os_pid(pid).await;
+        }
+    }
+
+    // Reclaim in-memory file snapshots, turn generation counters, and event broadcasters
+    crate::agent::snapshot::release_session(id);
+    crate::agent::executor::forget_session_generation(id);
+    crate::agent::events::cleanup_session(id);
+
+    // 4. All database deletions run inside a single transaction
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    // 1. Clean up goal verifications and goal evidence for any goal in this session
+    // Clean up session MCP server associations
+    sqlx::query("DELETE FROM session_mcp_servers WHERE session_id = ?1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Clean up goal verifications and goal evidence for any goal in this session
     sqlx::query("DELETE FROM goal_verifications WHERE goal_id IN (SELECT id FROM goals WHERE session_id = ?1)")
         .bind(id)
         .execute(&mut *tx)
@@ -361,18 +372,18 @@ pub async fn delete_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Resu
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    // 2. Clean up goals belonging to this session
+    // Clean up goals belonging to this session
     sqlx::query("DELETE FROM goals WHERE session_id = ?1")
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    // 3. Purge orphaned evidence_cache entries no longer attached to any active goal
+    // Purge orphaned evidence_cache entries no longer attached to any active goal
     sqlx::query(
         "DELETE FROM evidence_cache WHERE id NOT IN (SELECT evidence_id FROM goal_evidence)",
     )
     .execute(&mut *tx)
     .await?;
-    // 4. Delete the session itself (messages cascade via foreign key)
+    // Delete the session itself (messages cascade via foreign key)
     sqlx::query("DELETE FROM sessions WHERE id = ?1")
         .bind(id)
         .execute(&mut *tx)
@@ -407,7 +418,22 @@ pub async fn delete_expired_sessions_with_pool(
             .fetch_all(pool)
             .await?;
 
+    let expired_mcp_rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT server_id, pid FROM session_mcp_servers WHERE session_id IN (SELECT id FROM sessions WHERE updated_at < ?1)",
+    )
+    .bind(cutoff_epoch_secs)
+    .fetch_all(pool)
+    .await?;
+
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    // Remove session MCP server records belonging to expired sessions.
+    sqlx::query(
+        "DELETE FROM session_mcp_servers WHERE session_id IN (SELECT id FROM sessions WHERE updated_at < ?1)",
+    )
+    .bind(cutoff_epoch_secs)
+    .execute(&mut *tx)
+    .await?;
 
     // Remove goals (and their dependent rows) belonging to expired sessions first.
     sqlx::query(
@@ -436,10 +462,20 @@ pub async fn delete_expired_sessions_with_pool(
 
     tx.commit().await?;
 
-    // Reclaim per-session in-memory registries now the rows are gone.
+    // Reclaim per-session in-memory registries and MCP processes now the rows are gone.
     for id in &expired_ids {
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .clear_session(id)
+            .await;
+        crate::agent::snapshot::release_session(id);
         crate::agent::executor::forget_session_generation(id);
         crate::agent::events::cleanup_session(id);
+    }
+
+    for (_server_id, pid_opt) in expired_mcp_rows {
+        if let Some(pid) = pid_opt {
+            crate::agent::mcp::kill_os_pid(pid).await;
+        }
     }
 
     Ok(res.rows_affected())
@@ -567,16 +603,160 @@ pub async fn delete_mcp_server(id: &str) -> Result<()> {
 }
 
 pub async fn delete_mcp_server_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
+    // 1. Fetch all (session_id, pid) pairs registered for this server across all sessions
+    let session_rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT session_id, pid FROM session_mcp_servers WHERE server_id = ?1",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+
+    // 2. Shutdown any active stdio process and clear SESSION_MCP_REGISTRY across all sessions
+    crate::agent::mcp::shutdown_server_across_all_sessions(id).await;
+
+    // Terminate any recorded OS PID that may still be alive
+    for (_session_id, pid_opt) in session_rows {
+        if let Some(pid) = pid_opt {
+            crate::agent::mcp::kill_os_pid(pid).await;
+        }
+    }
+
+    // 3. Explicitly remove from session_mcp_servers, mcp_server_tools (if present), and mcp_servers
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    sqlx::query("DELETE FROM session_mcp_servers WHERE server_id = ?1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    let _ = sqlx::query("DELETE FROM mcp_server_tools WHERE server_id = ?1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await;
+
     sqlx::query("DELETE FROM mcp_servers WHERE id = ?1")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
 // ============================================================================
 // SESSION MCP SERVERS (DYNAMIC PER-SESSION & ENV)
 // ============================================================================
+
+/// Gracefully shuts down all MCP servers across all sessions:
+/// 1. Terminates all active child processes in `STDIO_POOL` (`shutdown_all_stdio_servers()`).
+/// 2. Queries all rows in `session_mcp_servers WHERE pid IS NOT NULL`, kills each OS `pid`,
+///    clears `SESSION_MCP_REGISTRY`, and resets `pid = NULL` in the database.
+pub async fn shutdown_all_mcp_servers() -> Result<()> {
+    let pool = super::pool().await;
+    shutdown_all_mcp_servers_with_pool(pool).await
+}
+
+pub async fn shutdown_all_mcp_servers_with_pool(pool: &sqlx::SqlitePool) -> Result<()> {
+    crate::agent::mcp::shutdown_all_stdio_servers().await;
+
+    let active_rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT session_id, server_id, pid FROM session_mcp_servers WHERE pid IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (session_id, server_id, pid) in active_rows {
+        crate::agent::mcp::kill_os_pid(pid).await;
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .remove_server(&session_id, &server_id)
+            .await;
+    }
+
+    sqlx::query("UPDATE session_mcp_servers SET pid = NULL")
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// Sweeps and terminates any orphaned MCP child processes left behind in `session_mcp_servers`
+/// from a previous crashed or force-closed application run, and resets all `pid` columns to `NULL`.
+pub async fn cleanup_orphaned_mcp_processes_on_startup() -> Result<usize> {
+    let pool = super::pool().await;
+    cleanup_orphaned_mcp_processes_on_startup_with_pool(pool).await
+}
+
+pub async fn cleanup_orphaned_mcp_processes_on_startup_with_pool(
+    pool: &sqlx::SqlitePool,
+) -> Result<usize> {
+    let orphaned_rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT session_id, server_id, pid FROM session_mcp_servers WHERE pid IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let count = orphaned_rows.len();
+    for (session_id, server_id, pid) in orphaned_rows {
+        crate::agent::mcp::kill_os_pid(pid).await;
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .remove_server(&session_id, &server_id)
+            .await;
+    }
+
+    sqlx::query("UPDATE session_mcp_servers SET pid = NULL")
+        .execute(pool)
+        .await?;
+
+    Ok(count)
+}
+
+/// Synchronizes in-memory `STDIO_POOL` and OS process liveness with `session_mcp_servers.pid`
+/// for a given session. If a process has exited on its own, cleans it from the pool and resets `pid = NULL`.
+pub async fn sync_session_mcp_runtime(session_id: &str) -> Result<()> {
+    let pool = super::pool().await;
+    sync_session_mcp_runtime_with_pool(pool, session_id).await
+}
+
+pub async fn sync_session_mcp_runtime_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<()> {
+    // 1. Sweep any dead processes in STDIO_POOL
+    let dead_pairs = crate::agent::mcp::sweep_dead_stdio_servers().await;
+    for (dead_sid, dead_srv) in dead_pairs {
+        let _ = update_session_mcp_server_pid_with_pool(pool, &dead_sid, &dead_srv, None).await;
+    }
+
+    // 2. Reconcile recorded rows for this session against STDIO_POOL and OS PID liveness
+    let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
+        "SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1",
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await?;
+
+    for (server_id, pid_opt) in rows {
+        if let Some(live_pid) =
+            crate::agent::mcp::check_stdio_server_alive(session_id, &server_id).await
+        {
+            if pid_opt != Some(i64::from(live_pid)) {
+                update_session_mcp_server_pid_with_pool(
+                    pool,
+                    session_id,
+                    &server_id,
+                    Some(i64::from(live_pid)),
+                )
+                .await?;
+            }
+        } else if let Some(pid) = pid_opt
+            && !crate::agent::mcp::is_os_pid_alive(pid).await
+        {
+            update_session_mcp_server_pid_with_pool(pool, session_id, &server_id, None).await?;
+        }
+    }
+
+    Ok(())
+}
 
 pub async fn list_session_mcp_servers(session_id: &str) -> Result<Vec<SessionMcpServer>> {
     let pool = super::pool().await;
@@ -587,6 +767,8 @@ pub async fn list_session_mcp_servers_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> Result<Vec<SessionMcpServer>> {
+    let _ = sync_session_mcp_runtime_with_pool(pool, session_id).await;
+
     let rows = sqlx::query_as::<_, SessionMcpServer>(
         "SELECT session_id, server_id, env, is_active, pid, created_at, updated_at \
          FROM session_mcp_servers \
@@ -611,6 +793,8 @@ pub async fn get_session_active_mcp_servers_with_pool(
     pool: &sqlx::SqlitePool,
     session_id: &str,
 ) -> Result<Vec<(McpServer, SessionMcpServer)>> {
+    let _ = sync_session_mcp_runtime_with_pool(pool, session_id).await;
+
     let rows = sqlx::query_as::<_, McpServer>(
         "SELECT s.id, s.type, s.config, s.handshake, s.created_at, s.updated_at \
          FROM session_mcp_servers sms \
@@ -642,6 +826,29 @@ pub async fn get_session_active_mcp_servers_with_pool(
     Ok(result)
 }
 
+async fn stop_and_clear_session_mcp_runtime(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+) -> Result<()> {
+    let existing_pid: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT pid FROM session_mcp_servers WHERE session_id = ?1 AND server_id = ?2",
+    )
+    .bind(session_id)
+    .bind(server_id)
+    .fetch_optional(pool)
+    .await?;
+
+    crate::agent::mcp::shutdown_session_stdio_server(session_id, server_id).await;
+
+    if let Some(Some(pid)) = existing_pid {
+        crate::agent::mcp::kill_os_pid(pid).await;
+    }
+
+    crate::agent::executor::state::deactivate_session_extension(session_id, server_id);
+    Ok(())
+}
+
 pub async fn upsert_session_mcp_server(
     session_id: &str,
     server_id: &str,
@@ -659,24 +866,47 @@ pub async fn upsert_session_mcp_server_with_pool(
     env: &str,
     is_active: bool,
 ) -> Result<()> {
+    if !is_active {
+        stop_and_clear_session_mcp_runtime(pool, session_id, server_id).await?;
+    }
+
     let now = now_secs();
     let active_int = if is_active { 1 } else { 0 };
 
-    sqlx::query(
-        "INSERT INTO session_mcp_servers (session_id, server_id, env, is_active, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
-         ON CONFLICT(session_id, server_id) DO UPDATE SET \
-            env = excluded.env, \
-            is_active = excluded.is_active, \
-            updated_at = excluded.updated_at",
-    )
-    .bind(session_id)
-    .bind(server_id)
-    .bind(env)
-    .bind(active_int)
-    .bind(now)
-    .execute(pool)
-    .await?;
+    if is_active {
+        sqlx::query(
+            "INSERT INTO session_mcp_servers (session_id, server_id, env, is_active, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5) \
+             ON CONFLICT(session_id, server_id) DO UPDATE SET \
+                env = excluded.env, \
+                is_active = excluded.is_active, \
+                updated_at = excluded.updated_at",
+        )
+        .bind(session_id)
+        .bind(server_id)
+        .bind(env)
+        .bind(active_int)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "INSERT INTO session_mcp_servers (session_id, server_id, env, is_active, pid, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5) \
+             ON CONFLICT(session_id, server_id) DO UPDATE SET \
+                env = excluded.env, \
+                is_active = 0, \
+                pid = NULL, \
+                updated_at = excluded.updated_at",
+        )
+        .bind(session_id)
+        .bind(server_id)
+        .bind(env)
+        .bind(active_int)
+        .bind(now)
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
 }
@@ -699,18 +929,44 @@ pub async fn set_session_mcp_server_active_with_pool(
     let now = now_secs();
     let active_int = if is_active { 1 } else { 0 };
 
-    sqlx::query(
-        "UPDATE session_mcp_servers SET is_active = ?1, updated_at = ?2 \
-         WHERE session_id = ?3 AND server_id = ?4",
-    )
-    .bind(active_int)
-    .bind(now)
-    .bind(session_id)
-    .bind(server_id)
-    .execute(pool)
-    .await?;
+    if !is_active {
+        stop_and_clear_session_mcp_runtime(pool, session_id, server_id).await?;
+        sqlx::query(
+            "UPDATE session_mcp_servers SET is_active = 0, pid = NULL, updated_at = ?1 \
+             WHERE session_id = ?2 AND server_id = ?3",
+        )
+        .bind(now)
+        .bind(session_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE session_mcp_servers SET is_active = ?1, updated_at = ?2 \
+             WHERE session_id = ?3 AND server_id = ?4",
+        )
+        .bind(active_int)
+        .bind(now)
+        .bind(session_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+    }
 
     Ok(())
+}
+
+pub async fn remove_session_mcp_server(session_id: &str, server_id: &str) -> Result<()> {
+    let pool = super::pool().await;
+    remove_session_mcp_server_with_pool(pool, session_id, server_id).await
+}
+
+pub async fn remove_session_mcp_server_with_pool(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    server_id: &str,
+) -> Result<()> {
+    delete_session_mcp_server_with_pool(pool, session_id, server_id).await
 }
 
 pub async fn delete_session_mcp_server(session_id: &str, server_id: &str) -> Result<()> {
@@ -723,6 +979,14 @@ pub async fn delete_session_mcp_server_with_pool(
     session_id: &str,
     server_id: &str,
 ) -> Result<()> {
+    stop_and_clear_session_mcp_runtime(pool, session_id, server_id).await?;
+
+    sqlx::query("UPDATE session_mcp_servers SET pid = NULL WHERE session_id = ?1 AND server_id = ?2")
+        .bind(session_id)
+        .bind(server_id)
+        .execute(pool)
+        .await?;
+
     sqlx::query("DELETE FROM session_mcp_servers WHERE session_id = ?1 AND server_id = ?2")
         .bind(session_id)
         .bind(server_id)
@@ -839,4 +1103,431 @@ pub async fn set_project_mcp_servers_with_pool(
     _active_server_ids: &[String],
 ) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn test_delete_session_cleans_up_session_mcp_servers_and_runtime() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess = create_session_with_pool(&pool, &proj.id, "Sess 1", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        update_session_mcp_server_pid_with_pool(&pool, &sess.id, "figcraft", Some(999_999_999))
+            .await
+            .unwrap();
+
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess.id, "figcraft", vec![])
+            .await;
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_some()
+        );
+
+        delete_session_with_pool(&pool, &sess.id).await.unwrap();
+
+        let remaining = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert!(remaining.is_empty());
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_expired_sessions_cleans_up_session_mcp_servers_and_runtime() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess = create_session_with_pool(&pool, &proj.id, "Old Sess", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+
+        sqlx::query("UPDATE sessions SET updated_at = 100 WHERE id = ?1")
+            .bind(&sess.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess.id, "figcraft", vec![])
+            .await;
+
+        let deleted = delete_expired_sessions_with_pool(&pool, 500).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        let remaining = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert!(remaining.is_empty());
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_mcp_server_cleans_up_all_sessions_and_runtime() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess1 = create_session_with_pool(&pool, &proj.id, "Sess 1", None, None, None)
+            .await
+            .unwrap();
+        let sess2 = create_session_with_pool(&pool, &proj.id, "Sess 2", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess1.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        upsert_session_mcp_server_with_pool(&pool, &sess2.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        update_session_mcp_server_pid_with_pool(&pool, &sess1.id, "figcraft", Some(999_999_999))
+            .await
+            .unwrap();
+
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess1.id, "figcraft", vec![])
+            .await;
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess2.id, "figcraft", vec![])
+            .await;
+
+        delete_mcp_server_with_pool(&pool, "figcraft")
+            .await
+            .unwrap();
+
+        let servers = list_mcp_servers_with_pool(&pool).await.unwrap();
+        assert!(!servers.iter().any(|s| s.id == "figcraft"));
+
+        let s1_mcp = list_session_mcp_servers_with_pool(&pool, &sess1.id)
+            .await
+            .unwrap();
+        let s2_mcp = list_session_mcp_servers_with_pool(&pool, &sess2.id)
+            .await
+            .unwrap();
+        assert!(s1_mcp.is_empty());
+        assert!(s2_mcp.is_empty());
+
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess1.id, "figcraft")
+                .await
+                .is_none()
+        );
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess2.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sync_session_mcp_runtime_clears_dead_pid() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess = create_session_with_pool(&pool, &proj.id, "Sess", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        // Record a dead OS PID
+        update_session_mcp_server_pid_with_pool(&pool, &sess.id, "figcraft", Some(999_999_999))
+            .await
+            .unwrap();
+
+        // list_session_mcp_servers_with_pool runs sync_session_mcp_runtime_with_pool automatically
+        let servers = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].pid, None);
+    }
+
+    #[tokio::test]
+    async fn test_deactivate_and_remove_session_mcp_server_stops_runtime_and_clears_pid() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess = create_session_with_pool(&pool, &proj.id, "Sess", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        // Use current process PID (which is alive) so sync doesn't clear it as dead,
+        // while kill_os_pid ignores current process PID safely.
+        let fake_live_pid = i64::from(std::process::id());
+        update_session_mcp_server_pid_with_pool(&pool, &sess.id, "figcraft", Some(fake_live_pid))
+            .await
+            .unwrap();
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess.id, "figcraft", vec![])
+            .await;
+
+        // Deactivate via set_session_mcp_server_active_with_pool -> must clear pid & runtime registry
+        set_session_mcp_server_active_with_pool(&pool, &sess.id, "figcraft", false)
+            .await
+            .unwrap();
+
+        let servers = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].is_active, 0);
+        assert_eq!(servers[0].pid, None);
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_none()
+        );
+
+        // Re-activate and set PID again, then remove_session_mcp_server_with_pool
+        set_session_mcp_server_active_with_pool(&pool, &sess.id, "figcraft", true)
+            .await
+            .unwrap();
+        update_session_mcp_server_pid_with_pool(&pool, &sess.id, "figcraft", Some(fake_live_pid))
+            .await
+            .unwrap();
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess.id, "figcraft", vec![])
+            .await;
+
+        remove_session_mcp_server_with_pool(&pool, &sess.id, "figcraft")
+            .await
+            .unwrap();
+
+        let after_remove = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert!(after_remove.is_empty());
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_orphaned_mcp_processes_on_startup_kills_pid_and_resets_null() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess = create_session_with_pool(&pool, &proj.id, "Sess", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+
+        // Spawn a real background OS child process to simulate an orphaned MCP server
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let orphan_pid = i64::from(child.id().unwrap());
+        assert!(crate::agent::mcp::is_os_pid_alive(orphan_pid).await);
+
+        update_session_mcp_server_pid_with_pool(&pool, &sess.id, "figcraft", Some(orphan_pid))
+            .await
+            .unwrap();
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess.id, "figcraft", vec![])
+            .await;
+
+        let cleaned = cleanup_orphaned_mcp_processes_on_startup_with_pool(&pool)
+            .await
+            .unwrap();
+        assert_eq!(cleaned, 1);
+
+        // Reap the zombie child in test process so `kill -0` sees it is completely gone
+        let _ = child.wait().await;
+        assert!(!crate::agent::mcp::is_os_pid_alive(orphan_pid).await);
+
+        let servers = list_session_mcp_servers_with_pool(&pool, &sess.id)
+            .await
+            .unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].pid, None);
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_all_mcp_servers_kills_processes_and_resets_pid_null() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let proj = create_project_with_pool(&pool, "Proj", "Desc", Some("/tmp"), None)
+            .await
+            .unwrap();
+        let sess1 = create_session_with_pool(&pool, &proj.id, "Sess1", None, None, None)
+            .await
+            .unwrap();
+        let sess2 = create_session_with_pool(&pool, &proj.id, "Sess2", None, None, None)
+            .await
+            .unwrap();
+        create_or_update_mcp_server_with_pool(&pool, "figcraft", "figcraft", "stdio|npx", true)
+            .await
+            .unwrap();
+
+        upsert_session_mcp_server_with_pool(&pool, &sess1.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+        upsert_session_mcp_server_with_pool(&pool, &sess2.id, "figcraft", "{}", true)
+            .await
+            .unwrap();
+
+        let mut child1 = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let mut child2 = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid1 = i64::from(child1.id().unwrap());
+        let pid2 = i64::from(child2.id().unwrap());
+
+        update_session_mcp_server_pid_with_pool(&pool, &sess1.id, "figcraft", Some(pid1))
+            .await
+            .unwrap();
+        update_session_mcp_server_pid_with_pool(&pool, &sess2.id, "figcraft", Some(pid2))
+            .await
+            .unwrap();
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess1.id, "figcraft", vec![])
+            .await;
+        crate::agent::mcp::SESSION_MCP_REGISTRY
+            .set_tools(&sess2.id, "figcraft", vec![])
+            .await;
+
+        shutdown_all_mcp_servers_with_pool(&pool).await.unwrap();
+
+        let _ = child1.wait().await;
+        let _ = child2.wait().await;
+        assert!(!crate::agent::mcp::is_os_pid_alive(pid1).await);
+        assert!(!crate::agent::mcp::is_os_pid_alive(pid2).await);
+
+        let s1 = list_session_mcp_servers_with_pool(&pool, &sess1.id)
+            .await
+            .unwrap();
+        let s2 = list_session_mcp_servers_with_pool(&pool, &sess2.id)
+            .await
+            .unwrap();
+        assert_eq!(s1[0].pid, None);
+        assert_eq!(s2[0].pid, None);
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess1.id, "figcraft")
+                .await
+                .is_none()
+        );
+        assert!(
+            crate::agent::mcp::SESSION_MCP_REGISTRY
+                .get_tools(&sess2.id, "figcraft")
+                .await
+                .is_none()
+        );
+    }
 }

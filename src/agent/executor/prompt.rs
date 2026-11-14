@@ -14,7 +14,6 @@ pub struct AgentPromptContext<'a> {
     pub prompt_skills: &'a [PromptSkill],
     pub available_skills: &'a [PromptSkill],
     pub active_mcp_servers: &'a [McpServer],
-    pub dormant_mcp_servers: &'a [McpServer],
     pub mcp_tools: &'a [crate::agent::mcp::ActiveMcpTool],
     pub session_id: &'a str,
     pub goal_id: &'a str,
@@ -34,7 +33,6 @@ fn build_static_prompt(
     prompt_skills: &[PromptSkill],
     available_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
-    dormant_mcp_servers: &[McpServer],
     _mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
     capabilities: ModelCapabilities,
 ) -> String {
@@ -205,18 +203,12 @@ fn build_static_prompt(
         prompt.push('\n');
     }
 
-    if !dormant_mcp_servers.is_empty() {
-        prompt.push_str("### 💤 Available MCP Extensions (Dormant):\n");
-        for server in dormant_mcp_servers {
-            prompt.push_str(&format!(
-                "- `{}` (Activate on-demand using `activate_extension(extension_name: \"{}\")`)\n",
-                server.name, server.name
-            ));
-        }
-        prompt.push('\n');
-    }
-    prompt.push_str("You can dynamically register new MCP servers requested by the user using `mcp_register_server`, list servers with `mcp_list_available`, and inject session credentials or toggle status using `mcp_configure_session`.\n");
-    prompt.push_str("IMPORTANT: Whenever you need to use an MCP server or spawn its process in the current chat session, ALWAYS ensure it is activated for this session using `mcp_configure_session(server_id: \"...\", is_active: true)` (injecting any required session credentials/env). Never assume an MCP server is active solely because it exists in the catalog.\n\n");
+    prompt.push_str("### 🔌 On-Demand MCP Server Management (Full DB & Runtime Sync):\n");
+    prompt.push_str("MCP servers are managed ON-DEMAND. Do NOT query or list MCP servers unless the user's request or task involves MCP servers or external extensions.\n");
+    prompt.push_str("- **List / Inspect**: Call `mcp_list_available` on-demand to inspect `mcp_servers` and `session_mcp_servers` (including full `config`, `type`, live session `status`, `env`, and OS `PID`).\n");
+    prompt.push_str("- **Register / Update**: Call `mcp_register_server` to create or update a server in `mcp_servers` (automatically restarts any old runtime process).\n");
+    prompt.push_str("- **Activate / Deactivate**: Call `mcp_configure_session(server_id: \"...\", is_active: true/false)` (or `activate_extension`) to sync `session_mcp_servers` AND immediately spawn (`is_active: true`) or kill (`is_active: false`) the runtime OS process and its child tree.\n");
+    prompt.push_str("- **Delete / Remove**: Call `mcp_remove_server(server_id: \"...\", scope: \"global\" | \"session\")` to kill active OS processes and delete the server from `mcp_servers` or `session_mcp_servers`.\n\n");
 
     prompt
 }
@@ -233,7 +225,6 @@ fn static_prompt_cache_key(
     prompt_skills: &[PromptSkill],
     available_skills: &[PromptSkill],
     active_mcp_servers: &[McpServer],
-    dormant_mcp_servers: &[McpServer],
     mcp_tools: &[crate::agent::mcp::ActiveMcpTool],
     capabilities: ModelCapabilities,
 ) -> String {
@@ -256,9 +247,6 @@ fn static_prompt_cache_key(
         s.name.hash(&mut h);
         s.config.hash(&mut h);
         s.handshake.hash(&mut h);
-    }
-    for s in dormant_mcp_servers {
-        s.name.hash(&mut h);
     }
     for t in mcp_tools {
         t.namespaced_name.hash(&mut h);
@@ -291,7 +279,6 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
         ctx.prompt_skills,
         ctx.available_skills,
         ctx.active_mcp_servers,
-        ctx.dormant_mcp_servers,
         ctx.mcp_tools,
         ctx.capabilities,
     );
@@ -311,7 +298,6 @@ fn cached_static_prompt(ctx: &AgentPromptContext<'_>) -> std::sync::Arc<str> {
         ctx.prompt_skills,
         ctx.available_skills,
         ctx.active_mcp_servers,
-        ctx.dormant_mcp_servers,
         ctx.mcp_tools,
         ctx.capabilities,
     ));
@@ -470,15 +456,22 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let first =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         let second =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         assert_eq!(first, second, "static rendering must be deterministic");
+        assert!(
+            first.contains("mcp_list_available"),
+            "static prompt must instruct on-demand MCP catalog lookup"
+        );
+        assert!(
+            !first.contains("Available MCP Extensions (Dormant)"),
+            "static prompt must not preload dormant MCP servers"
+        );
         assert_eq!(
             super::static_prompt_cache_key(
                 &project,
                 &folders,
-                &[],
                 &[],
                 &[],
                 &[],
@@ -488,7 +481,6 @@ mod tests {
             super::static_prompt_cache_key(
                 &project,
                 &folders,
-                &[],
                 &[],
                 &[],
                 &[],
@@ -510,7 +502,6 @@ mod tests {
             &[],
             &[],
             &[],
-            &[],
             caps(true, false),
         );
 
@@ -522,7 +513,6 @@ mod tests {
             super::static_prompt_cache_key(
                 &other_project,
                 &folders,
-                &[],
                 &[],
                 &[],
                 &[],
@@ -543,7 +533,6 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &[],
                 caps(true, false)
             ),
             "attached folders must invalidate the cache"
@@ -559,7 +548,6 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &[],
                 caps(false, true)
             ),
             "capabilities must invalidate the cache"
@@ -571,9 +559,9 @@ mod tests {
         let project = sample_project();
         let folders = vec!["proj".to_string()];
         let freshly_rendered =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         let cached =
-            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], &[], caps(true, false));
+            super::build_static_prompt(&project, &folders, &[], &[], &[], &[], caps(true, false));
         assert_eq!(
             cached, freshly_rendered,
             "cache must never serve stale text"

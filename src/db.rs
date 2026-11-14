@@ -254,6 +254,13 @@ pub async fn get_pool() -> &'static SqlitePool {
         let _ = sqlx::query("ALTER TABLE goals ADD COLUMN target_files TEXT NOT NULL DEFAULT '[]'").execute(&pool).await;
         let _ = sqlx::query("ALTER TABLE goals ADD COLUMN discovery_count INTEGER NOT NULL DEFAULT 0").execute(&pool).await;
 
+        // Sweep any orphaned MCP child processes left behind from a prior crash/force-close
+        match crate::repository::agent::projects_and_sessions::cleanup_orphaned_mcp_processes_on_startup_with_pool(&pool).await {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!("[Startup] Cleaned up {} orphaned MCP process(es) from previous session", n),
+            Err(e) => tracing::warn!("[Startup] Failed to cleanup orphaned MCP processes: {}", e),
+        }
+
         pool
     })
     .await

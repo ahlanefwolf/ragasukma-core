@@ -287,7 +287,142 @@ pub async fn shutdown_all_stdio_servers() {
     let mut pool = STDIO_POOL.lock().await;
     for (_, mut session) in pool.drain() {
         let _ = session.child.kill().await;
+        let _ = session.child.wait().await;
     }
+}
+
+/// Unified graceful shutdown for all MCP servers:
+/// 1. Terminates all active child processes in `STDIO_POOL` (`shutdown_all_stdio_servers()`).
+/// 2. Kills all OS processes still recorded in `session_mcp_servers WHERE pid IS NOT NULL`,
+///    clears `SESSION_MCP_REGISTRY`, and resets `pid = NULL` in the database.
+pub async fn shutdown_all_mcp_servers() {
+    shutdown_all_stdio_servers().await;
+    let _ = crate::repository::agent::projects_and_sessions::shutdown_all_mcp_servers().await;
+}
+
+/// Waits for an OS termination signal (`Ctrl+C` / `SIGINT` or `SIGTERM` on Unix).
+pub async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        if let Ok(mut sigterm) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Startup sweep: queries all `session_mcp_servers WHERE pid IS NOT NULL`, terminates each
+/// orphaned OS process (`kill -9` on Unix / `taskkill /F /T /PID` on Windows), and resets
+/// all `pid` columns to `NULL`.
+pub async fn cleanup_orphaned_mcp_processes_on_startup() -> anyhow::Result<usize> {
+    crate::repository::agent::projects_and_sessions::cleanup_orphaned_mcp_processes_on_startup()
+        .await
+}
+
+/// Checks if an OS process by PID is currently alive.
+pub async fn is_os_pid_alive(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let pid_str = pid.to_string();
+        tokio::process::Command::new("kill")
+            .args(["-0", &pid_str])
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        let pid_str = pid.to_string();
+        tokio::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid_str}"), "/NH"])
+            .output()
+            .await
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid_str))
+            .unwrap_or(false)
+    }
+}
+
+/// Checks if a session MCP server is currently spawned and alive in `STDIO_POOL` using `child.try_wait()`.
+/// If the process has already exited on its own, removes it from `STDIO_POOL` and returns `None`.
+/// If still alive, returns `Some(pid)`.
+pub async fn check_stdio_server_alive(session_id: &str, server_id: &str) -> Option<u32> {
+    let key1 = format!("{session_id}:{server_id}");
+    let key2 = format!("{session_id}::{server_id}");
+    let mut pool = STDIO_POOL.lock().await;
+
+    for key in [&key1, &key2] {
+        if let Some(session) = pool.get_mut(key) {
+            match session.child.try_wait() {
+                Ok(None) => return session.child.id(),
+                Ok(Some(_)) | Err(_) => {
+                    pool.remove(key);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Sweeps `STDIO_POOL` for any child processes that have exited on their own (`child.try_wait()`),
+/// removing them from the in-memory pool and returning `(session_id, server_id)` pairs that died.
+pub async fn sweep_dead_stdio_servers() -> Vec<(String, String)> {
+    let mut pool = STDIO_POOL.lock().await;
+    let mut dead_keys = Vec::new();
+
+    for (key, session) in pool.iter_mut() {
+        match session.child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                dead_keys.push(key.clone());
+            }
+        }
+    }
+
+    let mut dead_pairs = Vec::new();
+    for key in dead_keys {
+        pool.remove(&key);
+        if let Some((sid, srv)) = key.split_once("::").or_else(|| key.split_once(':')) {
+            dead_pairs.push((sid.to_string(), srv.to_string()));
+        }
+    }
+    dead_pairs
+}
+
+/// Gracefully shuts down a specific stdio MCP server for a given session if spawned in runtime,
+/// and removes its cached tools/HTTP session from `SESSION_MCP_REGISTRY`.
+pub async fn shutdown_session_stdio_server(session_id: &str, server_id: &str) {
+    let key1 = format!("{session_id}:{server_id}");
+    let key2 = format!("{session_id}::{server_id}");
+    let mut pool = STDIO_POOL.lock().await;
+    let mut removed_sessions = Vec::new();
+    for key in [key1, key2, server_id.to_string()] {
+        if let Some(session) = pool.remove(&key) {
+            removed_sessions.push(session);
+        }
+    }
+    drop(pool);
+
+    for mut session in removed_sessions {
+        if let Some(pid) = session.child.id() {
+            kill_os_pid(pid as i64).await;
+        }
+        let _ = session.child.kill().await;
+        let _ = session.child.wait().await;
+    }
+
+    SESSION_MCP_REGISTRY
+        .remove_server(session_id, server_id)
+        .await;
 }
 
 /// Gracefully shuts down all active persistent stdio MCP processes belonging to a given session
@@ -300,9 +435,97 @@ pub async fn shutdown_session_stdio_servers(session_id: &str) {
         .cloned()
         .collect();
 
+    let mut removed_sessions = Vec::new();
     for key in keys_to_remove {
-        if let Some(mut session) = pool.remove(&key) {
-            let _ = session.child.kill().await;
+        if let Some(session) = pool.remove(&key) {
+            removed_sessions.push(session);
+        }
+    }
+    drop(pool);
+
+    for mut session in removed_sessions {
+        if let Some(pid) = session.child.id() {
+            kill_os_pid(pid as i64).await;
+        }
+        let _ = session.child.kill().await;
+        let _ = session.child.wait().await;
+    }
+}
+
+/// Gracefully shuts down all active persistent stdio MCP processes and clears in-memory
+/// registries (`SESSION_MCP_REGISTRY`) for a given `server_id` across all sessions.
+pub async fn shutdown_server_across_all_sessions(server_id: &str) {
+    let suffix = format!(":{server_id}");
+    let mut pool = STDIO_POOL.lock().await;
+    let keys_to_remove: Vec<String> = pool
+        .keys()
+        .filter(|k| *k == server_id || k.ends_with(&suffix))
+        .cloned()
+        .collect();
+
+    let mut removed_sessions = Vec::new();
+    for key in keys_to_remove {
+        if let Some(session) = pool.remove(&key) {
+            removed_sessions.push(session);
+        }
+    }
+    drop(pool);
+
+    for mut session in removed_sessions {
+        if let Some(pid) = session.child.id() {
+            kill_os_pid(pid as i64).await;
+        }
+        let _ = session.child.kill().await;
+        let _ = session.child.wait().await;
+    }
+
+    SESSION_MCP_REGISTRY
+        .remove_server_across_all_sessions(server_id)
+        .await;
+}
+
+/// Terminates an OS process (and its child process tree) by PID if it is valid and still running.
+pub async fn kill_os_pid(pid: i64) {
+    if pid <= 1 || pid == i64::from(std::process::id()) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+    #[cfg(not(windows))]
+    {
+        let pid_str = pid.to_string();
+        let is_alive = Command::new("kill")
+            .args(["-0", &pid_str])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if is_alive {
+            let _ = Command::new("pkill")
+                .args(["-9", "-P", &pid_str])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            let _ = Command::new("kill")
+                .args(["-9", &pid_str])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
         }
     }
 }
@@ -322,23 +545,34 @@ async fn call_stdio_rpc(
     let mut pool = STDIO_POOL.lock().await;
 
     let need_spawn = match pool.get_mut(server_key) {
-        Some(proc) => !proc.is_alive(),
+        Some(proc) => {
+            if proc.is_alive() {
+                false
+            } else {
+                pool.remove(server_key);
+                if let Some(sid) = session_id {
+                    let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
+                        sid,
+                        server_id,
+                        None,
+                    )
+                    .await;
+                }
+                true
+            }
+        }
         None => true,
     };
 
     if need_spawn {
         let proc = StdioSession::spawn(command_str, args, env).await?;
         if let (Some(pid), Some(sid)) = (proc.child.id(), session_id) {
-            let s_id = sid.to_string();
-            let srv_id = server_id.to_string();
-            tokio::spawn(async move {
-                let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
-                    &s_id,
-                    &srv_id,
-                    Some(pid as i64),
-                )
-                .await;
-            });
+            let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
+                sid,
+                server_id,
+                Some(pid as i64),
+            )
+            .await;
         }
         pool.insert(server_key.to_string(), proc);
     }
@@ -715,6 +949,17 @@ impl SessionMcpRegistry {
         }
     }
 
+    pub async fn remove_server_across_all_sessions(&self, server_id: &str) {
+        let mut write = self.active_tools.write().await;
+        for m in write.values_mut() {
+            m.remove(server_id);
+        }
+        let mut write_http = self.http_sessions.write().await;
+        for m in write_http.values_mut() {
+            m.remove(server_id);
+        }
+    }
+
     pub async fn clear_session(&self, session_id: &str) {
         let mut write = self.active_tools.write().await;
         write.remove(session_id);
@@ -757,11 +1002,42 @@ pub struct ActiveMcpTool {
     pub markdown_spec: Option<String>,
 }
 
+/// Sanitizes an identifier segment so the resulting `mcp__{server}__{tool}` function name
+/// is valid across Gemini, OpenAI, and Anthropic function declaration schemas.
+fn sanitize_mcp_identifier(raw: &str) -> String {
+    let sanitized: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "tool".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Formats a globally unique MCP function declaration name scoped by server ID (`mcp__{server_id}__{tool_name}`).
+pub fn format_mcp_namespaced_tool_name(server_id: &str, tool_name: &str) -> String {
+    format!(
+        "mcp__{}__{}",
+        sanitize_mcp_identifier(server_id),
+        sanitize_mcp_identifier(tool_name)
+    )
+}
+
 /// Discovers tools from all active MCP servers, keeping tools in RAM and querying upstream
 pub async fn resolve_active_mcp_tools(
     servers: &[crate::agent::models::McpServer],
 ) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
+    let mut seen_namespaced = std::collections::HashSet::new();
     for s in servers {
         let config: McpServerConfig = s.into();
 
@@ -770,7 +1046,10 @@ pub async fn resolve_active_mcp_tools(
         match client.list_tools().await {
             Ok(tools) => {
                 for t in tools {
-                    let namespaced = format!("mcp__{}", t.name);
+                    let namespaced = format_mcp_namespaced_tool_name(&config.id, &t.name);
+                    if !seen_namespaced.insert(namespaced.clone()) {
+                        continue;
+                    }
                     let md = discovery::tool_definition_to_markdown(&t);
                     resolved.push(ActiveMcpTool {
                         server_id: config.id.clone(),
@@ -797,6 +1076,7 @@ pub async fn resolve_session_mcp_tools(
     servers: &[(crate::agent::models::McpServer, crate::agent::models::SessionMcpServer)],
 ) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
+    let mut seen_namespaced = std::collections::HashSet::new();
 
     for (s, session_state) in servers {
         if session_state.is_active != 1 {
@@ -815,7 +1095,10 @@ pub async fn resolve_session_mcp_tools(
         // Check if tools are already cached in RAM for this session
         if let Some(cached_tools) = SESSION_MCP_REGISTRY.get_tools(session_id, &s.id).await {
             for t in cached_tools {
-                let namespaced = format!("mcp__{}", t.name);
+                let namespaced = format_mcp_namespaced_tool_name(&config.id, &t.name);
+                if !seen_namespaced.insert(namespaced.clone()) {
+                    continue;
+                }
                 let md = discovery::tool_definition_to_markdown(&t);
                 resolved.push(ActiveMcpTool {
                     server_id: config.id.clone(),
@@ -836,7 +1119,10 @@ pub async fn resolve_session_mcp_tools(
             Ok(tools) => {
                 SESSION_MCP_REGISTRY.set_tools(session_id, &s.id, tools.clone()).await;
                 for t in tools {
-                    let namespaced = format!("mcp__{}", t.name);
+                    let namespaced = format_mcp_namespaced_tool_name(&config.id, &t.name);
+                    if !seen_namespaced.insert(namespaced.clone()) {
+                        continue;
+                    }
                     let md = discovery::tool_definition_to_markdown(&t);
                     resolved.push(ActiveMcpTool {
                         server_id: config.id.clone(),
@@ -1015,7 +1301,14 @@ pub async fn call_active_mcp_tool(
 ) -> Result<String, String> {
     let matched = tools
         .iter()
-        .find(|t| t.namespaced_name == called_name || t.original_name == called_name)
+        .find(|t| t.namespaced_name == called_name)
+        .or_else(|| {
+            tools.iter().find(|t| {
+                format!("mcp__{}", t.original_name) == called_name
+                    || format!("mcp__{}", sanitize_mcp_identifier(&t.original_name)) == called_name
+                    || t.original_name == called_name
+            })
+        })
         .ok_or_else(|| {
             format!(
                 "MCP tool '{}' not found in active project tools",

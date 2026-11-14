@@ -572,7 +572,7 @@ async fn test_mcp_dynamic_tools_registration_and_configuration() {
     .unwrap();
 
     assert!(reg_out.contains("test-dummy-server"));
-    assert!(reg_out.contains("successfully registered"));
+    assert!(reg_out.contains("synced to database"));
 
     // 2. Configure session credentials & active flag
     let conf_out = execute_tool_call(
@@ -589,7 +589,7 @@ async fn test_mcp_dynamic_tools_registration_and_configuration() {
     .unwrap();
 
     assert!(conf_out.contains("test-dummy-server"));
-    assert!(conf_out.contains("session configuration updated"));
+    assert!(conf_out.contains("activated and synced with database & runtime"));
 
     // 3. List available MCP servers and verify test-dummy-server is active in current session
     let list_out = execute_tool_call(
@@ -603,4 +603,62 @@ async fn test_mcp_dynamic_tools_registration_and_configuration() {
 
     assert!(list_out.contains("test-dummy-server"));
     assert!(list_out.contains("Active in current session"));
+}
+
+#[test]
+fn test_mcp_namespaced_tool_deduplication_across_servers() {
+    let make_tool = |server_id: &str, server_name: &str, tool_name: &str| {
+        crate::agent::mcp::ActiveMcpTool {
+            server_id: server_id.to_string(),
+            server_name: server_name.to_string(),
+            original_name: tool_name.to_string(),
+            namespaced_name: crate::agent::mcp::format_mcp_namespaced_tool_name(server_id, tool_name),
+            definition: crate::agent::mcp::McpToolDefinition {
+                name: tool_name.to_string(),
+                description: Some(format!("Take {} screenshot", server_name)),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            server_config: crate::agent::mcp::McpServerConfig {
+                id: server_id.to_string(),
+                name: server_name.to_string(),
+                transport: "stdio".to_string(),
+                command: Some(server_id.to_string()),
+                args: vec![],
+                url: None,
+                env: std::collections::HashMap::new(),
+                is_enabled: true,
+                session_id: None,
+            },
+            markdown_spec: None,
+        }
+    };
+
+    // Two different MCP servers both exposing a tool named `screenshot`, plus a duplicate entry
+    let mcp_tools = vec![
+        make_tool("figcraft", "Figcraft", "screenshot"),
+        make_tool("gridcraft", "Gridcraft", "screenshot"),
+        make_tool("figcraft", "Figcraft", "screenshot"),
+    ];
+
+    let schema = get_dynamic_agent_tools_schema(&mcp_tools);
+    let fn_names: Vec<String> = schema
+        .iter()
+        .filter_map(|item| {
+            item.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    assert!(fn_names.contains(&"mcp__figcraft__screenshot".to_string()));
+    assert!(fn_names.contains(&"mcp__gridcraft__screenshot".to_string()));
+    assert!(!fn_names.contains(&"mcp__screenshot".to_string()));
+
+    // Ensure there are zero duplicate function names in the entire schema
+    let unique_names: std::collections::HashSet<&String> = fn_names.iter().collect();
+    assert_eq!(fn_names.len(), unique_names.len());
 }

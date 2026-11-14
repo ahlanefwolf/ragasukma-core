@@ -304,22 +304,23 @@ async fn execute_session_turn_inner(
         .await
         .unwrap_or_default();
 
-    let all_mcp_servers = repository::list_mcp_servers()
-        .await
-        .unwrap_or_default();
-    let (active_mcp_servers, dormant_mcp_servers): (Vec<_>, Vec<_>) = all_mcp_servers
-        .into_iter()
-        .partition(|s| {
-            session_active_mcp.iter().any(|(srv, _)| srv.id == s.id)
-                || state::is_extension_active(session_id, &s.id)
-        });
+    let active_mcp_servers: Vec<_> = if !session_active_mcp.is_empty() {
+        session_active_mcp.iter().map(|(srv, _)| srv.clone()).collect()
+    } else {
+        repository::list_mcp_servers()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|s| state::is_extension_active(session_id, &s.id))
+            .collect()
+    };
 
-    let mcp_tools = if !session_active_mcp.is_empty() {
+    let mut mcp_tools = if !session_active_mcp.is_empty() {
         crate::agent::mcp::resolve_session_mcp_tools(session_id, &session_active_mcp).await
     } else {
         crate::agent::mcp::resolve_active_mcp_tools(&active_mcp_servers).await
     };
-    let dynamic_tools_schema = crate::agent::tools::get_dynamic_agent_tools_schema(&mcp_tools);
+    let mut dynamic_tools_schema = crate::agent::tools::get_dynamic_agent_tools_schema(&mcp_tools);
 
     // 2. Mark session as running
     let _ = repository::update_session_status(session_id, "running").await;
@@ -357,7 +358,6 @@ async fn execute_session_turn_inner(
         prompt_skills: &active_prompt_skills,
         available_skills: &available_skills,
         active_mcp_servers: &active_mcp_servers,
-        dormant_mcp_servers: &dormant_mcp_servers,
         mcp_tools: &mcp_tools,
         session_id,
         goal_id: &goal_id,
@@ -605,6 +605,27 @@ async fn execute_session_turn_inner(
                     &mut db_messages,
                 )
                 .await?;
+
+                if tool_calls.iter().any(|tc| {
+                    matches!(
+                        tc.function.name.as_str(),
+                        "mcp_configure_session"
+                            | "activate_extension"
+                            | "mcp_remove_server"
+                            | "mcp_register_server"
+                    )
+                }) {
+                    let updated_session_mcp = repository::get_session_active_mcp_servers(session_id)
+                        .await
+                        .unwrap_or_default();
+                    mcp_tools = crate::agent::mcp::resolve_session_mcp_tools(
+                        session_id,
+                        &updated_session_mcp,
+                    )
+                    .await;
+                    dynamic_tools_schema =
+                        crate::agent::tools::get_dynamic_agent_tools_schema(&mcp_tools);
+                }
 
                 // Circuit breaker: if the tool surface keeps failing in exactly the same
                 // way, stop burning the iteration budget and force a final answer.
