@@ -467,10 +467,34 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
             }
             _ => {
                 // "user" or other
+                let mut parts: Vec<serde_json::Value> = Vec::new();
                 if !text.trim().is_empty() {
+                    parts.push(serde_json::json!({ "text": text }));
+                }
+                if let Some(serde_json::Value::Array(arr)) = &msg.content {
+                    for item in arr {
+                        if item.get("type").and_then(|t| t.as_str()) == Some("image_url")
+                            && let Some(url) = item
+                                .get("image_url")
+                                .and_then(|iu| iu.get("url"))
+                                .and_then(|u| u.as_str())
+                            && let Some(rest) = url.strip_prefix("data:")
+                            && let Some((meta, b64)) = rest.split_once(";base64,")
+                            && !b64.is_empty()
+                        {
+                            parts.push(serde_json::json!({
+                                "inlineData": {
+                                    "mimeType": meta,
+                                    "data": b64
+                                }
+                            }));
+                        }
+                    }
+                }
+                if !parts.is_empty() {
                     raw_contents.push(serde_json::json!({
                         "role": "user",
-                        "parts": [{ "text": text }]
+                        "parts": parts
                     }));
                 }
             }

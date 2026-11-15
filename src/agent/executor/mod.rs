@@ -32,6 +32,36 @@ pub use state::TurnState;
 /// Runs once at startup from [`crate::agent::maintenance::retention_task`]. Scoped to
 /// `running` only: a `paused` or `failed` session is a deliberate state that must survive a
 /// restart. Returns how many rows were corrected.
+static PENDING_SESSION_IMAGES: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<String, Vec<crate::llm::types::ImageAttachment>>>,
+> = std::sync::OnceLock::new();
+
+pub fn set_session_pending_images(
+    session_id: &str,
+    images: Vec<crate::llm::types::ImageAttachment>,
+) {
+    if images.is_empty() {
+        return;
+    }
+    let map = PENDING_SESSION_IMAGES.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = map.lock() {
+        guard.insert(session_id.to_string(), images);
+    }
+}
+
+pub fn take_session_pending_images(
+    session_id: &str,
+) -> Vec<crate::llm::types::ImageAttachment> {
+    let Some(map) = PENDING_SESSION_IMAGES.get() else {
+        return Vec::new();
+    };
+    if let Ok(mut guard) = map.lock() {
+        guard.remove(session_id).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
 pub async fn reset_stale_running_sessions() -> Result<usize> {
     repository::reset_stale_running_sessions().await
 }
@@ -415,7 +445,7 @@ async fn execute_session_turn_inner(
 
         // Prepare context messages for model
         let current_directive = state.ephemeral_directive.take();
-        let v1_messages = messages::prepare_turn_messages(
+        let mut v1_messages = messages::prepare_turn_messages(
             session_id,
             &system_prompt,
             &db_messages,
@@ -423,6 +453,27 @@ async fn execute_session_turn_inner(
             current_directive,
             capabilities.history_token_budget,
         );
+
+        let pending_images = take_session_pending_images(session_id);
+        if !pending_images.is_empty()
+            && let Some(last_user) = v1_messages.iter_mut().rev().find(|m| m.role == "user")
+        {
+            let mut parts = Vec::new();
+            if let Some(serde_json::Value::String(text)) = &last_user.content
+                && !text.is_empty()
+            {
+                parts.push(serde_json::json!({ "type": "text", "text": text }));
+            }
+            for img in pending_images {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": format!("data:{};base64,{}", img.mime_type, img.data_base64)
+                    }
+                }));
+            }
+            last_user.content = Some(serde_json::Value::Array(parts));
+        }
 
         // Request context accounting: calculate and log total token breakdown
         let sys_tokens = estimate_tokens(&system_prompt);
