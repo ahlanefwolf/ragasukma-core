@@ -37,6 +37,12 @@ pub fn get_global_agent_skill_dirs() -> Vec<PathBuf> {
                 dirs.push(candidate_root);
             }
         }
+        for rel in [".agents/skills", ".agent/skills", ".claude/skills"] {
+            let candidate = p.join(rel);
+            if candidate.is_dir() {
+                dirs.push(candidate);
+            }
+        }
     }
     dirs
 }
@@ -66,6 +72,14 @@ pub fn find_agent_dirs_in_path(base: &Path) -> Vec<PathBuf> {
             {
                 results.push(path);
             }
+        }
+    }
+
+    // Check conventional nested skill directories (e.g. .agents/skills, .agent/skills, .claude/skills)
+    for rel in [".agents/skills", ".agent/skills", ".claude/skills"] {
+        let candidate = base.join(rel);
+        if candidate.is_dir() && !results.contains(&candidate) {
+            results.push(candidate);
         }
     }
 
