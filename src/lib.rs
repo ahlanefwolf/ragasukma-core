@@ -32,6 +32,6 @@ mod tests {
 
     #[test]
     fn test_core_version() {
-        assert_eq!(VERSION, "0.3.2");
+        assert_eq!(VERSION, "0.4.0");
     }
 }
