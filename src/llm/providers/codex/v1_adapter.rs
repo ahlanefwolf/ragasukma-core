@@ -325,18 +325,17 @@ impl CodexSseParserState {
                         .copied()
                         .unwrap_or_else(|| self.current_tool_index.saturating_sub(1));
 
-                    if !self.resp_tool_args_emitted.contains(&idx) {
-                        if let Some(args_str) = item.get("arguments").and_then(|v| v.as_str()) {
-                            if !args_str.is_empty() {
-                                self.resp_tool_args_emitted.insert(idx);
-                                events.push(V1StreamEvent::ToolCallDelta {
-                                    index: idx,
-                                    id: self.current_call_id.clone(),
-                                    name: self.current_call_name.clone(),
-                                    arguments: args_str.to_string(),
-                                });
-                            }
-                        }
+                    if !self.resp_tool_args_emitted.contains(&idx)
+                        && let Some(args_str) = item.get("arguments").and_then(|v| v.as_str())
+                        && !args_str.is_empty()
+                    {
+                        self.resp_tool_args_emitted.insert(idx);
+                        events.push(V1StreamEvent::ToolCallDelta {
+                            index: idx,
+                            id: self.current_call_id.clone(),
+                            name: self.current_call_name.clone(),
+                            arguments: args_str.to_string(),
+                        });
                     }
                 }
             }
@@ -373,12 +372,11 @@ impl CodexSseParserState {
         }
 
         // 6. Explicit 9router text delta: "response.output_text.delta" or "response.text.delta"
-        if event_type == "response.output_text.delta" || event_type == "response.text.delta" {
-            if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str()) {
-                if !delta.is_empty() {
-                    events.push(V1StreamEvent::ContentDelta(delta.to_string()));
-                }
-            }
+        if (event_type == "response.output_text.delta" || event_type == "response.text.delta")
+            && let Some(delta) = parsed.get("delta").and_then(|v| v.as_str())
+            && !delta.is_empty()
+        {
+            events.push(V1StreamEvent::ContentDelta(delta.to_string()));
             return events;
         }
 
