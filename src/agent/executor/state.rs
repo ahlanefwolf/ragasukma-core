@@ -74,6 +74,16 @@ pub fn get_session_active_extensions(session_id: &str) -> HashSet<String> {
     guard.get(session_id).cloned().unwrap_or_default()
 }
 
+/// Cleans up in-memory activated extensions and skills for a session that is being deleted.
+pub fn cleanup_session_state(session_id: &str) {
+    if let Ok(mut guard) = SESSION_ACTIVATED_EXTENSIONS.write() {
+        guard.remove(session_id);
+    }
+    if let Ok(mut guard) = SESSION_ACTIVATED_SKILLS.write() {
+        guard.remove(session_id);
+    }
+}
+
 pub struct TurnState {
     pub goal_id: String,
     pub current_phase: String,

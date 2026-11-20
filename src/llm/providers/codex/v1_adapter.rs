@@ -14,20 +14,9 @@ pub fn build_codex_payload_from_messages(
     let mut instructions = CODEX_DEFAULT_INSTRUCTIONS.to_string();
 
     for msg in messages {
-        if msg.role == "system" {
+        if msg.role == "system" || msg.role == "developer" {
             if !msg.content.trim().is_empty() {
                 instructions = msg.content.clone();
-                // Inject pure system prompt into input as role="developer" identical to Antigravity
-                input_items.push(json!({
-                    "type": "message",
-                    "role": "developer",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": msg.content
-                        }
-                    ]
-                }));
             }
             continue;
         }
@@ -108,6 +97,21 @@ pub fn build_codex_payload_from_v1(req: &V1ChatRequest) -> serde_json::Value {
                 }));
             }
         } else if msg.role == "assistant" {
+            // Push reasoning item if present before assistant message (9router / OpenAI Responses spec)
+            if let Some(ts) = &msg.thought_signature
+                && !ts.trim().is_empty()
+            {
+                input_items.push(json!({
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": ts
+                        }
+                    ]
+                }));
+            }
+
             // Push message text if not empty
             if !content_str.trim().is_empty() {
                 input_items.push(json!({
@@ -218,6 +222,7 @@ pub struct CodexSseParserState {
     pub current_call_name: Option<String>,
     pub current_tool_index: usize,
     pub call_id_to_index: std::collections::HashMap<String, usize>,
+    pub resp_tool_args_emitted: std::collections::HashSet<usize>,
 }
 
 impl CodexSseParserState {
@@ -227,6 +232,7 @@ impl CodexSseParserState {
 
     pub fn parse_line(&mut self, line: &str) -> Vec<V1StreamEvent> {
         let trimmed = line.trim();
+        // Ignore SSE keep-alive comments like ": ping" or empty lines
         if !trimmed.starts_with("data:") {
             return Vec::new();
         }
@@ -242,11 +248,11 @@ impl CodexSseParserState {
         let event_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let mut events = Vec::new();
 
-        // 1. Function Call Output Item Added
+        // 1. Function Call Output Item Added (identical to 9router response.output_item.added)
         if event_type == "response.output_item.added" {
             if let Some(item) = parsed.get("item") {
                 let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if item_type == "function_call" {
+                if item_type == "function_call" || item_type == "custom_tool_call" {
                     let call_id = item
                         .get("call_id")
                         .and_then(|v| v.as_str())
@@ -283,14 +289,18 @@ impl CodexSseParserState {
             return events;
         }
 
-        // 2. Function Call Arguments Delta
-        if event_type == "response.function_call_arguments.delta" {
+        // 2. Function Call Arguments Delta (9router: response.function_call_arguments.delta & custom_tool_call_input.delta)
+        if event_type == "response.function_call_arguments.delta"
+            || event_type == "response.custom_tool_call_input.delta"
+        {
             let delta = parsed.get("delta").and_then(|v| v.as_str()).unwrap_or("");
             if !delta.is_empty() {
                 let item_id = parsed.get("item_id").and_then(|v| v.as_str());
                 let idx = item_id
                     .and_then(|id| self.call_id_to_index.get(id).copied())
                     .unwrap_or_else(|| self.current_tool_index.saturating_sub(1));
+
+                self.resp_tool_args_emitted.insert(idx);
 
                 events.push(V1StreamEvent::ToolCallDelta {
                     index: idx,
@@ -302,7 +312,38 @@ impl CodexSseParserState {
             return events;
         }
 
-        // 3. Reasoning / Thought Deltas
+        // 3. Fallback when tool item finishes (9router: response.output_item.done)
+        // If arguments were not emitted as deltas, emit the full arguments here
+        if event_type == "response.output_item.done" {
+            if let Some(item) = parsed.get("item") {
+                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if item_type == "function_call" || item_type == "custom_tool_call" {
+                    let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let idx = self
+                        .call_id_to_index
+                        .get(item_id)
+                        .copied()
+                        .unwrap_or_else(|| self.current_tool_index.saturating_sub(1));
+
+                    if !self.resp_tool_args_emitted.contains(&idx) {
+                        if let Some(args_str) = item.get("arguments").and_then(|v| v.as_str()) {
+                            if !args_str.is_empty() {
+                                self.resp_tool_args_emitted.insert(idx);
+                                events.push(V1StreamEvent::ToolCallDelta {
+                                    index: idx,
+                                    id: self.current_call_id.clone(),
+                                    name: self.current_call_name.clone(),
+                                    arguments: args_str.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            return events;
+        }
+
+        // 4. Reasoning / Thought Deltas (9router: response.reasoning_summary_text.delta)
         if event_type == "response.reasoning_summary_text.delta" {
             if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str())
                 && !delta.is_empty()
@@ -312,12 +353,44 @@ impl CodexSseParserState {
             return events;
         }
 
-        // 4. Ignore completion events that repeat the entire text
-        if event_type.ends_with(".done") || event_type == "response.completed" {
-            return Vec::new();
+        // 5. Explicit error / failed events (9router: "error" || "response.failed")
+        if event_type == "error" || event_type == "response.failed" {
+            let err_msg = parsed
+                .get("error")
+                .and_then(|e| e.get("message").and_then(|m| m.as_str()))
+                .or_else(|| {
+                    parsed
+                        .pointer("/response/error/message")
+                        .and_then(|m| m.as_str())
+                })
+                .unwrap_or("Codex Responses stream failed");
+            crate::term_err!("[Codex] Stream error event received: {}", err_msg);
+            events.push(V1StreamEvent::ContentDelta(format!("\n[Error: {}]\n", err_msg)));
+            events.push(V1StreamEvent::Finish {
+                finish_reason: "error".to_string(),
+            });
+            return events;
         }
 
-        // 5. Output Text Delta
+        // 6. Explicit 9router text delta: "response.output_text.delta" or "response.text.delta"
+        if event_type == "response.output_text.delta" || event_type == "response.text.delta" {
+            if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str()) {
+                if !delta.is_empty() {
+                    events.push(V1StreamEvent::ContentDelta(delta.to_string()));
+                }
+            }
+            return events;
+        }
+
+        // 7. Ignore completion / done markers without text
+        if event_type == "response.output_text.done"
+            || event_type == "response.completed"
+            || event_type == "response.done"
+        {
+            return events;
+        }
+
+        // 8. Generic delta fallback
         if let Some(delta) = parsed.get("delta").and_then(|v| v.as_str()) {
             if !delta.is_empty() {
                 events.push(V1StreamEvent::ContentDelta(delta.to_string()));
@@ -334,7 +407,7 @@ impl CodexSseParserState {
             return events;
         }
 
-        // 6. Alternative OpenAI streaming format: choices[0].delta.content
+        // 9. Alternative OpenAI streaming format: choices[0].delta.content
         if let Some(content) = parsed
             .pointer("/choices/0/delta/content")
             .and_then(|v| v.as_str())

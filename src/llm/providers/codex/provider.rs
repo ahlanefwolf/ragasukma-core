@@ -85,7 +85,8 @@ impl CodexProvider {
         let client = SHARED_CLIENT
             .get_or_init(|| {
                 reqwest::blocking::Client::builder()
-                    .timeout(std::time::Duration::from_secs(90))
+                    .connect_timeout(std::time::Duration::from_secs(30))
+                    .timeout(std::time::Duration::from_secs(600))
                     .build()
                     .unwrap_or_default()
             })

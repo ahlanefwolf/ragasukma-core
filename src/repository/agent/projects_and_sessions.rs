@@ -351,6 +351,9 @@ pub async fn delete_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Resu
     crate::agent::snapshot::release_session(id);
     crate::agent::executor::forget_session_generation(id);
     crate::agent::events::cleanup_session(id);
+    crate::agent::executor::state::cleanup_session_state(id);
+    crate::agent::diagnostics::clear_session_diagnostic_queue(id);
+    crate::agent::executor::take_session_pending_images(id);
 
     // 4. All database deletions run inside a single transaction
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -470,6 +473,9 @@ pub async fn delete_expired_sessions_with_pool(
         crate::agent::snapshot::release_session(id);
         crate::agent::executor::forget_session_generation(id);
         crate::agent::events::cleanup_session(id);
+        crate::agent::executor::state::cleanup_session_state(id);
+        crate::agent::diagnostics::clear_session_diagnostic_queue(id);
+        crate::agent::executor::take_session_pending_images(id);
     }
 
     for (_server_id, pid_opt) in expired_mcp_rows {
