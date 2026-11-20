@@ -1075,9 +1075,10 @@ pub async fn execute_tool_call(
             let all_servers = crate::repository::agent::list_mcp_servers()
                 .await
                 .unwrap_or_default();
-            let matched_server = all_servers
-                .into_iter()
-                .find(|s| s.name.eq_ignore_ascii_case(extension_name) || s.id.eq_ignore_ascii_case(extension_name));
+            let matched_server = all_servers.into_iter().find(|s| {
+                s.name.eq_ignore_ascii_case(extension_name)
+                    || s.id.eq_ignore_ascii_case(extension_name)
+            });
 
             if let Some(server) = matched_server {
                 let existing_env = crate::repository::agent::list_session_mcp_servers(session_id)
@@ -1104,11 +1105,9 @@ pub async fn execute_tool_call(
                         .into_iter()
                         .filter(|(srv, _)| srv.id == server.id)
                         .collect();
-                let tools = crate::agent::mcp::resolve_session_mcp_tools(
-                    session_id,
-                    &active_for_server,
-                )
-                .await;
+                let tools =
+                    crate::agent::mcp::resolve_session_mcp_tools(session_id, &active_for_server)
+                        .await;
 
                 let live_pid = crate::repository::agent::list_session_mcp_servers(session_id)
                     .await
@@ -1336,20 +1335,22 @@ pub async fn execute_tool_call(
             let all_servers = crate::repository::agent::list_mcp_servers()
                 .await
                 .unwrap_or_default();
-            let matched_server = all_servers
-                .into_iter()
-                .find(|s| s.id.eq_ignore_ascii_case(server_id_arg) || s.name.eq_ignore_ascii_case(server_id_arg));
+            let matched_server = all_servers.into_iter().find(|s| {
+                s.id.eq_ignore_ascii_case(server_id_arg)
+                    || s.name.eq_ignore_ascii_case(server_id_arg)
+            });
 
             let server_id = matched_server
                 .as_ref()
                 .map(|s| s.id.clone())
                 .unwrap_or_else(|| server_id_arg.to_string());
 
-            let existing_sess_entry = crate::repository::agent::list_session_mcp_servers(session_id)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .find(|sc| sc.server_id == server_id);
+            let existing_sess_entry =
+                crate::repository::agent::list_session_mcp_servers(session_id)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|sc| sc.server_id == server_id);
 
             let env_str = if let Some(env_val) = args.get("env") {
                 if env_val.is_object() {
@@ -1376,10 +1377,7 @@ pub async fn execute_tool_call(
                 })?;
 
                 crate::repository::agent::upsert_session_mcp_server(
-                    session_id,
-                    &server.id,
-                    &env_str,
-                    true,
+                    session_id, &server.id, &env_str, true,
                 )
                 .await?;
                 crate::agent::executor::state::activate_session_extension(session_id, &server.id);
@@ -1391,11 +1389,9 @@ pub async fn execute_tool_call(
                         .into_iter()
                         .filter(|(srv, _)| srv.id == server.id)
                         .collect();
-                let tools = crate::agent::mcp::resolve_session_mcp_tools(
-                    session_id,
-                    &active_for_server,
-                )
-                .await;
+                let tools =
+                    crate::agent::mcp::resolve_session_mcp_tools(session_id, &active_for_server)
+                        .await;
 
                 let live_pid = crate::repository::agent::list_session_mcp_servers(session_id)
                     .await
@@ -1435,10 +1431,7 @@ pub async fn execute_tool_call(
                     .unwrap_or_else(|| "none".to_string());
 
                 crate::repository::agent::upsert_session_mcp_server(
-                    session_id,
-                    &server_id,
-                    &env_str,
-                    false,
+                    session_id, &server_id, &env_str, false,
                 )
                 .await?;
                 crate::agent::executor::state::deactivate_session_extension(session_id, &server_id);
@@ -1481,7 +1474,10 @@ pub async fn execute_tool_call(
                 .unwrap_or_default();
             let server_id = all_servers
                 .into_iter()
-                .find(|s| s.id.eq_ignore_ascii_case(server_id_arg) || s.name.eq_ignore_ascii_case(server_id_arg))
+                .find(|s| {
+                    s.id.eq_ignore_ascii_case(server_id_arg)
+                        || s.name.eq_ignore_ascii_case(server_id_arg)
+                })
                 .map(|s| s.id)
                 .unwrap_or_else(|| server_id_arg.to_string());
 
@@ -1556,9 +1552,7 @@ pub async fn execute_tool_call(
                     .and_then(|sc| sc.pid)
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "none".to_string());
-                let sess_env_str = sess_entry
-                    .map(|sc| sc.env.as_str())
-                    .unwrap_or("{}");
+                let sess_env_str = sess_entry.map(|sc| sc.env.as_str()).unwrap_or("{}");
                 output.push_str(&format!(
                     "- **`{}`** (name: `{}`, type: `{}`)\n  - Status: {} (PID: `{}`)\n  - Server Config (`mcp_servers.config`): `{}`\n  - Session Env (`session_mcp_servers.env`): `{}`\n",
                     s.id, s.name, s.r#type, status_str, pid_str, s.config, sess_env_str

@@ -49,9 +49,7 @@ pub fn set_session_pending_images(
     }
 }
 
-pub fn take_session_pending_images(
-    session_id: &str,
-) -> Vec<crate::llm::types::ImageAttachment> {
+pub fn take_session_pending_images(session_id: &str) -> Vec<crate::llm::types::ImageAttachment> {
     let Some(map) = PENDING_SESSION_IMAGES.get() else {
         return Vec::new();
     };
@@ -323,9 +321,8 @@ async fn execute_session_turn_inner(
     }
     let all_project_skills =
         crate::agent::skills::scan_project_skills(project.root_path.as_deref(), &allowed_folders);
-    let (active_prompt_skills, available_skills): (Vec<_>, Vec<_>) = all_project_skills
-        .into_iter()
-        .partition(|s| {
+    let (active_prompt_skills, available_skills): (Vec<_>, Vec<_>) =
+        all_project_skills.into_iter().partition(|s| {
             s.is_pinned
                 || state::is_skill_active(session_id, &s.slug)
                 || state::is_skill_active(session_id, &s.name)
@@ -335,7 +332,10 @@ async fn execute_session_turn_inner(
         .unwrap_or_default();
 
     let active_mcp_servers: Vec<_> = if !session_active_mcp.is_empty() {
-        session_active_mcp.iter().map(|(srv, _)| srv.clone()).collect()
+        session_active_mcp
+            .iter()
+            .map(|(srv, _)| srv.clone())
+            .collect()
     } else {
         repository::list_mcp_servers()
             .await
@@ -666,9 +666,10 @@ async fn execute_session_turn_inner(
                             | "mcp_register_server"
                     )
                 }) {
-                    let updated_session_mcp = repository::get_session_active_mcp_servers(session_id)
-                        .await
-                        .unwrap_or_default();
+                    let updated_session_mcp =
+                        repository::get_session_active_mcp_servers(session_id)
+                            .await
+                            .unwrap_or_default();
                     mcp_tools = crate::agent::mcp::resolve_session_mcp_tools(
                         session_id,
                         &updated_session_mcp,

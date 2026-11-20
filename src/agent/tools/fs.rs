@@ -26,9 +26,8 @@ pub fn resolve_allowed_path(raw_path: &str, allowed_roots: &[String]) -> Result<
         })
         .collect();
 
-    let is_inside_canon_roots = |cand: &Path| -> bool {
-        canon_roots.iter().any(|r| cand.starts_with(r))
-    };
+    let is_inside_canon_roots =
+        |cand: &Path| -> bool { canon_roots.iter().any(|r| cand.starts_with(r)) };
 
     // 1. Direct absolute path resolution with boundary check
     if input_path.is_absolute() {
@@ -225,9 +224,7 @@ pub fn atomic_write_file(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("file")
     );
     let temp_path = parent.join(temp_name);
 

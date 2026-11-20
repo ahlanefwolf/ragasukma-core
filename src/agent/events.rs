@@ -193,15 +193,15 @@ pub fn prune_idle_broadcasters() {
         let rmap = get_running_tasks_map()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        rmap.keys().cloned().collect::<std::collections::HashSet<_>>()
+        rmap.keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>()
     };
 
     let mut bmap = get_broadcasters_map()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    bmap.retain(|session_id, sender| {
-        running.contains(session_id) || sender.receiver_count() > 0
-    });
+    bmap.retain(|session_id, sender| running.contains(session_id) || sender.receiver_count() > 0);
 }
 
 pub fn get_session_sender(session_id: &str) -> broadcast::Sender<AgentSessionEvent> {
@@ -214,9 +214,7 @@ pub fn get_session_sender(session_id: &str) -> broadcast::Sender<AgentSessionEve
         let running = get_running_tasks_map()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        map.retain(|s_id, sender| {
-            running.contains_key(s_id) || sender.receiver_count() > 0
-        });
+        map.retain(|s_id, sender| running.contains_key(s_id) || sender.receiver_count() > 0);
     }
 
     if let Some(sender) = map.get(session_id) {

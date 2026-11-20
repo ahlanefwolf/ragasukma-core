@@ -429,10 +429,7 @@ pub fn build_command(command_str: &str, requested_shell: Option<ShellType>) -> C
 }
 
 /// Creates a workspace command using an optional dynamic shell specification.
-pub fn create_workspace_command_with_shell(
-    command_str: &str,
-    shell: Option<ShellType>,
-) -> Command {
+pub fn create_workspace_command_with_shell(command_str: &str, shell: Option<ShellType>) -> Command {
     build_command(command_str, shell)
 }
 
@@ -443,7 +440,10 @@ mod tests {
     #[test]
     fn test_shell_type_parse() {
         assert_eq!(ShellType::parse("powershell"), Some(ShellType::PowerShell));
-        assert_eq!(ShellType::parse("powershell.exe"), Some(ShellType::PowerShell));
+        assert_eq!(
+            ShellType::parse("powershell.exe"),
+            Some(ShellType::PowerShell)
+        );
         assert_eq!(ShellType::parse("pwsh"), Some(ShellType::Pwsh));
         assert_eq!(ShellType::parse("bash"), Some(ShellType::Bash));
         assert_eq!(ShellType::parse("gitbash"), Some(ShellType::Bash));

@@ -16,7 +16,8 @@ fn test_compare_three_servers() {
         id: "cartesia-1a1c338f6fc".to_string(),
         name: "cartesia".to_string(),
         r#type: "http".to_string(),
-        config: "url: https://mcp.cartesia.ai/mcp\napi key: sk_car_rtbhiq3ijVKbXHDUmd52YB".to_string(),
+        config: "url: https://mcp.cartesia.ai/mcp\napi key: sk_car_rtbhiq3ijVKbXHDUmd52YB"
+            .to_string(),
         handshake: 1,
         created_at: 0,
         updated_at: 0,

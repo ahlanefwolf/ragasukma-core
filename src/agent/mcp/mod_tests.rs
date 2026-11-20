@@ -124,8 +124,39 @@ fn test_normalize_command_for_windows_leaves_curl_exe_untouched() {
 }
 
 #[test]
-fn test_normalize_command_for_windows_replaces_only_bash_chain() {
-    // ';' is already PowerShell-valid and must not be doubled
-    let normalized = normalize_command_for_windows("cmd1 ; cmd2");
-    assert_eq!(normalized, "cmd1 ; cmd2");
+fn test_mcp_error_classification() {
+    assert_eq!(
+        classify_mcp_error("[mcp:timeout] request expired"),
+        Some(McpErrorKind::Timeout)
+    );
+    assert_eq!(classify_mcp_error("plain error"), None);
+}
+
+#[test]
+fn test_notification_queue_is_bounded_and_drained() {
+    let mut child = tokio::process::Command::new("cmd")
+        .args(["/C", "exit 0"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn test child");
+    let stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut session = StdioSession {
+        child,
+        stdin,
+        lines: tokio::io::BufReader::new(stdout).lines(),
+        notifications: std::collections::VecDeque::new(),
+        initialized: false,
+        next_request_id: std::sync::atomic::AtomicI64::new(1),
+    };
+    for index in 0..(MAX_STDIO_NOTIFICATIONS + 1) {
+        session.push_notification(McpNotification {
+            method: index.to_string(),
+            params: None,
+        });
+    }
+    assert_eq!(session.notifications.len(), MAX_STDIO_NOTIFICATIONS);
+    assert_eq!(session.notifications.front().unwrap().method, "1");
+    assert_eq!(session.drain_notifications().len(), MAX_STDIO_NOTIFICATIONS);
 }

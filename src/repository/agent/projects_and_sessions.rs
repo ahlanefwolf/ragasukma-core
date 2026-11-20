@@ -328,12 +328,11 @@ pub async fn delete_session(id: &str) -> Result<()> {
 
 pub async fn delete_session_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
     // 1. Fetch all (server_id, pid) registered for this session before deleting rows
-    let mcp_rows: Vec<(String, Option<i64>)> = sqlx::query_as(
-        "SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1",
-    )
-    .bind(id)
-    .fetch_all(pool)
-    .await?;
+    let mcp_rows: Vec<(String, Option<i64>)> =
+        sqlx::query_as("SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1")
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
 
     // 2. Stop in-memory MCP runtime and persistent stdio processes for this session
     crate::agent::mcp::SESSION_MCP_REGISTRY
@@ -610,12 +609,11 @@ pub async fn delete_mcp_server(id: &str) -> Result<()> {
 
 pub async fn delete_mcp_server_with_pool(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
     // 1. Fetch all (session_id, pid) pairs registered for this server across all sessions
-    let session_rows: Vec<(String, Option<i64>)> = sqlx::query_as(
-        "SELECT session_id, pid FROM session_mcp_servers WHERE server_id = ?1",
-    )
-    .bind(id)
-    .fetch_all(pool)
-    .await?;
+    let session_rows: Vec<(String, Option<i64>)> =
+        sqlx::query_as("SELECT session_id, pid FROM session_mcp_servers WHERE server_id = ?1")
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
 
     // 2. Shutdown any active stdio process and clear SESSION_MCP_REGISTRY across all sessions
     crate::agent::mcp::shutdown_server_across_all_sessions(id).await;
@@ -734,12 +732,11 @@ pub async fn sync_session_mcp_runtime_with_pool(
     }
 
     // 2. Reconcile recorded rows for this session against STDIO_POOL and OS PID liveness
-    let rows: Vec<(String, Option<i64>)> = sqlx::query_as(
-        "SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1",
-    )
-    .bind(session_id)
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, Option<i64>)> =
+        sqlx::query_as("SELECT server_id, pid FROM session_mcp_servers WHERE session_id = ?1")
+            .bind(session_id)
+            .fetch_all(pool)
+            .await?;
 
     for (server_id, pid_opt) in rows {
         if let Some(live_pid) =
@@ -987,11 +984,13 @@ pub async fn delete_session_mcp_server_with_pool(
 ) -> Result<()> {
     stop_and_clear_session_mcp_runtime(pool, session_id, server_id).await?;
 
-    sqlx::query("UPDATE session_mcp_servers SET pid = NULL WHERE session_id = ?1 AND server_id = ?2")
-        .bind(session_id)
-        .bind(server_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE session_mcp_servers SET pid = NULL WHERE session_id = ?1 AND server_id = ?2",
+    )
+    .bind(session_id)
+    .bind(server_id)
+    .execute(pool)
+    .await?;
 
     sqlx::query("DELETE FROM session_mcp_servers WHERE session_id = ?1 AND server_id = ?2")
         .bind(session_id)
@@ -1037,7 +1036,10 @@ pub async fn list_mcp_server_tools(_server_id: &str) -> Result<Vec<McpServerTool
     Ok(Vec::new())
 }
 
-pub async fn list_mcp_server_tools_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str) -> Result<Vec<McpServerTool>> {
+pub async fn list_mcp_server_tools_with_pool(
+    _pool: &sqlx::SqlitePool,
+    _server_id: &str,
+) -> Result<Vec<McpServerTool>> {
     Ok(Vec::new())
 }
 
@@ -1045,7 +1047,9 @@ pub async fn list_all_mcp_server_tools() -> Result<Vec<McpServerTool>> {
     Ok(Vec::new())
 }
 
-pub async fn list_all_mcp_server_tools_with_pool(_pool: &sqlx::SqlitePool) -> Result<Vec<McpServerTool>> {
+pub async fn list_all_mcp_server_tools_with_pool(
+    _pool: &sqlx::SqlitePool,
+) -> Result<Vec<McpServerTool>> {
     Ok(Vec::new())
 }
 
@@ -1053,7 +1057,12 @@ pub async fn upsert_mcp_server_tool(_server_id: &str, _name: &str, _config: &str
     Ok(())
 }
 
-pub async fn upsert_mcp_server_tool_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str, _name: &str, _config: &str) -> Result<()> {
+pub async fn upsert_mcp_server_tool_with_pool(
+    _pool: &sqlx::SqlitePool,
+    _server_id: &str,
+    _name: &str,
+    _config: &str,
+) -> Result<()> {
     Ok(())
 }
 
@@ -1061,7 +1070,11 @@ pub async fn delete_mcp_server_tool(_server_id: &str, _name: &str) -> Result<()>
     Ok(())
 }
 
-pub async fn delete_mcp_server_tool_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str, _name: &str) -> Result<()> {
+pub async fn delete_mcp_server_tool_with_pool(
+    _pool: &sqlx::SqlitePool,
+    _server_id: &str,
+    _name: &str,
+) -> Result<()> {
     Ok(())
 }
 
@@ -1069,7 +1082,10 @@ pub async fn delete_mcp_server_tools_by_server(_server_id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn delete_mcp_server_tools_by_server_with_pool(_pool: &sqlx::SqlitePool, _server_id: &str) -> Result<()> {
+pub async fn delete_mcp_server_tools_by_server_with_pool(
+    _pool: &sqlx::SqlitePool,
+    _server_id: &str,
+) -> Result<()> {
     Ok(())
 }
 
@@ -1099,7 +1115,10 @@ pub async fn get_project_mcp_server_ids_with_pool(
     Ok(active_servers.into_iter().map(|s| s.id).collect())
 }
 
-pub async fn set_project_mcp_servers(_project_id: &str, _active_server_ids: &[String]) -> Result<()> {
+pub async fn set_project_mcp_servers(
+    _project_id: &str,
+    _active_server_ids: &[String],
+) -> Result<()> {
     Ok(())
 }
 

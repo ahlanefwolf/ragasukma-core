@@ -364,7 +364,10 @@ impl CodexSseParserState {
                 })
                 .unwrap_or("Codex Responses stream failed");
             crate::term_err!("[Codex] Stream error event received: {}", err_msg);
-            events.push(V1StreamEvent::ContentDelta(format!("\n[Error: {}]\n", err_msg)));
+            events.push(V1StreamEvent::ContentDelta(format!(
+                "\n[Error: {}]\n",
+                err_msg
+            )));
             events.push(V1StreamEvent::Finish {
                 finish_reason: "error".to_string(),
             });

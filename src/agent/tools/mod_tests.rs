@@ -201,7 +201,10 @@ fn test_atomic_write_file_success() {
     assert_eq!(fs::read_to_string(&target_file).unwrap(), "first content");
 
     assert!(atomic_write_file(&target_file, b"overwritten atomic content").is_ok());
-    assert_eq!(fs::read_to_string(&target_file).unwrap(), "overwritten atomic content");
+    assert_eq!(
+        fs::read_to_string(&target_file).unwrap(),
+        "overwritten atomic content"
+    );
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
@@ -552,8 +555,13 @@ async fn test_workspace_grep_with_folder_arg_and_edit_file_schema() {
 #[tokio::test]
 async fn test_mcp_dynamic_tools_registration_and_configuration() {
     let roots: Vec<String> = vec![];
-    let project = crate::repository::agent::create_project("test_proj", "test_desc", None, None).await.unwrap();
-    let session = crate::repository::agent::create_session(&project.id, "test_session", None, None, None).await.unwrap();
+    let project = crate::repository::agent::create_project("test_proj", "test_desc", None, None)
+        .await
+        .unwrap();
+    let session =
+        crate::repository::agent::create_session(&project.id, "test_session", None, None, None)
+            .await
+            .unwrap();
     let test_session = session.id;
 
     // 1. Register dummy test MCP server
@@ -607,12 +615,14 @@ async fn test_mcp_dynamic_tools_registration_and_configuration() {
 
 #[test]
 fn test_mcp_namespaced_tool_deduplication_across_servers() {
-    let make_tool = |server_id: &str, server_name: &str, tool_name: &str| {
-        crate::agent::mcp::ActiveMcpTool {
+    let make_tool =
+        |server_id: &str, server_name: &str, tool_name: &str| crate::agent::mcp::ActiveMcpTool {
             server_id: server_id.to_string(),
             server_name: server_name.to_string(),
             original_name: tool_name.to_string(),
-            namespaced_name: crate::agent::mcp::format_mcp_namespaced_tool_name(server_id, tool_name),
+            namespaced_name: crate::agent::mcp::format_mcp_namespaced_tool_name(
+                server_id, tool_name,
+            ),
             definition: crate::agent::mcp::McpToolDefinition {
                 name: tool_name.to_string(),
                 description: Some(format!("Take {} screenshot", server_name)),
@@ -633,8 +643,7 @@ fn test_mcp_namespaced_tool_deduplication_across_servers() {
                 session_id: None,
             },
             markdown_spec: None,
-        }
-    };
+        };
 
     // Two different MCP servers both exposing a tool named `screenshot`, plus a duplicate entry
     let mcp_tools = vec![

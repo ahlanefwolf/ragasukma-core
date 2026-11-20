@@ -63,11 +63,11 @@ pub mod types {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 pub use types::*;
 
@@ -129,15 +129,82 @@ fn resolve_executable(
     (binary, final_args, None)
 }
 
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, LazyLock};
 use tokio::sync::Mutex as TokioMutex;
 
 /// Persistent Stdio process handle kept alive during session
 struct StdioSession {
-    child: tokio::process::Child,
-    stdin: tokio::process::ChildStdin,
-    lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    child: Child,
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+    notifications: VecDeque<McpNotification>,
     initialized: bool,
+    next_request_id: AtomicI64,
+}
+
+/// A JSON-RPC notification received from a stdio MCP server.
+/// Notifications have no request id and are retained in memory until consumed.
+#[derive(Clone, Debug)]
+pub struct McpNotification {
+    pub method: String,
+    pub params: Option<serde_json::Value>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum McpErrorKind {
+    ProcessExited,
+    Timeout,
+    MalformedJson,
+    JsonRpc,
+    DatabasePidUpdate,
+    Transport,
+}
+
+impl McpErrorKind {
+    const fn code(self) -> &'static str {
+        match self {
+            Self::ProcessExited => "process_exited",
+            Self::Timeout => "timeout",
+            Self::MalformedJson => "malformed_json",
+            Self::JsonRpc => "jsonrpc_error",
+            Self::DatabasePidUpdate => "database_pid_update_failed",
+            Self::Transport => "transport",
+        }
+    }
+}
+
+fn mcp_error(kind: McpErrorKind, message: impl std::fmt::Display) -> String {
+    format!("[mcp:{}] {message}", kind.code())
+}
+
+const MAX_STDIO_NOTIFICATIONS: usize = 256;
+
+/// Classifies an MCP error string produced by this module without requiring callers
+/// to parse the human-readable message.
+pub fn classify_mcp_error(error: &str) -> Option<McpErrorKind> {
+    let code = error.strip_prefix("[mcp:")?.split(']').next()?;
+    match code {
+        "process_exited" => Some(McpErrorKind::ProcessExited),
+        "timeout" => Some(McpErrorKind::Timeout),
+        "malformed_json" => Some(McpErrorKind::MalformedJson),
+        "jsonrpc_error" => Some(McpErrorKind::JsonRpc),
+        "database_pid_update_failed" => Some(McpErrorKind::DatabasePidUpdate),
+        "transport" => Some(McpErrorKind::Transport),
+        _ => None,
+    }
+}
+
+struct StdioEntry {
+    session: TokioMutex<StdioSession>,
+}
+
+impl StdioEntry {
+    fn new(session: StdioSession) -> Self {
+        Self {
+            session: TokioMutex::new(session),
+        }
+    }
 }
 
 impl StdioSession {
@@ -189,12 +256,21 @@ impl StdioSession {
             child,
             stdin,
             lines,
+            notifications: VecDeque::new(),
             initialized: false,
+            next_request_id: AtomicI64::new(1),
         })
     }
 
-    fn is_alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+    fn push_notification(&mut self, notification: McpNotification) {
+        if self.notifications.len() >= MAX_STDIO_NOTIFICATIONS {
+            self.notifications.pop_front();
+        }
+        self.notifications.push_back(notification);
+    }
+
+    fn drain_notifications(&mut self) -> Vec<McpNotification> {
+        self.notifications.drain(..).collect()
     }
 
     async fn send_raw(
@@ -203,19 +279,29 @@ impl StdioSession {
         timeout_duration: Duration,
         expect_response_id: Option<i64>,
     ) -> Result<serde_json::Value, String> {
-        let payload = serde_json::to_string(json_val).map_err(|e| e.to_string())?;
+        let payload = serde_json::to_string(json_val)
+            .map_err(|e| mcp_error(McpErrorKind::MalformedJson, e))?;
         self.stdin
             .write_all(payload.as_bytes())
             .await
-            .map_err(|e| format!("Failed to write to MCP stdin: {}", e))?;
-        self.stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|e| format!("Failed to write newline to MCP stdin: {}", e))?;
-        self.stdin
-            .flush()
-            .await
-            .map_err(|e| format!("Failed to flush MCP stdin: {}", e))?;
+            .map_err(|e| {
+                mcp_error(
+                    McpErrorKind::Transport,
+                    format!("Failed to write to MCP stdin: {e}"),
+                )
+            })?;
+        self.stdin.write_all(b"\n").await.map_err(|e| {
+            mcp_error(
+                McpErrorKind::Transport,
+                format!("Failed to write newline to MCP stdin: {e}"),
+            )
+        })?;
+        self.stdin.flush().await.map_err(|e| {
+            mcp_error(
+                McpErrorKind::Transport,
+                format!("Failed to flush MCP stdin: {e}"),
+            )
+        })?;
 
         let Some(req_id) = expect_response_id else {
             return Ok(serde_json::Value::Null);
@@ -225,8 +311,18 @@ impl StdioSession {
         loop {
             let line_opt = tokio::time::timeout_at(deadline, self.lines.next_line())
                 .await
-                .map_err(|_| "Timed out waiting for MCP process response".to_string())?
-                .map_err(|e| format!("Error reading from MCP stdout: {}", e))?;
+                .map_err(|_| {
+                    mcp_error(
+                        McpErrorKind::Timeout,
+                        "Timed out waiting for MCP process response",
+                    )
+                })?
+                .map_err(|e| {
+                    mcp_error(
+                        McpErrorKind::Transport,
+                        format!("Error reading from MCP stdout: {e}"),
+                    )
+                })?;
 
             match line_opt {
                 Some(line) => {
@@ -234,15 +330,34 @@ impl StdioSession {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
-                        && (val.get("id").and_then(|v| v.as_i64()) == Some(req_id)
-                            || val.get("result").is_some()
-                            || val.get("error").is_some())
+                    let val: serde_json::Value = serde_json::from_str(trimmed).map_err(|e| {
+                        mcp_error(
+                            McpErrorKind::MalformedJson,
+                            format!("Invalid MCP stdout JSON: {e}"),
+                        )
+                    })?;
+                    if val.get("id").is_none()
+                        && let Some(method) = val.get("method").and_then(|method| method.as_str())
                     {
+                        self.push_notification(McpNotification {
+                            method: method.to_owned(),
+                            params: val.get("params").cloned(),
+                        });
+                        continue;
+                    }
+                    if val.get("id").and_then(|id| id.as_i64()) == Some(req_id) {
+                        if let Some(error) = val.get("error") {
+                            return Err(mcp_error(McpErrorKind::JsonRpc, error));
+                        }
                         return Ok(val);
                     }
                 }
-                None => return Err("MCP process closed stdout unexpectedly".to_string()),
+                None => {
+                    return Err(mcp_error(
+                        McpErrorKind::ProcessExited,
+                        "MCP process closed stdout unexpectedly",
+                    ));
+                }
             }
         }
     }
@@ -252,9 +367,10 @@ impl StdioSession {
             return Ok(());
         }
 
+        let init_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let init_req = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": 1,
+            "id": init_id,
             "method": "initialize",
             "params": {
                 "protocolVersion": "2024-11-05",
@@ -267,7 +383,8 @@ impl StdioSession {
                 }
             }
         });
-        self.send_raw(&init_req, timeout_duration, Some(1)).await?;
+        self.send_raw(&init_req, timeout_duration, Some(init_id))
+            .await?;
 
         let notify = serde_json::json!({
             "jsonrpc": "2.0",
@@ -279,15 +396,65 @@ impl StdioSession {
     }
 }
 
-static STDIO_POOL: LazyLock<TokioMutex<HashMap<String, StdioSession>>> =
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+
+static STDIO_POOL: LazyLock<TokioMutex<HashMap<String, Arc<StdioEntry>>>> =
     LazyLock::new(|| TokioMutex::new(HashMap::new()));
+
+fn remove_stdio_entry_if_same(
+    pool: &mut HashMap<String, Arc<StdioEntry>>,
+    key: &str,
+    expected: &Arc<StdioEntry>,
+) -> bool {
+    if pool
+        .get(key)
+        .is_some_and(|current| Arc::ptr_eq(current, expected))
+    {
+        pool.remove(key);
+        true
+    } else {
+        false
+    }
+}
+
+/// Returns and removes all pending notifications for a live stdio server.
+pub async fn drain_stdio_notifications(session_id: &str, server_id: &str) -> Vec<McpNotification> {
+    let keys = [
+        format!("{session_id}:{server_id}"),
+        format!("{session_id}::{server_id}"),
+        server_id.to_owned(),
+    ];
+    let entry = {
+        let pool = STDIO_POOL.lock().await;
+        keys.iter().find_map(|key| pool.get(key).cloned())
+    };
+    let Some(entry) = entry else {
+        return Vec::new();
+    };
+    entry.session.lock().await.drain_notifications()
+}
+
+async fn terminate_stdio_entry(entry: Arc<StdioEntry>) {
+    let pid = {
+        let session = entry.session.lock().await;
+        session.child.id()
+    };
+    if let Some(pid) = pid {
+        kill_os_pid(pid as i64).await;
+    }
+    let mut session = entry.session.lock().await;
+    let _ = session.child.kill().await;
+    let _ = session.child.wait().await;
+}
 
 /// Gracefully shuts down all active persistent stdio MCP processes
 pub async fn shutdown_all_stdio_servers() {
-    let mut pool = STDIO_POOL.lock().await;
-    for (_, mut session) in pool.drain() {
-        let _ = session.child.kill().await;
-        let _ = session.child.wait().await;
+    let entries: Vec<_> = {
+        let mut pool = STDIO_POOL.lock().await;
+        pool.drain().map(|(_, entry)| entry).collect()
+    };
+    for entry in entries {
+        terminate_stdio_entry(entry).await;
     }
 }
 
@@ -358,15 +525,30 @@ pub async fn is_os_pid_alive(pid: i64) -> bool {
 pub async fn check_stdio_server_alive(session_id: &str, server_id: &str) -> Option<u32> {
     let key1 = format!("{session_id}:{server_id}");
     let key2 = format!("{session_id}::{server_id}");
-    let mut pool = STDIO_POOL.lock().await;
+    let entries: Vec<_> = {
+        let pool = STDIO_POOL.lock().await;
+        [&key1, &key2]
+            .iter()
+            .filter_map(|key| pool.get(*key).cloned())
+            .collect()
+    };
 
-    for key in [&key1, &key2] {
-        if let Some(session) = pool.get_mut(key) {
-            match session.child.try_wait() {
-                Ok(None) => return session.child.id(),
-                Ok(Some(_)) | Err(_) => {
-                    pool.remove(key);
-                }
+    let mut dead_entries = Vec::new();
+    for entry in entries {
+        let is_alive = {
+            let mut session = entry.session.lock().await;
+            matches!(session.child.try_wait(), Ok(None))
+        };
+        if is_alive {
+            return entry.session.lock().await.child.id();
+        }
+        dead_entries.push(entry);
+    }
+    if !dead_entries.is_empty() {
+        let mut pool = STDIO_POOL.lock().await;
+        for entry in dead_entries {
+            for key in [&key1, &key2] {
+                remove_stdio_entry_if_same(&mut pool, key, &entry);
             }
         }
     }
@@ -376,22 +558,30 @@ pub async fn check_stdio_server_alive(session_id: &str, server_id: &str) -> Opti
 /// Sweeps `STDIO_POOL` for any child processes that have exited on their own (`child.try_wait()`),
 /// removing them from the in-memory pool and returning `(session_id, server_id)` pairs that died.
 pub async fn sweep_dead_stdio_servers() -> Vec<(String, String)> {
-    let mut pool = STDIO_POOL.lock().await;
     let mut dead_keys = Vec::new();
+    let entries: Vec<_> = {
+        let pool = STDIO_POOL.lock().await;
+        pool.iter()
+            .map(|(key, entry)| (key.clone(), Arc::clone(entry)))
+            .collect()
+    };
 
-    for (key, session) in pool.iter_mut() {
-        match session.child.try_wait() {
-            Ok(None) => {}
-            Ok(Some(_)) | Err(_) => {
-                dead_keys.push(key.clone());
-            }
+    for (key, entry) in entries {
+        let is_dead = {
+            let mut session = entry.session.lock().await;
+            !matches!(session.child.try_wait(), Ok(None))
+        };
+        if is_dead {
+            dead_keys.push((key, entry));
         }
     }
 
     let mut dead_pairs = Vec::new();
-    for key in dead_keys {
-        pool.remove(&key);
-        if let Some((sid, srv)) = key.split_once("::").or_else(|| key.split_once(':')) {
+    let mut pool = STDIO_POOL.lock().await;
+    for (key, entry) in dead_keys {
+        if remove_stdio_entry_if_same(&mut pool, &key, &entry)
+            && let Some((sid, srv)) = key.split_once("::").or_else(|| key.split_once(':'))
+        {
             dead_pairs.push((sid.to_string(), srv.to_string()));
         }
     }
@@ -403,21 +593,16 @@ pub async fn sweep_dead_stdio_servers() -> Vec<(String, String)> {
 pub async fn shutdown_session_stdio_server(session_id: &str, server_id: &str) {
     let key1 = format!("{session_id}:{server_id}");
     let key2 = format!("{session_id}::{server_id}");
-    let mut pool = STDIO_POOL.lock().await;
-    let mut removed_sessions = Vec::new();
-    for key in [key1, key2, server_id.to_string()] {
-        if let Some(session) = pool.remove(&key) {
-            removed_sessions.push(session);
-        }
-    }
-    drop(pool);
+    let removed_sessions: Vec<_> = {
+        let mut pool = STDIO_POOL.lock().await;
+        [key1, key2, server_id.to_string()]
+            .iter()
+            .filter_map(|key| pool.remove(key))
+            .collect()
+    };
 
-    for mut session in removed_sessions {
-        if let Some(pid) = session.child.id() {
-            kill_os_pid(pid as i64).await;
-        }
-        let _ = session.child.kill().await;
-        let _ = session.child.wait().await;
+    for session in removed_sessions {
+        terminate_stdio_entry(session).await;
     }
 
     SESSION_MCP_REGISTRY
@@ -427,28 +612,19 @@ pub async fn shutdown_session_stdio_server(session_id: &str, server_id: &str) {
 
 /// Gracefully shuts down all active persistent stdio MCP processes belonging to a given session
 pub async fn shutdown_session_stdio_servers(session_id: &str) {
-    let mut pool = STDIO_POOL.lock().await;
     let prefix = format!("{}:", session_id);
-    let keys_to_remove: Vec<String> = pool
-        .keys()
-        .filter(|k| k.starts_with(&prefix))
-        .cloned()
-        .collect();
+    let removed_sessions: Vec<_> = {
+        let mut pool = STDIO_POOL.lock().await;
+        let keys: Vec<_> = pool
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.iter().filter_map(|key| pool.remove(key)).collect()
+    };
 
-    let mut removed_sessions = Vec::new();
-    for key in keys_to_remove {
-        if let Some(session) = pool.remove(&key) {
-            removed_sessions.push(session);
-        }
-    }
-    drop(pool);
-
-    for mut session in removed_sessions {
-        if let Some(pid) = session.child.id() {
-            kill_os_pid(pid as i64).await;
-        }
-        let _ = session.child.kill().await;
-        let _ = session.child.wait().await;
+    for session in removed_sessions {
+        terminate_stdio_entry(session).await;
     }
 }
 
@@ -456,27 +632,21 @@ pub async fn shutdown_session_stdio_servers(session_id: &str) {
 /// registries (`SESSION_MCP_REGISTRY`) for a given `server_id` across all sessions.
 pub async fn shutdown_server_across_all_sessions(server_id: &str) {
     let suffix = format!(":{server_id}");
-    let mut pool = STDIO_POOL.lock().await;
-    let keys_to_remove: Vec<String> = pool
-        .keys()
-        .filter(|k| *k == server_id || k.ends_with(&suffix))
-        .cloned()
-        .collect();
+    let removed_sessions: Vec<_> = {
+        let mut pool = STDIO_POOL.lock().await;
+        let keys_to_remove: Vec<String> = pool
+            .keys()
+            .filter(|k| *k == server_id || k.ends_with(&suffix))
+            .cloned()
+            .collect();
+        keys_to_remove
+            .iter()
+            .filter_map(|key| pool.remove(key))
+            .collect()
+    };
 
-    let mut removed_sessions = Vec::new();
-    for key in keys_to_remove {
-        if let Some(session) = pool.remove(&key) {
-            removed_sessions.push(session);
-        }
-    }
-    drop(pool);
-
-    for mut session in removed_sessions {
-        if let Some(pid) = session.child.id() {
-            kill_os_pid(pid as i64).await;
-        }
-        let _ = session.child.kill().await;
-        let _ = session.child.wait().await;
+    for session in removed_sessions {
+        terminate_stdio_entry(session).await;
     }
 
     SESSION_MCP_REGISTRY
@@ -542,44 +712,57 @@ async fn call_stdio_rpc(
     request_json: &serde_json::Value,
     timeout_duration: Duration,
 ) -> Result<serde_json::Value, String> {
-    let mut pool = STDIO_POOL.lock().await;
-
-    let need_spawn = match pool.get_mut(server_key) {
-        Some(proc) => {
-            if proc.is_alive() {
-                false
+    let entry = {
+        let existing = {
+            let pool = STDIO_POOL.lock().await;
+            pool.get(server_key).cloned()
+        };
+        if let Some(entry) = existing {
+            entry
+        } else {
+            let proc = StdioSession::spawn(command_str, args, env).await?;
+            let candidate = Arc::new(StdioEntry::new(proc));
+            let mut pool = STDIO_POOL.lock().await;
+            if let Some(entry) = pool.get(server_key).cloned() {
+                drop(pool);
+                terminate_stdio_entry(candidate).await;
+                entry
             } else {
-                pool.remove(server_key);
-                if let Some(sid) = session_id {
-                    let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
-                        sid,
-                        server_id,
-                        None,
-                    )
-                    .await;
-                }
-                true
+                pool.insert(server_key.to_string(), Arc::clone(&candidate));
+                candidate
             }
         }
-        None => true,
     };
 
-    if need_spawn {
-        let proc = StdioSession::spawn(command_str, args, env).await?;
-        if let (Some(pid), Some(sid)) = (proc.child.id(), session_id) {
-            let _ = crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
-                sid,
-                server_id,
-                Some(pid as i64),
+    let mut proc = entry.session.lock().await;
+    if proc.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+        drop(proc);
+        let removed = {
+            let mut pool = STDIO_POOL.lock().await;
+            remove_stdio_entry_if_same(&mut pool, server_key, &entry)
+        };
+        if removed && let Some(sid) = session_id {
+            crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
+                sid, server_id, None,
             )
-            .await;
+            .await
+            .map_err(|e| mcp_error(McpErrorKind::DatabasePidUpdate, e))?;
         }
-        pool.insert(server_key.to_string(), proc);
+        return Err(mcp_error(
+            McpErrorKind::ProcessExited,
+            format!("MCP server process exited for '{server_key}'"),
+        ));
     }
 
-    let proc = pool
-        .get_mut(server_key)
-        .ok_or_else(|| format!("Process must be available for MCP server '{server_key}'"))?;
+    if let (Some(pid), Some(sid)) = (proc.child.id(), session_id) {
+        crate::repository::agent::projects_and_sessions::update_session_mcp_server_pid(
+            sid,
+            server_id,
+            Some(pid as i64),
+        )
+        .await
+        .map_err(|e| mcp_error(McpErrorKind::DatabasePidUpdate, e))?;
+    }
 
     let method = request_json
         .get("method")
@@ -590,17 +773,16 @@ async fn call_stdio_rpc(
         return Ok(serde_json::json!({
             "jsonrpc": "2.0",
             "id": request_json.get("id").unwrap_or(&serde_json::json!(1)),
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} }
-            }
+            "result": { "protocolVersion": "2024-11-05", "capabilities": { "tools": {} } }
         }));
     }
 
     proc.ensure_initialized(timeout_duration).await?;
-
-    let req_id = request_json.get("id").and_then(|v| v.as_i64()).unwrap_or(2);
-    proc.send_raw(request_json, timeout_duration, Some(req_id)).await
+    let req_id = proc.next_request_id.fetch_add(1, Ordering::Relaxed);
+    let mut request = request_json.clone();
+    request["id"] = serde_json::json!(req_id);
+    proc.send_raw(&request, timeout_duration, Some(req_id))
+        .await
 }
 
 /// Execute JSON-RPC 2.0 request over HTTP/SSE endpoint.
@@ -611,13 +793,11 @@ async fn call_http_rpc(
     request_json: &serde_json::Value,
     timeout_duration: Duration,
 ) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(timeout_duration)
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let client = &*HTTP_CLIENT;
 
     let mut post_req = client
         .post(url)
+        .timeout(timeout_duration)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream");
 
@@ -651,6 +831,7 @@ async fn call_http_rpc(
             // Server might require standard SSE handshake via GET first
             if let Ok(mut sse_resp) = client
                 .get(url)
+                .timeout(timeout_duration)
                 .header("Accept", "text/event-stream")
                 .send()
                 .await
@@ -677,6 +858,7 @@ async fn call_http_rpc(
 
                             let post_resp = client
                                 .post(&resolved_url)
+                                .timeout(timeout_duration)
                                 .header("Content-Type", "application/json")
                                 .json(request_json)
                                 .send()
@@ -1073,7 +1255,10 @@ pub async fn resolve_active_mcp_tools(
 /// Discovers tools for a specific session with session-specific env merged in RAM
 pub async fn resolve_session_mcp_tools(
     session_id: &str,
-    servers: &[(crate::agent::models::McpServer, crate::agent::models::SessionMcpServer)],
+    servers: &[(
+        crate::agent::models::McpServer,
+        crate::agent::models::SessionMcpServer,
+    )],
 ) -> Vec<ActiveMcpTool> {
     let mut resolved = Vec::new();
     let mut seen_namespaced = std::collections::HashSet::new();
@@ -1086,7 +1271,8 @@ pub async fn resolve_session_mcp_tools(
         let mut config: McpServerConfig = s.into();
         config.session_id = Some(session_id.to_string());
         // Merge session env into config.env
-        if let Ok(session_env) = serde_json::from_str::<HashMap<String, String>>(&session_state.env) {
+        if let Ok(session_env) = serde_json::from_str::<HashMap<String, String>>(&session_state.env)
+        {
             for (k, v) in session_env {
                 config.env.insert(k, v);
             }
@@ -1117,7 +1303,9 @@ pub async fn resolve_session_mcp_tools(
         let client = McpClient::new(config.clone());
         match client.list_tools().await {
             Ok(tools) => {
-                SESSION_MCP_REGISTRY.set_tools(session_id, &s.id, tools.clone()).await;
+                SESSION_MCP_REGISTRY
+                    .set_tools(session_id, &s.id, tools.clone())
+                    .await;
                 for t in tools {
                     let namespaced = format_mcp_namespaced_tool_name(&config.id, &t.name);
                     if !seen_namespaced.insert(namespaced.clone()) {
@@ -1136,7 +1324,12 @@ pub async fn resolve_session_mcp_tools(
                 }
             }
             Err(e) => {
-                crate::term_err!("[MCP] Failed to list tools for session '{}' from '{}': {}", session_id, s.id, e);
+                crate::term_err!(
+                    "[MCP] Failed to list tools for session '{}' from '{}': {}",
+                    session_id,
+                    s.id,
+                    e
+                );
             }
         }
     }
@@ -1257,7 +1450,10 @@ fn parse_markdown_to_tool_def(name: &str, config: &str) -> McpToolDefinition {
                     );
                     prop_obj.insert(
                         "description".to_string(),
-                        serde_json::Value::String(format!("Argument for parameter {}", clean_param)),
+                        serde_json::Value::String(format!(
+                            "Argument for parameter {}",
+                            clean_param
+                        )),
                     );
                     properties.insert(clean_param.to_string(), serde_json::Value::Object(prop_obj));
                     required.push(serde_json::Value::String(clean_param.to_string()));
@@ -1319,7 +1515,10 @@ pub async fn call_active_mcp_tool(
     let transport = matched.server_config.transport.to_lowercase();
     if transport != "disabled" && !transport.is_empty() {
         let client = McpClient::new(matched.server_config.clone());
-        match client.call_tool(&matched.original_name, arguments.clone()).await {
+        match client
+            .call_tool(&matched.original_name, arguments.clone())
+            .await
+        {
             Ok(res) => {
                 if res.is_error {
                     let err_texts: Vec<String> = res

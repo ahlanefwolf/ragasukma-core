@@ -57,7 +57,10 @@ pub fn required_verifiers(allowed_folders: &[String], modified_files: &[String])
 
 fn folder_has_modified_files(folder: &str, modified_files: &[String]) -> bool {
     let folder_path = std::path::Path::new(folder);
-    let folder_name = folder_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let folder_name = folder_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
     modified_files.iter().any(|f| {
         let clean = f.trim_start_matches("./").trim_start_matches('@');
         f.starts_with(folder)
@@ -124,7 +127,10 @@ pub fn matched_verifier(cmd: &str) -> Option<String> {
 }
 
 fn push_unique(out: &mut Vec<String>, value: String) {
-    if !out.iter().any(|existing| existing.eq_ignore_ascii_case(&value)) {
+    if !out
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(&value))
+    {
         out.push(value);
     }
 }
@@ -152,7 +158,10 @@ mod tests {
 
     #[test]
     fn matched_verifier_is_case_insensitive() {
-        assert_eq!(matched_verifier("CARGO TEST").as_deref(), Some("cargo test"));
+        assert_eq!(
+            matched_verifier("CARGO TEST").as_deref(),
+            Some("cargo test")
+        );
     }
 
     #[test]
@@ -164,7 +173,10 @@ mod tests {
         let exec_wrapped = "cargo test && (cd /path/to/web && npm test)";
         assert!(is_verifier_satisfied("cd web && npm test", exec_wrapped));
 
-        assert!(is_verifier_satisfied("cargo test", "cargo test --bin ragasukma"));
+        assert!(is_verifier_satisfied(
+            "cargo test",
+            "cargo test --bin ragasukma"
+        ));
         assert!(!is_verifier_satisfied("cargo test", "npm test"));
     }
 
@@ -177,7 +189,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_inputs_demand_nothing() {        assert!(required_verifiers(&[], &[]).is_empty());
+    fn empty_inputs_demand_nothing() {
+        assert!(required_verifiers(&[], &[]).is_empty());
     }
 
     #[test]
