@@ -12,6 +12,24 @@ use crate::llm::v1_engine::{
 use anyhow::{Context, Result};
 use std::io::BufRead;
 
+/// Maps a Gemini `finishReason` to an OpenAI-style `finish_reason`.
+///
+/// Returns `None` for `STOP` and unknown reasons so the caller keeps its
+/// existing default ("stop"); tool calls are resolved separately downstream.
+fn map_gemini_finish_reason(f_reason: &str) -> Option<&'static str> {
+    match f_reason {
+        "MAX_TOKENS" => Some("length"),
+        "SAFETY"
+        | "RECITATION"
+        | "BLOCKLIST"
+        | "PROHIBITED_CONTENT"
+        | "SPII"
+        | "IMAGE_SAFETY"
+        | "IMAGE_PROHIBITED_CONTENT" => Some("content_filter"),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn execute_v1_stream<F>(
     client: &reqwest::blocking::Client,
@@ -72,9 +90,9 @@ where
                 if let Some(cands) = candidates {
                     for cand in cands {
                         if let Some(f_reason) = cand.get("finishReason").and_then(|r| r.as_str())
-                            && f_reason == "MAX_TOKENS"
+                            && let Some(mapped) = map_gemini_finish_reason(f_reason)
                         {
-                            finish_reason = "length".to_string();
+                            finish_reason = mapped.to_string();
                         }
 
                         if let Some(parts) =
@@ -228,4 +246,36 @@ where
         },
         finish_reason,
     })
+}
+
+#[cfg(test)]
+mod finish_reason_tests {
+    use super::map_gemini_finish_reason;
+
+    #[test]
+    fn max_tokens_maps_to_length() {
+        assert_eq!(map_gemini_finish_reason("MAX_TOKENS"), Some("length"));
+    }
+
+    #[test]
+    fn safety_family_maps_to_content_filter() {
+        for r in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+            "IMAGE_SAFETY",
+            "IMAGE_PROHIBITED_CONTENT",
+        ] {
+            assert_eq!(map_gemini_finish_reason(r), Some("content_filter"), "{r}");
+        }
+    }
+
+    #[test]
+    fn stop_and_unknown_fall_through() {
+        assert_eq!(map_gemini_finish_reason("STOP"), None);
+        assert_eq!(map_gemini_finish_reason("OTHER"), None);
+        assert_eq!(map_gemini_finish_reason(""), None);
+    }
 }

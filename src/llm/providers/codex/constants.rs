@@ -13,3 +13,14 @@ pub const CODEX_MODELS_URL: &str =
     "https://chatgpt.com/backend-api/codex/models?client_version=0.167.1";
 
 pub const CODEX_DEFAULT_INSTRUCTIONS: &str = "You are an AI assistant in Ragasukma.";
+
+/// 9router parity: `codex.oauth.refreshLeadMs` (10 min). Refresh proactively
+/// once the access token is within this window of expiry. Kept small so the
+/// refresh token is not rotated on every call (reusing a rotated refresh token
+/// revokes the whole OpenAI session).
+pub const CODEX_REFRESH_LEAD_SECS: u64 = 600;
+
+/// 9router parity: `codex.oauth.maxRefreshAgeMs` (8 days). A token older than
+/// this is refreshed proactively even if not yet expired (safety net for
+/// long-idle accounts).
+pub const CODEX_MAX_REFRESH_AGE_SECS: u64 = 691_200;

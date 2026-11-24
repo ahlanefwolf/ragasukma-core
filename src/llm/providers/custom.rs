@@ -437,7 +437,7 @@ impl CustomProvider {
         let base = account.base_url.trim().trim_end_matches('/');
         let url = if base.ends_with("/chat/completions") {
             base.to_string()
-        } else if base.ends_with("/v1") {
+        } else if base.ends_with("/v1") || base.contains("/v1/") {
             format!("{base}/chat/completions")
         } else {
             format!("{base}/v1/chat/completions")
@@ -480,6 +480,7 @@ impl CustomProvider {
 
         let mut final_content = String::new();
         let mut final_thought = String::new();
+        let mut upstream_finish_reason: Option<String> = None;
         let mut tool_calls_map: std::collections::BTreeMap<usize, V1ToolCall> =
             std::collections::BTreeMap::new();
 
@@ -504,6 +505,14 @@ impl CustomProvider {
 
                 let choice = chunk.get("choices").and_then(|c| c.get(0));
                 let delta = choice.and_then(|c| c.get("delta"));
+
+                if let Some(fr) = choice
+                    .and_then(|c| c.get("finish_reason"))
+                    .and_then(|f| f.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    upstream_finish_reason = Some(fr.to_string());
+                }
 
                 if let Some(delta) = delta {
                     if let Some(thought) = delta
@@ -599,7 +608,9 @@ impl CustomProvider {
         let finish_reason = if tool_calls_opt.is_some() {
             "tool_calls".to_string()
         } else {
-            "stop".to_string()
+            // Respect the upstream reason (`length`, `content_filter`, `stop`…)
+            // so clients can distinguish truncated output from a clean finish.
+            upstream_finish_reason.unwrap_or_else(|| "stop".to_string())
         };
 
         Ok(crate::llm::v1_engine::V1Response {

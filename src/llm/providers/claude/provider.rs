@@ -1,5 +1,5 @@
 use super::constants::*;
-use super::oauth::refresh_account_token;
+use super::oauth::{needs_refresh, refresh_account_token};
 use super::quota::fetch_account_quota;
 use super::types::{
     ClaudeAccount, ClaudeAccountInfo, ClaudeModelInfo, ClaudeQuotaResponse, current_timestamp_secs,
@@ -24,6 +24,37 @@ fn remove_account_entries(accounts: &mut Vec<ClaudeAccount>, id_or_email: &str) 
     let before_len = accounts.len();
     accounts.retain(|a| a.id != id_or_email);
     accounts.len() < before_len
+}
+
+/// Extracts the Claude Code session id from a `metadata.user_id` value.
+///
+/// Parity with 9router's `extractClaudeSessionIdFromUserId`
+/// (open-sse/utils/claudeCloaking.js). Claude Code stores `user_id` either as a
+/// JSON blob (`{"device_id":...,"account_uuid":...,"session_id":...}`) or as a
+/// bare string; both may carry a leading `claude:` prefix that must be stripped.
+fn extract_claude_session_id_from_user_id(user_id: &str) -> Option<String> {
+    let clean = |raw: &str| -> Option<String> {
+        let s = raw.trim();
+        // Case-insensitive strip of a leading "claude:" (parity with /^claude:/i).
+        let s = if s.len() >= 7 && s[..7].eq_ignore_ascii_case("claude:") {
+            &s[7..]
+        } else {
+            s
+        }
+        .trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+
+    if user_id.trim_start().starts_with('{') {
+        let parsed: serde_json::Value = serde_json::from_str(user_id).ok()?;
+        let sid = parsed.get("session_id").and_then(|v| v.as_str())?;
+        return clean(sid);
+    }
+    clean(user_id)
 }
 
 pub struct ClaudeProvider {
@@ -114,9 +145,7 @@ impl ClaudeProvider {
             if !acc.is_active {
                 continue;
             }
-            if (acc.access_token.is_none() || acc.expires_at <= now)
-                && refresh_account_token(&self.client, acc).is_ok()
-            {
+            if (needs_refresh(acc, now)) && refresh_account_token(&self.client, acc).is_ok() {
                 dirty = true;
             }
         }
@@ -193,6 +222,7 @@ impl ClaudeProvider {
             refresh_token: clean_token,
             access_token: None,
             expires_at: 0,
+            last_refresh_at: 0,
             org_id,
             plan_type: Some("Claude Code".to_string()),
             rate_limited_until: 0,
@@ -252,13 +282,27 @@ impl ClaudeProvider {
     }
 
     pub fn refresh_account_by_id(&mut self, id: &str) -> Result<String> {
-        if let Some(acc) = self.accounts.iter_mut().find(|a| a.id == id) {
-            let token = refresh_account_token(&self.client, acc)?;
-            self.save_accounts()?;
-            Ok(token)
+        let mut deactivate = false;
+        let result = if let Some(acc) = self.accounts.iter_mut().find(|a| a.id == id) {
+            match refresh_account_token(&self.client, acc) {
+                Ok(t) => Ok(t),
+                Err(e) => {
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        acc.is_active = false;
+                        deactivate = true;
+                    }
+                    Err(e)
+                }
+            }
         } else {
             bail!("Account not found: {id}");
+        };
+        if deactivate {
+            let _ = self.save_accounts();
         }
+        result.inspect(|_| {
+            let _ = self.save_accounts();
+        })
     }
 
     pub fn get_account_quota(&mut self, id: &str) -> Result<ClaudeQuotaResponse> {
@@ -288,11 +332,17 @@ impl ClaudeProvider {
             let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[i];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[i]) {
+                    // Permanent failures (invalid_grant / revoked token) can never
+                    // recover: deactivate so rotation stops retrying this account.
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        self.accounts[i].is_active = false;
+                        let _ = self.save_accounts();
+                    }
                     last_err = Some(e);
                     continue;
                 }
@@ -436,6 +486,10 @@ impl ClaudeProvider {
                 || self.accounts[acc_idx].expires_at <= now
             {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        self.accounts[acc_idx].is_active = false;
+                        let _ = self.save_accounts();
+                    }
                     tracing::warn!(
                         "[Claude] Token refresh error for account {}: {}",
                         self.accounts[acc_idx].id,
@@ -516,6 +570,10 @@ impl ClaudeProvider {
                 || self.accounts[acc_idx].expires_at <= now
             {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx]) {
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        self.accounts[acc_idx].is_active = false;
+                        let _ = self.save_accounts();
+                    }
                     tracing::warn!(
                         "[Claude V1] Token refresh error for account {}: {}",
                         self.accounts[acc_idx].id,
@@ -534,10 +592,12 @@ impl ClaudeProvider {
             let payload = build_claude_payload_from_v1(req);
 
             match self.execute_claude_stream_internal_v1(&access_token, &payload, &mut on_event) {
-                Ok((content, tool_calls)) => {
+                Ok((content, tool_calls, upstream_finish)) => {
                     self.accounts[acc_idx].consecutive_errors = 0;
                     let _ = self.save_accounts();
-                    let finish = if tool_calls.is_some() {
+                    let finish = if let Some(f) = upstream_finish {
+                        f
+                    } else if tool_calls.is_some() {
                         "tool_calls".to_string()
                     } else {
                         "stop".to_string()
@@ -577,11 +637,15 @@ impl ClaudeProvider {
         access_token: &str,
         payload: &serde_json::Value,
         on_event: &mut F,
-    ) -> Result<(String, Option<Vec<crate::llm::v1_engine::V1ToolCall>>)>
+    ) -> Result<(
+        String,
+        Option<Vec<crate::llm::v1_engine::V1ToolCall>>,
+        Option<String>,
+    )>
     where
         F: FnMut(crate::llm::v1_engine::V1StreamEvent) -> Result<()>,
     {
-        let req = self
+        let mut req = self
             .client
             .post(format!("{CLAUDE_MESSAGES_URL}?beta=true"))
             .header("Authorization", format!("Bearer {access_token}"))
@@ -595,6 +659,26 @@ impl ClaudeProvider {
                 format!("claude-cli/{CLAUDE_CLI_VERSION} (external, sdk-cli)"),
             )
             .header("X-App", "cli");
+
+        // 9router parity: send the official SDK (Stainless) fingerprint headers so
+        // OAuth requests carry the same envelope as a real Claude Code client.
+        for (name, value) in STAINLESS_HEADERS {
+            req = req.header(*name, *value);
+        }
+
+        // 9router parity: for OAuth tokens (`sk-ant-oat…`), align the
+        // `x-claude-code-session-id` header with `metadata.user_id.session_id`
+        // when the client did not already supply it (open-sse executors/default.js).
+        if access_token.contains(CLAUDE_OAUTH_TOKEN_PREFIX) {
+            let sid = payload
+                .get("metadata")
+                .and_then(|m| m.get("user_id"))
+                .and_then(|v| v.as_str())
+                .and_then(extract_claude_session_id_from_user_id);
+            if let Some(sid) = sid {
+                req = req.header("x-claude-code-session-id", sid);
+            }
+        }
 
         let res = req
             .json(payload)
@@ -611,6 +695,7 @@ impl ClaudeProvider {
 
         let mut full_content = String::new();
         let mut collected_tool_calls: Vec<crate::llm::v1_engine::V1ToolCall> = Vec::new();
+        let mut upstream_finish: Option<String> = None;
         let mut sse_parser = ClaudeSseParserState::new();
         let reader = std::io::BufReader::new(res);
 
@@ -660,6 +745,9 @@ impl ClaudeProvider {
                     }
                     _ => {}
                 }
+                if let crate::llm::v1_engine::V1StreamEvent::Finish { finish_reason } = &ev {
+                    upstream_finish = Some(finish_reason.clone());
+                }
                 on_event(ev)?;
             }
         }
@@ -670,7 +758,7 @@ impl ClaudeProvider {
             None
         };
 
-        Ok((full_content, tc))
+        Ok((full_content, tc, upstream_finish))
     }
 
     fn execute_claude_stream<F>(
@@ -770,5 +858,49 @@ mod tests {
 
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0].id, "keep");
+    }
+
+    #[test]
+    fn session_id_from_json_user_id() {
+        let uid = r#"{"device_id":"d","account_uuid":"a","session_id":"abc-123"}"#;
+        assert_eq!(
+            extract_claude_session_id_from_user_id(uid).as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn session_id_from_bare_user_id_strips_claude_prefix() {
+        assert_eq!(
+            extract_claude_session_id_from_user_id("claude:xyz").as_deref(),
+            Some("xyz")
+        );
+        assert_eq!(
+            extract_claude_session_id_from_user_id("plain").as_deref(),
+            Some("plain")
+        );
+    }
+
+    #[test]
+    fn session_id_json_value_is_prefix_stripped() {
+        let uid = r#"{"session_id":"claude:zzz"}"#;
+        assert_eq!(
+            extract_claude_session_id_from_user_id(uid).as_deref(),
+            Some("zzz")
+        );
+    }
+
+    #[test]
+    fn session_id_absent_or_empty_yields_none() {
+        assert_eq!(extract_claude_session_id_from_user_id(""), None);
+        assert_eq!(extract_claude_session_id_from_user_id("   "), None);
+        assert_eq!(
+            extract_claude_session_id_from_user_id(r#"{"device_id":"d"}"#),
+            None
+        );
+        assert_eq!(
+            extract_claude_session_id_from_user_id("not-json{x"),
+            Some("not-json{x".into())
+        );
     }
 }

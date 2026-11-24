@@ -191,6 +191,7 @@ pub fn complete_oauth_flow(
         chatgpt_plan_type: plan_type,
         rate_limited_until: 0,
         model_rate_limits: HashMap::new(),
+        last_refresh_at: now,
         consecutive_errors: 0,
         is_active: true,
     };
@@ -202,24 +203,29 @@ pub fn refresh_account_token(
     client: &reqwest::blocking::Client,
     account: &mut CodexAccount,
 ) -> Result<String> {
-    let params = [
-        ("grant_type", "refresh_token"),
-        ("client_id", CODEX_CLIENT_ID),
-        ("refresh_token", account.refresh_token.as_str()),
-        ("scope", "openid profile email offline_access"),
-    ];
+    // 9router `refreshCodexToken`: JSON body, no `scope`.
+    // (registry `oauth.refresh.scope` is metadata not used on this path)
+    let payload = serde_json::json!({
+        "client_id": CODEX_CLIENT_ID,
+        "grant_type": "refresh_token",
+        "refresh_token": account.refresh_token.as_str(),
+    });
 
     let res = client
         .post(CODEX_TOKEN_URL)
-        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .form(&params)
+        .json(&payload)
         .send()
         .context("Failed to contact OpenAI token endpoint for refresh")?;
 
+    let status = res.status().as_u16();
     if !res.status().is_success() {
         let err = res.text().unwrap_or_default();
-        bail!("Failed to refresh OpenAI Codex token: {err}");
+        bail!(
+            "{}",
+            crate::llm::providers::refresh_status::refresh_failure_message("Codex", status, &err)
+        );
     }
 
     let token_data: CodexTokenResponse = res
@@ -229,6 +235,9 @@ pub fn refresh_account_token(
     let now = current_timestamp_secs();
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(120);
+    // Stamp the refresh time so the proactive stale-refresh window
+    // (CODEX_MAX_REFRESH_AGE_SECS) is measured from the real last rotation.
+    account.last_refresh_at = now;
 
     if let Some(new_ref) = token_data.refresh_token
         && !new_ref.trim().is_empty()
@@ -251,6 +260,23 @@ pub fn refresh_account_token(
     }
 
     Ok(token_data.access_token)
+}
+
+/// Decide whether an account needs a (proactive) refresh before use.
+/// Mirrors 9router's `shouldRefreshCredentials`:
+///  - no access token yet, or
+///  - access token expires within `CODEX_REFRESH_LEAD_SECS`, or
+///  - the token has not been refreshed for `CODEX_MAX_REFRESH_AGE_SECS`
+///    (or `last_refresh_at` is unknown / `0` for legacy accounts).
+pub fn needs_refresh(account: &CodexAccount, now: u64) -> bool {
+    if account.access_token.is_none() {
+        return true;
+    }
+    if now.saturating_add(CODEX_REFRESH_LEAD_SECS) >= account.expires_at {
+        return true;
+    }
+    account.last_refresh_at == 0
+        || now.saturating_sub(account.last_refresh_at) >= CODEX_MAX_REFRESH_AGE_SECS
 }
 
 #[cfg(test)]
@@ -288,5 +314,80 @@ mod tests {
     #[test]
     fn take_unknown_state_returns_none() {
         assert_eq!(take_oauth_state("never_stored_state"), None);
+    }
+
+    fn account_with(token: Option<&str>, expires_at: u64, last_refresh_at: u64) -> CodexAccount {
+        CodexAccount {
+            id: "cx-acc-test".to_string(),
+            email: None,
+            refresh_token: "refresh".to_string(),
+            access_token: token.map(String::from),
+            id_token: None,
+            expires_at,
+            chatgpt_account_id: None,
+            chatgpt_plan_type: None,
+            rate_limited_until: 0,
+            model_rate_limits: HashMap::new(),
+            last_refresh_at,
+            consecutive_errors: 0,
+            is_active: true,
+        }
+    }
+
+    #[test]
+    fn needs_refresh_when_no_access_token() {
+        let now = 1_000_000;
+        assert!(needs_refresh(&account_with(None, now + 100_000, now), now));
+    }
+
+    #[test]
+    fn no_refresh_when_token_valid_and_fresh() {
+        let now = 1_000_000;
+        // Expires well beyond the lead window, refreshed just now.
+        assert!(!needs_refresh(
+            &account_with(Some("tok"), now + 100_000, now),
+            now
+        ));
+    }
+
+    #[test]
+    fn needs_refresh_when_within_expiry_lead_window() {
+        let now = 1_000_000;
+        // Expires in less than CODEX_REFRESH_LEAD_SECS -> proactive refresh.
+        let expires_at = now + CODEX_REFRESH_LEAD_SECS - 1;
+        assert!(needs_refresh(
+            &account_with(Some("tok"), expires_at, now),
+            now
+        ));
+    }
+
+    #[test]
+    fn needs_refresh_when_token_older_than_max_age() {
+        let now = 1_000_000;
+        let last = now - CODEX_MAX_REFRESH_AGE_SECS;
+        assert!(needs_refresh(
+            &account_with(Some("tok"), now + 100_000, last),
+            now
+        ));
+    }
+
+    #[test]
+    fn needs_refresh_when_last_refresh_unknown() {
+        // Legacy account files deserialize last_refresh_at to 0 -> refresh once.
+        let now = 1_000_000;
+        assert!(needs_refresh(
+            &account_with(Some("tok"), now + 100_000, 0),
+            now
+        ));
+    }
+
+    #[test]
+    fn no_refresh_when_token_just_under_max_age() {
+        let now = 1_000_000;
+        let last = now - (CODEX_MAX_REFRESH_AGE_SECS - 1);
+        assert!(!needs_refresh(
+            &account_with(Some("tok"), now + 100_000, last),
+            now
+        ));
     }
 }

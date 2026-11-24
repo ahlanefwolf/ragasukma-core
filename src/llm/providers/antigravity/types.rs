@@ -40,6 +40,10 @@ pub struct AntigravityAccount {
     pub rate_limited_until: u64,
     #[serde(default, alias = "modelRateLimits")]
     pub model_rate_limits: std::collections::HashMap<String, u64>,
+    /// Unix seconds of the last successful token refresh (0 = legacy/unknown).
+    /// Drives the proactive refresh window, mirroring 9router `trackRefreshAt`.
+    #[serde(default, alias = "lastRefreshAt")]
+    pub last_refresh_at: u64,
     #[serde(default, alias = "consecutiveErrors")]
     pub consecutive_errors: u32,
     #[serde(default = "default_true", alias = "isActive", alias = "enabled")]
@@ -157,6 +161,7 @@ mod tests {
             refresh_token: "token".to_string(),
             access_token: None,
             expires_at: 0,
+            last_refresh_at: 0,
             project_id: None,
             tier_id: None,
             rate_limited_until: 0,

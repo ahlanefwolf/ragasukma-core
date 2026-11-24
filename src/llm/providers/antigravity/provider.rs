@@ -1,5 +1,5 @@
 use super::constants::*;
-use super::oauth::{complete_oauth_flow, ensure_project_id, refresh_account_token};
+use super::oauth::{complete_oauth_flow, ensure_project_id, needs_refresh, refresh_account_token};
 use super::types::{
     AntigravityAccount, AntigravityAccountInfo, AntigravityQuotaResponse, current_timestamp_secs,
     generate_pseudo_uuid,
@@ -127,6 +127,7 @@ impl AntigravityProvider {
                         refresh_token: tok.trim().to_string(),
                         access_token: None,
                         expires_at: 0,
+                        last_refresh_at: 0,
                         project_id: None,
                         tier_id: None,
                         rate_limited_until: 0,
@@ -176,6 +177,7 @@ impl AntigravityProvider {
                             refresh_token: tok.trim().to_string(),
                             access_token: None,
                             expires_at: 0,
+                            last_refresh_at: 0,
                             project_id,
                             tier_id: None,
                             rate_limited_until: 0,
@@ -275,6 +277,7 @@ impl AntigravityProvider {
             refresh_token: clean_token,
             access_token: None,
             expires_at: 0,
+            last_refresh_at: 0,
             project_id,
             tier_id: None,
             rate_limited_until: 0,
@@ -334,8 +337,26 @@ impl AntigravityProvider {
 
     pub fn refresh_account_by_id(&mut self, id: &str) -> Result<String> {
         let client = self.client.clone();
+        let mut deactivate = false;
+        let refresh_res = if let Some(account) = self.accounts.iter_mut().find(|a| a.id == id) {
+            match refresh_account_token(&client, account) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        account.is_active = false;
+                        deactivate = true;
+                    }
+                    Err(e)
+                }
+            }
+        } else {
+            bail!("Account not found");
+        };
+        if deactivate {
+            let _ = self.save_accounts();
+        }
+        refresh_res?;
         if let Some(account) = self.accounts.iter_mut().find(|a| a.id == id) {
-            let _ = refresh_account_token(&client, account)?;
             let _ = ensure_project_id(&client, account);
             account.rate_limited_until = 0;
             account.model_rate_limits.clear();
@@ -459,12 +480,16 @@ impl AntigravityProvider {
 
             let need_token = {
                 let acc = &self.accounts[acc_idx];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token
                 && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
             {
+                if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                    self.accounts[acc_idx].is_active = false;
+                    let _ = self.save_accounts();
+                }
                 self.accounts[acc_idx].consecutive_errors += 1;
                 crate::term_err!(
                     "[Antigravity] Failed to refresh token for account {}: {}",
@@ -758,12 +783,16 @@ impl AntigravityProvider {
             let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[acc_idx];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token
                 && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
             {
+                if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                    self.accounts[acc_idx].is_active = false;
+                    let _ = self.save_accounts();
+                }
                 self.accounts[acc_idx].consecutive_errors += 1;
                 crate::term_err!(
                     "[Antigravity] Failed to refresh token for account {}: {}",

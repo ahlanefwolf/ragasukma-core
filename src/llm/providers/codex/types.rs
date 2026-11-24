@@ -48,6 +48,12 @@ pub struct CodexAccount {
     pub rate_limited_until: u64,
     #[serde(default, alias = "modelRateLimits")]
     pub model_rate_limits: HashMap<String, u64>,
+    /// Unix seconds of the last successful token refresh. Used to drive the
+    /// proactive stale-refresh (`CODEX_MAX_REFRESH_AGE_SECS`) the same way
+    /// 9router's `lastRefreshAt` / `maxRefreshAgeMs` does. `0` = unknown
+    /// (legacy account file), which is treated as stale so it refreshes once.
+    #[serde(default, alias = "lastRefreshAt")]
+    pub last_refresh_at: u64,
     #[serde(default, alias = "consecutiveErrors")]
     pub consecutive_errors: u32,
     #[serde(default = "default_true", alias = "isActive", alias = "enabled")]

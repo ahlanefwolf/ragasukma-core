@@ -1,5 +1,5 @@
 use super::constants::*;
-use super::oauth::refresh_account_token;
+use super::oauth::{needs_refresh, refresh_account_token};
 use super::types::{
     CodexAccount, CodexAccountInfo, CodexModelInfo, CodexQuotaResponse, current_timestamp_secs,
 };
@@ -134,6 +134,7 @@ impl CodexProvider {
                         chatgpt_plan_type: None,
                         rate_limited_until: 0,
                         model_rate_limits: std::collections::HashMap::new(),
+                        last_refresh_at: 0,
                         consecutive_errors: 0,
                         is_active: true,
                     });
@@ -179,6 +180,7 @@ impl CodexProvider {
                                 .map(String::from),
                             rate_limited_until: 0,
                             model_rate_limits: std::collections::HashMap::new(),
+                            last_refresh_at: 0,
                             consecutive_errors: 0,
                             is_active: true,
                         });
@@ -276,6 +278,7 @@ impl CodexProvider {
             chatgpt_plan_type: None,
             rate_limited_until: 0,
             model_rate_limits: std::collections::HashMap::new(),
+            last_refresh_at: 0,
             consecutive_errors: 0,
             is_active: true,
         };
@@ -337,13 +340,27 @@ impl CodexProvider {
 
     pub fn refresh_account_by_id(&mut self, id: &str) -> Result<()> {
         let client = self.client.clone();
-        if let Some(account) = self.accounts.iter_mut().find(|a| a.id == id) {
-            refresh_account_token(&client, account)?;
-            let _ = self.save_accounts();
-            Ok(())
+        let mut deactivate = false;
+        let result = if let Some(account) = self.accounts.iter_mut().find(|a| a.id == id) {
+            match refresh_account_token(&client, account) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        account.is_active = false;
+                        deactivate = true;
+                    }
+                    Err(e)
+                }
+            }
         } else {
             bail!("Account not found");
+        };
+        if deactivate {
+            let _ = self.save_accounts();
         }
+        result.map(|_| {
+            let _ = self.save_accounts();
+        })
     }
 
     pub fn get_account_quota(&mut self, id: &str) -> Result<CodexQuotaResponse> {
@@ -374,11 +391,17 @@ impl CodexProvider {
             let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[i];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token {
                 if let Err(e) = refresh_account_token(&self.client, &mut self.accounts[i]) {
+                    // Permanent failures (refresh_token_reused/invalid_grant)
+                    // can never recover: deactivate so rotation stops retrying.
+                    if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                        self.accounts[i].is_active = false;
+                        let _ = self.save_accounts();
+                    }
                     last_err = Some(e);
                     continue;
                 }
@@ -530,12 +553,16 @@ impl CodexProvider {
             let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[acc_idx];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token
                 && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
             {
+                if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                    self.accounts[acc_idx].is_active = false;
+                    let _ = self.save_accounts();
+                }
                 self.accounts[acc_idx].consecutive_errors += 1;
                 crate::term_err!(
                     "[Codex] Failed to refresh token for account {}: {}",
@@ -645,12 +672,16 @@ impl CodexProvider {
             let now = current_timestamp_secs();
             let need_token = {
                 let acc = &self.accounts[acc_idx];
-                acc.access_token.is_none() || acc.expires_at <= now
+                needs_refresh(acc, now)
             };
 
             if need_token
                 && let Err(e) = refresh_account_token(&self.client, &mut self.accounts[acc_idx])
             {
+                if crate::llm::providers::refresh_status::is_unrecoverable_error(&e) {
+                    self.accounts[acc_idx].is_active = false;
+                    let _ = self.save_accounts();
+                }
                 crate::term_err!(
                     "[Codex] Failed to refresh token for account {}: {}",
                     self.accounts[acc_idx].id,
@@ -678,13 +709,20 @@ impl CodexProvider {
                 &payload,
                 &mut on_event,
             ) {
-                Ok((full_reply, tool_calls)) => {
+                Ok((full_reply, tool_calls, upstream_finish)) => {
                     self.accounts[acc_idx].consecutive_errors = 0;
                     let _ = self.save_accounts();
+                    let finish = if let Some(f) = upstream_finish {
+                        f
+                    } else if tool_calls.is_some() {
+                        "tool_calls".to_string()
+                    } else {
+                        "stop".to_string()
+                    };
                     return Ok(crate::llm::v1_engine::V1Response {
                         content: full_reply,
                         tool_calls,
-                        finish_reason: "stop".to_string(),
+                        finish_reason: finish,
                     });
                 }
                 Err(e) => {
@@ -727,7 +765,11 @@ impl CodexProvider {
         chatgpt_account_id: Option<&str>,
         payload: &serde_json::Value,
         on_event: &mut F,
-    ) -> Result<(String, Option<Vec<crate::llm::v1_engine::V1ToolCall>>)>
+    ) -> Result<(
+        String,
+        Option<Vec<crate::llm::v1_engine::V1ToolCall>>,
+        Option<String>,
+    )>
     where
         F: FnMut(crate::llm::v1_engine::V1StreamEvent) -> Result<()>,
     {
@@ -760,6 +802,7 @@ impl CodexProvider {
 
         let mut full_content = String::new();
         let mut collected_tool_calls: Vec<crate::llm::v1_engine::V1ToolCall> = Vec::new();
+        let mut upstream_finish: Option<String> = None;
         let mut sse_parser = super::v1_adapter::CodexSseParserState::new();
         let reader = std::io::BufReader::new(res);
 
@@ -809,6 +852,9 @@ impl CodexProvider {
                     }
                     _ => {}
                 }
+                if let crate::llm::v1_engine::V1StreamEvent::Finish { finish_reason } = &ev {
+                    upstream_finish = Some(finish_reason.clone());
+                }
                 on_event(ev)?;
             }
         }
@@ -819,7 +865,7 @@ impl CodexProvider {
             None
         };
 
-        Ok((full_content, tc))
+        Ok((full_content, tc, upstream_finish))
     }
 
     fn execute_codex_stream_internal<F>(

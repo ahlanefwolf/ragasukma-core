@@ -104,6 +104,7 @@ pub fn complete_oauth_flow(
         refresh_token,
         access_token: Some(tokens.access_token),
         expires_at: now + tokens.expires_in.saturating_sub(300),
+        last_refresh_at: now,
         project_id: None,
         tier_id: None,
         rate_limited_until: 0,
@@ -133,15 +134,24 @@ pub fn refresh_account_token(
         .send()
         .context("Failed to contact Google OAuth token endpoint")?;
 
+    let status = res.status().as_u16();
     if !res.status().is_success() {
         let err = res.text().unwrap_or_default();
-        bail!("Google OAuth token refresh failed: {err}");
+        bail!(
+            "{}",
+            crate::llm::providers::refresh_status::refresh_failure_message(
+                "Antigravity",
+                status,
+                &err
+            )
+        );
     }
 
     let token_data: TokenResponse = res.json().context("Failed to parse token response")?;
     let now = current_timestamp_secs();
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(300);
+    account.last_refresh_at = now;
     if let Some(new_refresh) = token_data.refresh_token
         && !new_refresh.is_empty()
     {
@@ -232,6 +242,19 @@ pub fn ensure_project_id(
     let fallback_pid = format!("project-{}", &generate_pseudo_uuid("p")[..16]);
     account.project_id = Some(fallback_pid.clone());
     Ok(fallback_pid)
+}
+
+/// Decide whether an account needs a (proactive) refresh before use.
+/// Mirrors 9router `shouldRefreshCredentials` for antigravity.
+pub fn needs_refresh(account: &AntigravityAccount, now: u64) -> bool {
+    if account.access_token.is_none() {
+        return true;
+    }
+    if now.saturating_add(ANTIGRAVITY_REFRESH_LEAD_SECS) >= account.expires_at {
+        return true;
+    }
+    account.last_refresh_at == 0
+        || now.saturating_sub(account.last_refresh_at) >= ANTIGRAVITY_MAX_REFRESH_AGE_SECS
 }
 
 #[cfg(test)]

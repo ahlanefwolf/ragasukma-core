@@ -13,4 +13,31 @@ pub const ANTHROPIC_BETA: &str = "claude-code-20250219,oauth-2025-04-20,interlea
 
 pub const CLAUDE_SCOPES: &[&str] = &["org:create_api_key", "user:profile", "user:inference"];
 
+// Anthropic SDK (Stainless) fingerprint headers. 9router sends these verbatim
+// from its `claude` provider registry so the request looks like it came from the
+// official JS SDK rather than a hand-rolled client. Keep the values identical to
+// the registry snapshot (open-sse/providers/registry/claude.js) for 1:1 parity.
+pub const STAINLESS_HEADERS: &[(&str, &str)] = &[
+    ("X-Stainless-Helper-Method", "stream"),
+    ("X-Stainless-Retry-Count", "0"),
+    ("X-Stainless-Runtime-Version", "v24.14.0"),
+    ("X-Stainless-Package-Version", "0.80.0"),
+    ("X-Stainless-Runtime", "node"),
+    ("X-Stainless-Lang", "js"),
+    ("X-Stainless-Arch", "arm64"),
+    ("X-Stainless-Os", "MacOS"),
+    ("X-Stainless-Timeout", "600"),
+];
+
+/// OAuth access tokens issued to Claude Code carry this prefix. Used to gate the
+/// session-id header sync so plain API keys are never treated as OAuth tokens.
+pub const CLAUDE_OAUTH_TOKEN_PREFIX: &str = "sk-ant-oat";
+
 pub const CLAUDE_DEFAULT_SYSTEM_PROMPT: &str = "You are an AI assistant in Ragasukma.";
+
+/// 9router parity: `claude.oauth.refreshLeadMs` (4 h). Anthropic OAuth tokens
+/// live ~8 h, so refresh proactively within this window before expiry.
+pub const CLAUDE_REFRESH_LEAD_SECS: u64 = 14_400;
+
+/// Safety net: refresh proactively after this age even if not yet expired.
+pub const CLAUDE_MAX_REFRESH_AGE_SECS: u64 = 691_200;

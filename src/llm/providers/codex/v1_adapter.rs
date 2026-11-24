@@ -383,11 +383,31 @@ impl CodexSseParserState {
             return events;
         }
 
-        // 7. Ignore completion / done markers without text
-        if event_type == "response.output_text.done"
-            || event_type == "response.completed"
-            || event_type == "response.done"
-        {
+        // 7. Completion / incomplete markers → emit terminal Finish (9router parity:
+        //    response.completed → "stop"; response.incomplete → map incomplete_details.reason:
+        //    max_output_tokens → "length", content_filter → "content_filter", else "incomplete")
+        if event_type == "response.completed" || event_type == "response.done" {
+            events.push(V1StreamEvent::Finish {
+                finish_reason: "stop".to_string(),
+            });
+            return events;
+        }
+        if event_type == "response.incomplete" {
+            let reason = parsed
+                .pointer("/response/incomplete_details/reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let finish = match reason {
+                "max_output_tokens" => "length",
+                "content_filter" => "content_filter",
+                _ => "incomplete",
+            };
+            events.push(V1StreamEvent::Finish {
+                finish_reason: finish.to_string(),
+            });
+            return events;
+        }
+        if event_type == "response.output_text.done" {
             return events;
         }
 

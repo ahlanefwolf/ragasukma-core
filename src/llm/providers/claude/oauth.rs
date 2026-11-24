@@ -178,6 +178,7 @@ pub fn complete_oauth_flow(
         refresh_token,
         access_token: Some(tokens.access_token),
         expires_at: now + tokens.expires_in.saturating_sub(120),
+        last_refresh_at: now,
         org_id,
         plan_type: Some("Claude Code".to_string()),
         rate_limited_until: 0,
@@ -207,9 +208,13 @@ pub fn refresh_account_token(
         .send()
         .context("Failed to contact Claude token endpoint for refresh")?;
 
+    let status = res.status().as_u16();
     if !res.status().is_success() {
         let err = res.text().unwrap_or_default();
-        bail!("Failed to refresh Claude token: {err}");
+        bail!(
+            "{}",
+            crate::llm::providers::refresh_status::refresh_failure_message("Claude", status, &err)
+        );
     }
 
     let token_data: ClaudeTokenResponse = res
@@ -219,6 +224,7 @@ pub fn refresh_account_token(
     let now = current_timestamp_secs();
     account.access_token = Some(token_data.access_token.clone());
     account.expires_at = now + token_data.expires_in.saturating_sub(120);
+    account.last_refresh_at = now;
 
     if let Some(ref new_refresh) = token_data.refresh_token
         && !new_refresh.trim().is_empty()
@@ -238,4 +244,17 @@ pub fn refresh_account_token(
     }
 
     Ok(token_data.access_token)
+}
+
+/// Decide whether an account needs a (proactive) refresh before use.
+/// Mirrors 9router `shouldRefreshCredentials` for claude.
+pub fn needs_refresh(account: &ClaudeAccount, now: u64) -> bool {
+    if account.access_token.is_none() {
+        return true;
+    }
+    if now.saturating_add(CLAUDE_REFRESH_LEAD_SECS) >= account.expires_at {
+        return true;
+    }
+    account.last_refresh_at == 0
+        || now.saturating_sub(account.last_refresh_at) >= CLAUDE_MAX_REFRESH_AGE_SECS
 }
