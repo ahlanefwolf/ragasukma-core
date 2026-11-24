@@ -18,10 +18,15 @@ use crate::llm::v1_engine::{
 const STREAM_ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Total attempts (initial + retries) for one streaming call.
-const MAX_STREAM_ATTEMPTS: u32 = 3;
+///
+/// `MODEL_CAPACITY_EXHAUSTED` (HTTP 503) is a transient capacity shortage that
+/// clears on its own within seconds to tens of seconds. Four attempts with the
+/// exponential backoff below give roughly eleven seconds of patience — enough to
+/// ride out a short wobble without making a genuine outage feel hung.
+const MAX_STREAM_ATTEMPTS: u32 = 4;
 
 /// First backoff step; later steps grow exponentially from here.
-const BASE_RETRY_DELAY_MS: u64 = 800;
+const BASE_RETRY_DELAY_MS: u64 = 1_500;
 
 /// Ceiling for our own exponential backoff (used when the server gives no `Retry-After`).
 const MAX_RETRY_DELAY_MS: u64 = 30_000;
@@ -93,6 +98,14 @@ fn parse_retry_after_header_value(value: &str) -> Option<u64> {
 /// in between), so unrelated numbers later in the message are never mistaken for a delay.
 /// HTTP-date values are not parsed and yield `None`, falling back to exponential backoff.
 fn parse_retry_after_ms(err_str: &str) -> Option<u64> {
+    // Google/Antigravity sends the hint in the JSON body as `"retryDelay": "8s"`
+    // rather than a `Retry-After` header. Recognise that shape first so a
+    // MODEL_CAPACITY_EXHAUSTED 503 waits the duration the server asked for
+    // instead of falling back to sub-second jittered backoff.
+    if let Some(ms) = parse_google_retry_delay_ms(err_str) {
+        return Some(ms);
+    }
+
     let lower = err_str.to_ascii_lowercase();
     let mut search_from = 0;
 
@@ -127,6 +140,49 @@ fn parse_retry_after_ms(err_str: &str) -> Option<u64> {
     None
 }
 
+/// Parses Google's `RetryInfo.retryDelay` field, which appears inside the JSON
+/// error body as `"retryDelay": "8s"` (protobuf duration string: `3.5s`, `500ms`,
+/// `2618.435076932s`). Returns milliseconds.
+fn parse_google_retry_delay_ms(err_str: &str) -> Option<u64> {
+    let lower = err_str.to_ascii_lowercase();
+    let mut search_from = 0;
+
+    while let Some(rel) = lower[search_from..].find("retrydelay") {
+        let name_end = search_from + rel + "retrydelay".len();
+        search_from = name_end;
+
+        let rest = lower[name_end..].trim_start_matches(|c: char| {
+            c == ':' || c == '=' || c == '"' || c == '\'' || c.is_whitespace()
+        });
+
+        // Take the duration token, e.g. "8s", "3.5s", "500ms", "2618.435076932s".
+        let token: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == 'm' || *c == 's')
+            .collect();
+
+        let (number, is_ms) = if let Some(stripped) = token.strip_suffix("ms") {
+            (stripped, true)
+        } else if let Some(stripped) = token.strip_suffix('s') {
+            (stripped, false)
+        } else {
+            continue;
+        };
+
+        let Ok(value) = number.parse::<f64>() else {
+            continue;
+        };
+        if !value.is_finite() || value < 0.0 {
+            continue;
+        }
+
+        let ms = if is_ms { value } else { value * 1000.0 };
+        return Some(ms.ceil().min(u64::MAX as f64) as u64);
+    }
+
+    None
+}
+
 /// Returns true if `code` appears in `haystack` as a standalone number (not part of a longer
 /// digit run), e.g. matches "HTTP 429" but not "14290 tokens".
 fn contains_status_code(haystack: &str, code: &str) -> bool {
@@ -149,6 +205,8 @@ fn is_retryable_error(err_str: &str) -> bool {
         || lower.contains("too many requests")
         || lower.contains("rate limit")
         || lower.contains("overloaded")
+        || lower.contains("capacity")
+        || lower.contains("temporarily unavailable")
         || lower.contains("timeout")
         || lower.contains("timed out")
         || lower.contains("connection closed")

@@ -6,9 +6,8 @@ use super::signature::{
     store_thought_signature_scoped,
 };
 use crate::llm::providers::antigravity::constants::*;
-use crate::llm::providers::antigravity::types::generate_pseudo_uuid;
-use crate::llm::v1_engine::{V1ChatRequest, extract_text_content, sanitize_function_name};
-use std::collections::HashMap;
+use crate::llm::v1_engine::{V1ChatRequest, extract_text_content};
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn sanitize_schema_recursive(val: &mut serde_json::Value) {
@@ -314,16 +313,89 @@ pub fn clean_parameters_schema(param: &serde_json::Value) -> serde_json::Value {
     obj
 }
 
-pub fn sanitize_system_prompt(prompt: &str) -> String {
-    // Rewrites competing client branding to avoid 429 quota exhaustion flag from Google
-    let mut res = prompt.replace(
-        "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
-        "",
-    );
-    res = res.replace("OpenCode", "Antigravity");
-    res = res.replace("opencode", "antigravity");
-    res = res.replace("OPENCODE", "ANTIGRAVITY");
-    res
+/// Greatest common divisor, used to reduce an image size to an aspect ratio.
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// Deterministic v4-shaped UUID derived from a seed.
+///
+/// Antigravity fingerprints a trajectory from `sessionId` / `conversationId`, so every
+/// turn of the same conversation must map to the same ids. A random id per request makes
+/// the backend treat each turn as a brand new trajectory.
+pub fn uuid_from_seed(seed: &str) -> String {
+    let mut bytes = [0u8; 16];
+    for (i, chunk) in bytes.chunks_mut(4).enumerate() {
+        // FNV-1a, salted per word.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        h ^= i as u64;
+        for b in seed.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        // final avalanche so neighbouring seeds do not share a prefix
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        chunk.copy_from_slice(&(h as u32).to_be_bytes());
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// Image-generation models need an explicit `imageConfig` instead of a text response.
+pub fn is_image_model(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("image") || m.contains("imagen")
+}
+
+/// Parses the `-<w>x<h>` suffix of an image model name into an aspect ratio.
+///
+/// Falls back to `1:1` when the model name carries no size hint.
+pub fn parse_image_config(model: &str) -> serde_json::Value {
+    let lower = model.to_ascii_lowercase();
+    let aspect = lower
+        .rsplit_once('-')
+        .and_then(|(_, tail)| {
+            let (w, h) = tail.split_once('x')?;
+            let w: u32 = w.parse().ok()?;
+            let h: u32 = h.parse().ok()?;
+            if w == 0 || h == 0 {
+                return None;
+            }
+            let g = gcd(w, h);
+            Some(format!("{}:{}", w / g, h / g))
+        })
+        .unwrap_or_else(|| "1:1".to_string());
+
+    serde_json::json!({ "aspectRatio": aspect })
+}
+
+/// Antigravity tool-name sanitiser.
+///
+/// This deliberately delegates to the engine's `sanitize_function_name` rather
+/// than keeping a provider-local copy: the engine already allows `.`, `:` and
+/// `-`, already prefixes a leading non-letter with `_`, and already truncates to
+/// 64 chars — exactly the rules Antigravity needs. A duplicate here would drift
+/// the moment the engine's rules change, so the alias exists only to document
+/// the provider-specific *intent* at the call site.
+pub fn sanitize_ag_function_name(name: &str) -> String {
+    crate::llm::v1_engine::sanitize_function_name(name)
+}
+
+pub fn supports_long_decode(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("gemini-4")
 }
 
 pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json::Value {
@@ -337,7 +409,7 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
     for msg in &req.messages {
         if let Some(ref tcs) = msg.tool_calls {
             for tc in tcs {
-                let fn_name = sanitize_function_name(&tc.function.name);
+                let fn_name = sanitize_ag_function_name(&tc.function.name);
                 tool_call_names.insert(tc.id.clone(), fn_name.clone());
                 if let Some((base, _)) = tc.id.split_once("__thought__") {
                     tool_call_names.insert(base.to_string(), fn_name);
@@ -353,7 +425,7 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
         match msg.role.as_str() {
             "system" => {
                 if !text.trim().is_empty() {
-                    system_prompts.push(sanitize_system_prompt(&text));
+                    system_prompts.push(text.trim().to_string());
                 }
             }
             "assistant" | "model" => {
@@ -363,7 +435,7 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
                 }
                 if let Some(ref tcs) = msg.tool_calls {
                     for tc in tcs {
-                        let fn_name = sanitize_function_name(&tc.function.name);
+                        let fn_name = sanitize_ag_function_name(&tc.function.name);
                         let args_val: serde_json::Value =
                             serde_json::from_str(&tc.function.arguments)
                                 .unwrap_or_else(|_| serde_json::json!({}));
@@ -439,7 +511,7 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
                     .get(tc_id)
                     .or_else(|| tool_call_names.get(clean_tc_id))
                     .cloned()
-                    .or_else(|| msg.name.clone().map(|n| sanitize_function_name(&n)))
+                    .or_else(|| msg.name.clone().map(|n| sanitize_ag_function_name(&n)))
                     .unwrap_or_else(|| "tool".to_string());
 
                 let parsed_val: serde_json::Value = serde_json::from_str(&text)
@@ -670,65 +742,126 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
         }));
     }
 
-    // Tools conversion
+    // ─── Tools conversion ───
+    //
+    // 9router's `cloakTools` (the `_ide` suffix + Antigravity decoy tools) is DEAD
+    // CODE upstream — its only call site is commented out (`// Antigravity cloaking
+    // disabled`). The path that actually runs is the one below: dedupe by sanitized
+    // name, merge every group into a single `functionDeclarations`, and fall back to
+    // a `reason` parameter when a tool ships no schema. Porting the disabled version
+    // would have renamed tools the caller never gets back, so it is not 1:1.
     let mut tools_payload = None;
     let mut tool_config_payload = None;
-    if let Some(ref tools) = req.tools {
-        let mut declarations = Vec::new();
-        for t in tools {
-            if let Some(fn_obj) = t.get("function") {
-                let name = fn_obj.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                let desc = fn_obj
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-                let params = fn_obj.get("parameters").unwrap_or(&serde_json::Value::Null);
 
-                declarations.push(serde_json::json!({
-                    "name": sanitize_function_name(name),
-                    "description": desc,
-                    "parameters": clean_parameters_schema(params)
-                }));
+    if let Some(ref tools) = req.tools {
+        let mut declarations: Vec<serde_json::Value> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        for t in tools {
+            let (raw_name, desc, params) = if let Some(fn_obj) = t.get("function") {
+                (
+                    fn_obj.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                    fn_obj
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or(""),
+                    fn_obj.get("parameters"),
+                )
             } else if let Some(name) = t.get("name").and_then(|n| n.as_str()) {
                 // Claude style tool definition
-                let desc = t.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                let schema = t.get("input_schema").unwrap_or(&serde_json::Value::Null);
+                (
+                    name,
+                    t.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                    t.get("input_schema"),
+                )
+            } else {
+                continue;
+            };
 
-                declarations.push(serde_json::json!({
-                    "name": sanitize_function_name(name),
-                    "description": desc,
-                    "parameters": clean_parameters_schema(schema)
-                }));
+            let name = sanitize_ag_function_name(raw_name);
+            if name.is_empty() || !seen.insert(name.clone()) {
+                continue;
             }
+
+            // Gemini rejects a missing schema, so absent parameters become a
+            // single required `reason` field (1:1 with 9router).
+            let parameters = match params {
+                Some(p) if !p.is_null() => clean_parameters_schema(p),
+                _ => serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Brief explanation"
+                        }
+                    },
+                    "required": ["reason"]
+                }),
+            };
+
+            declarations.push(serde_json::json!({
+                "name": name,
+                "description": desc,
+                "parameters": parameters
+            }));
         }
 
         if !declarations.is_empty() {
             tools_payload = Some(serde_json::json!([{
                 "functionDeclarations": declarations
             }]));
+            // `VALIDATED` (not `AUTO`) matches what the Antigravity IDE sends.
             tool_config_payload = Some(serde_json::json!({
                 "functionCallingConfig": {
-                    "mode": "AUTO"
+                    "mode": "VALIDATED"
                 }
             }));
         }
     }
 
-    let session_id = generate_pseudo_uuid("ag-v1-sess");
-    let conversation_id = generate_pseudo_uuid("ag-v1-conv");
-    let trajectory_id = generate_pseudo_uuid("ag-v1-traj");
-    let step = (normalized_contents.len() * 2).max(1);
+    // ─── Deterministic session / conversation / trajectory ids (1:1 with `buildIdeRequestId`) ───
+    //
+    // A random id per request makes the backend treat every turn as a brand new
+    // trajectory. Deriving them from the conversation seed keeps the session stable.
+    let seed = req
+        .messages
+        .first()
+        .map(|m| {
+            crate::llm::v1_engine::extract_text_content(&m.content)
+                .chars()
+                .take(64)
+                .collect::<String>()
+        })
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "anonymous".to_string());
+
+    let session_id = uuid_from_seed(&format!("antigravity:session:{seed}"));
+    let conversation_id = uuid_from_seed(&format!("antigravity:conversation:{seed}"));
+    let trajectory_id = uuid_from_seed(&format!(
+        "antigravity:trajectory:{seed}:{clean_model}:agent"
+    ));
+    // `Math.max(1, contentCount * 2 - 1)` in 9router.
+    let step = (normalized_contents.len() * 2).saturating_sub(1).max(1);
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     let request_id = format!("agent/{conversation_id}/{now_ms}/{trajectory_id}/{step}");
 
+    // Long-decode models keep the caller's budget up to the 1M ceiling; every other
+    // model is clamped to the plain 64K cap (1:1 with 9router `MAX_ANTIGRAVITY_OUTPUT_TOKENS`).
+    let output_cap = if supports_long_decode(&clean_model) {
+        GEMINI_LONG_DECODE_MAX_OUTPUT
+    } else {
+        MAX_ANTIGRAVITY_OUTPUT_TOKENS
+    };
+    let max_output = req.max_tokens.unwrap_or(output_cap).min(output_cap);
+
     let mut gen_config = serde_json::json!({
         "temperature": req.temperature.unwrap_or(0.7),
         "topP": 0.95,
         "topK": 40,
-        "maxOutputTokens": req.max_tokens.unwrap_or(64000).min(64000)
+        "maxOutputTokens": max_output
     });
 
     if family == "gemini" {
@@ -752,8 +885,12 @@ pub fn build_gemini_payload(req: &V1ChatRequest, project_id: &str) -> serde_json
         "sessionId": session_id
     });
 
-    if !system_prompts.is_empty() {
-        let joined_sys = system_prompts.join("\n\n");
+    // Official Antigravity identity is always sent ahead of the caller's system prompt
+    // (1:1 with 9router, which prepends ANTIGRAVITY_DEFAULT_SYSTEM to every request).
+    let mut sys_parts: Vec<String> = vec![ANTIGRAVITY_DEFAULT_SYSTEM.to_string()];
+    sys_parts.extend(system_prompts.into_iter().filter(|s| !s.trim().is_empty()));
+    let joined_sys = sys_parts.join("\n\n").trim().to_string();
+    if !joined_sys.is_empty() {
         inner_request["systemInstruction"] = serde_json::json!({
             "parts": [{ "text": joined_sys }]
         });

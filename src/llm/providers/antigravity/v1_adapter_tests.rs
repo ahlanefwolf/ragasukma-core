@@ -1,5 +1,7 @@
 use super::*;
-use crate::llm::providers::antigravity::constants::DEFAULT_THINKING_AG_SIGNATURE;
+use crate::llm::providers::antigravity::constants::{
+    ANTIGRAVITY_DEFAULT_SYSTEM, DEFAULT_THINKING_AG_SIGNATURE, MAX_ANTIGRAVITY_OUTPUT_TOKENS,
+};
 use crate::llm::v1_engine::{V1ChatRequest, V1ToolCall, V1ToolCallFunction};
 
 #[test]
@@ -670,21 +672,63 @@ fn characterisation_build_gemini_payload_full_shape() {
         .collect();
     assert_eq!(roles, vec!["user", "model", "user"]);
 
-    let sys = request["systemInstruction"].to_string();
-    assert!(sys.contains("careful engineer"), "systemInstruction: {sys}");
-    // Characterised behaviour: sanitize_system_prompt() rewrites vendor
-    // branding only; it does NOT trim whitespace, so trailing spaces survive.
+    let sys_text = request["systemInstruction"]["parts"][0]["text"]
+        .as_str()
+        .expect("systemInstruction text");
     assert!(
-        sys.contains("careful engineer.  "),
-        "whitespace must be preserved verbatim: {sys}"
+        sys_text.contains("careful engineer"),
+        "systemInstruction: {sys_text}"
+    );
+    // 1:1 with 9router: the official Antigravity identity is always prepended
+    // ahead of the caller's system prompt so the request is not fingerprinted
+    // as a third-party client (which yields a detail-free 429).
+    assert!(
+        sys_text.starts_with(ANTIGRAVITY_DEFAULT_SYSTEM),
+        "official identity must lead the system prompt: {sys_text}"
+    );
+    // sanitize_system_prompt() now trims trailing whitespace.
+    assert!(
+        !sys_text.ends_with("  "),
+        "trailing whitespace must be trimmed: {sys_text:?}"
     );
 
     let tools = request["tools"].as_array().expect("tools array");
     assert_eq!(tools.len(), 1);
     let decls = tools[0]["functionDeclarations"].as_array().unwrap();
+
+    // Tool names are forwarded verbatim: 9router's `cloakTools` (`_ide` suffix +
+    // AG decoy tools) is dead code upstream, so nothing may be renamed.
+    let names: Vec<&str> = decls
+        .iter()
+        .map(|d| d["name"].as_str().unwrap_or(""))
+        .collect();
+    // `:` survives sanitisation (1:1 with 9router `sanitizeFunctionName`), so the
+    // model can only ever call the name the caller actually declared.
+    assert_eq!(
+        names,
+        vec!["default_api:read_file"],
+        "names must not be rewritten"
+    );
+    assert!(
+        !names.iter().any(|n| n.ends_with("_ide")),
+        "no _ide suffix may leak to the caller: {names:?}"
+    );
+    assert_eq!(names.len(), 1, "no decoy tools may be appended");
+
     let params = &decls[0]["parameters"];
     assert_eq!(params["type"], serde_json::json!("object"));
     assert!(params.get("$schema").is_none(), "$schema must be stripped");
+
+    // `requestType` must be absent on the agent/chat path: sending it makes the
+    // backend return a detail-free 429 even when quota is available.
+    assert!(
+        request.get("requestType").is_none(),
+        "agent requests must omit requestType"
+    );
+    assert_eq!(
+        request["toolConfig"]["functionCallingConfig"]["mode"],
+        serde_json::json!("VALIDATED")
+    );
 
     assert_eq!(
         request["generationConfig"]["temperature"],
@@ -712,13 +756,74 @@ fn characterisation_helpers_are_stable() {
     assert!(is_valid_base64("QUJD"));
     assert!(sanitize_thought_signature("").is_none());
 
-    // sanitize_system_prompt() rewrites vendor branding; it is not a trimmer.
-    assert_eq!(sanitize_system_prompt("  hi  "), "  hi  ");
-    assert_eq!(sanitize_system_prompt("OpenCode"), "Antigravity");
-    assert_eq!(sanitize_system_prompt("opencode"), "antigravity");
-    assert_eq!(sanitize_system_prompt("OPENCODE"), "ANTIGRAVITY");
+    // The caller's system prompt must survive verbatim into the built payload.
+    // Asserting on a local string proves nothing; drive the real builder instead.
+    let req = V1ChatRequest {
+        model: "ag/gemini-3.8-flash".to_string(),
+        messages: vec![
+            crate::llm::v1_engine::V1Message {
+                role: "system".to_string(),
+                content: Some(serde_json::json!(
+                    "You are Hermes Agent, built by Nous Research."
+                )),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            },
+            crate::llm::v1_engine::V1Message {
+                role: "user".to_string(),
+                content: Some(serde_json::json!("hi")),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+                thought_signature: None,
+            },
+        ],
+        temperature: None,
+        max_tokens: None,
+        stream: None,
+        tools: None,
+        tool_choice: None,
+    };
+    let payload = build_gemini_payload(&req, "proj");
+    let sys = payload["request"]["systemInstruction"]["parts"][0]["text"]
+        .as_str()
+        .expect("systemInstruction must be present");
+    assert!(
+        sys.contains("You are Hermes Agent, built by Nous Research."),
+        "caller system prompt was rewritten: {sys}"
+    );
+    assert!(
+        sys.contains(ANTIGRAVITY_DEFAULT_SYSTEM),
+        "official Antigravity identity must still be prepended: {sys}"
+    );
+
+    // Long-decode gating mirrors 9router: only Gemini 4 models get the 1M ceiling.
+    assert!(supports_long_decode("gemini-4-pro"));
+    assert!(!supports_long_decode("gemini-3.8-flash"));
+    assert_eq!(MAX_ANTIGRAVITY_OUTPUT_TOKENS, 64_000);
+
+    // Deterministic ids: same seed => same uuid, different seeds differ.
+    assert_eq!(uuid_from_seed("x"), uuid_from_seed("x"));
+    assert_ne!(uuid_from_seed("x"), uuid_from_seed("y"));
+    let u = uuid_from_seed("x");
+    assert_eq!(u.len(), 36);
+    assert_eq!(&u[14..15], "4", "must be a v4-shaped uuid: {u}");
+
+    // Image-model detection + aspect-ratio parsing.
+    assert!(is_image_model("gemini-3.1-flash-image-16x9"));
+    assert!(!is_image_model("gemini-3.8-flash"));
     assert_eq!(
-        sanitize_system_prompt("You are a Claude agent, built on Anthropic's Claude Agent SDK."),
-        ""
+        parse_image_config("gemini-3.1-flash-image-16x9")["aspectRatio"],
+        serde_json::json!("16:9")
+    );
+    assert_eq!(
+        parse_image_config("gemini-3.1-flash-image-1024x768")["aspectRatio"],
+        serde_json::json!("4:3")
+    );
+    assert_eq!(
+        parse_image_config("gemini-3.1-flash-image")["aspectRatio"],
+        serde_json::json!("1:1")
     );
 }

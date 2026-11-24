@@ -310,6 +310,55 @@ fn parse_retry_after_supports_common_formats() {
     assert_eq!(parse_retry_after_ms("Retry-After-Ms: 500"), Some(500));
 }
 
+/// Real Antigravity `MODEL_CAPACITY_EXHAUSTED` 503 body. Google puts the wait
+/// hint in `RetryInfo.retryDelay` inside the JSON body, not in a Retry-After
+/// header; without parsing it we fell back to sub-second backoff and burned all
+/// three attempts long before capacity returned.
+const ANTIGRAVITY_503_CAPACITY_BODY: &str = r#"Antigravity returned HTTP 503: {
+  "error": {
+    "code": 503,
+    "message": "No capacity available for model gemini-3.8-flash-medium on the server",
+    "status": "UNAVAILABLE",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "MODEL_CAPACITY_EXHAUSTED",
+        "domain": "cloudcode-pa.googleapis.com",
+        "metadata": { "error_number": "2010", "model": "gemini-3.8-flash-medium" }
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+        "retryDelay": "8s"
+      }
+    ]
+  }
+}"#;
+
+#[test]
+fn parse_retry_after_reads_google_retry_delay_from_body() {
+    assert_eq!(
+        parse_retry_after_ms(ANTIGRAVITY_503_CAPACITY_BODY),
+        Some(8_000)
+    );
+    assert_eq!(
+        parse_retry_after_ms(r#"{"retryDelay": "3.5s"}"#),
+        Some(3_500)
+    );
+    assert_eq!(parse_retry_after_ms(r#"{"retryDelay":"500ms"}"#), Some(500));
+    // Protobuf durations can carry nanosecond precision.
+    assert_eq!(
+        parse_retry_after_ms(r#"{"retryDelay": "2618.435076932s"}"#),
+        Some(2_618_436)
+    );
+}
+
+#[test]
+fn retry_delay_honours_antigravity_capacity_503() {
+    // The whole point: wait ~8s as the server asked, not the ~1s backoff.
+    let d = wait_of(retry_delay(1, ANTIGRAVITY_503_CAPACITY_BODY, None));
+    assert_eq!(d.as_millis(), 8_000);
+}
+
 #[test]
 fn parse_retry_after_does_not_grab_unrelated_numbers() {
     // HTTP-date is unsupported -> None, rather than picking up "21" or "2015".

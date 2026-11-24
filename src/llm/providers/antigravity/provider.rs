@@ -439,6 +439,12 @@ impl AntigravityProvider {
         let mut attempts = 0;
         let now = current_timestamp_secs();
 
+        // Preserve the last typed HTTP error through the account loop. A capacity
+        // 503 carries `RetryInfo.retryDelay` in its body; collapsing it into a
+        // generic string drops the status and the hint, so the executor's retry
+        // loop never recognises it and abandons the request immediately.
+        let mut last_http_err: Option<crate::llm::types::LlmHttpError> = None;
+
         while attempts < total_accounts {
             attempts += 1;
             let acc_idx = match self.select_available_account_index(Some(model)) {
@@ -527,11 +533,45 @@ impl AntigravityProvider {
                         );
                         let _ = self.save_accounts();
                         continue;
+                    } else if let Some(http_err) = http_err {
+                        // A capacity 503 is scoped to *this account's* quota for the
+                        // model, not to the model as a whole: Google hands out
+                        // Antigravity capacity per credential. Rotating to the next
+                        // account is free (no waiting) and routinely succeeds while
+                        // another account still has headroom, so try it before
+                        // falling back to the executor's timed retry.
+                        //
+                        // Keep the typed error so that if every account is
+                        // exhausted, the body's `RetryInfo.retryDelay` still reaches
+                        // the executor's retry loop.
+                        if http_err.status_code == 503 {
+                            crate::term_err!(
+                                "[Antigravity] Account {} hit capacity 503 for {}. Trying next account...",
+                                self.accounts[acc_idx].id,
+                                model
+                            );
+                            last_http_err = Some(crate::llm::types::LlmHttpError {
+                                provider: http_err.provider.clone(),
+                                status_code: http_err.status_code,
+                                body: http_err.body.clone(),
+                                retry_after_header: http_err.retry_after_header.clone(),
+                            });
+                            // `select_available_account_index` reads `current_index`
+                            // without advancing it, so advance it here or the next
+                            // iteration would pick the same exhausted account again.
+                            self.current_index = (acc_idx + 1) % self.accounts.len();
+                            continue;
+                        }
+                        return Err(err);
                     } else {
                         return Err(err);
                     }
                 }
             }
+        }
+
+        if let Some(http_err) = last_http_err {
+            return Err(anyhow::Error::new(http_err));
         }
 
         bail!("All Antigravity accounts failed during execution.")
@@ -585,11 +625,15 @@ impl AntigravityProvider {
             model
         };
 
+        // NOTE (ported 1:1 from 9router antigravity.js:434-440):
+        // The agent (chat) path must OMIT `requestType` entirely. Sending
+        // `requestType: "agent"` makes Google bucket the request and return a
+        // detail-free 429 RESOURCE_EXHAUSTED even when quota is available.
+        // Only `image_gen` and `search` buckets keep their own requestType.
         let payload = serde_json::json!({
             "project": project_id,
             "model": clean_model,
             "userAgent": "antigravity",
-            "requestType": "agent",
             "requestId": request_id,
             "request": {
                 "contents": contents,
@@ -683,6 +727,11 @@ impl AntigravityProvider {
         let total_accounts = self.accounts.len();
         let mut attempts = 0;
         let now = current_timestamp_secs();
+
+        // Retained across the account loop so that when every account reports a
+        // capacity 503, the last typed error still reaches the executor with its
+        // `RetryInfo.retryDelay` intact for a timed retry.
+        let mut last_http_err: Option<crate::llm::types::LlmHttpError> = None;
 
         while attempts < total_accounts {
             let acc_idx = match self.select_available_account_index(Some(&req.model)) {
@@ -785,11 +834,34 @@ impl AntigravityProvider {
                         );
                         let _ = self.save_accounts();
                         continue;
+                    } else if http_err.is_some_and(|h| h.status_code == 503) {
+                        // Capacity is granted per account, so a 503 on this one does
+                        // not mean the model is unavailable everywhere. Move to the
+                        // next account instead of failing the whole request; only
+                        // after every account refuses do we surface the error (which
+                        // still carries the body's `RetryInfo.retryDelay` so the
+                        // executor can wait it out).
+                        crate::term_err!(
+                            "[Antigravity] Account {} hit capacity 503 for model '{}'. Rotating to next account...",
+                            self.accounts[acc_idx].id,
+                            req.model
+                        );
+                        last_http_err = Some(crate::llm::types::LlmHttpError {
+                            provider: "Antigravity".to_string(),
+                            status_code: 503,
+                            body: http_err.map(|h| h.body.clone()).unwrap_or_default(),
+                            retry_after_header: http_err.and_then(|h| h.retry_after_header.clone()),
+                        });
+                        continue;
                     } else {
                         return Err(err);
                     }
                 }
             }
+        }
+
+        if let Some(http_err) = last_http_err {
+            return Err(anyhow::Error::new(http_err));
         }
 
         bail!("All Antigravity accounts failed during execution.")
