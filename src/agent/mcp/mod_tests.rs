@@ -132,10 +132,20 @@ fn test_mcp_error_classification() {
     assert_eq!(classify_mcp_error("plain error"), None);
 }
 
-#[test]
-fn test_notification_queue_is_bounded_and_drained() {
-    let mut child = tokio::process::Command::new("cmd")
-        .args(["/C", "exit 0"])
+#[tokio::test]
+async fn test_notification_queue_is_bounded_and_drained() {
+    // Use a portable child process so this test runs on Linux/macOS too; the old
+    // `cmd /C exit 0` was Windows-only and panicked with NotFound elsewhere.
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = tokio::process::Command::new("cmd");
+        c.args(["/C", "exit 0"]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut command = tokio::process::Command::new("true");
+
+    let mut child = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
