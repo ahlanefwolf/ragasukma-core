@@ -295,6 +295,26 @@ pub async fn update_session_model_with_pool(
     Ok(())
 }
 
+pub async fn update_session_title(id: &str, title: &str) -> Result<()> {
+    let pool = super::pool().await;
+    update_session_title_with_pool(pool, id, title).await
+}
+
+pub async fn update_session_title_with_pool(
+    pool: &sqlx::SqlitePool,
+    id: &str,
+    title: &str,
+) -> Result<()> {
+    let now = now_secs();
+    sqlx::query("UPDATE sessions SET title = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(title)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Resets any sessions left in "running" state by an earlier process crash or abrupt kill.
 ///
 /// Returns the number of sessions reset to "idle".
